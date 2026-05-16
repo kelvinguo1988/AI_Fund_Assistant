@@ -21,7 +21,7 @@ python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 # 前端
 cd frontend && npm install && npm run dev
 
-docker
+# docker
 # 一键启动
 cp .env.example .env          # 复制配置
 vim .env                      # 填写 AI_API_KEY 等
