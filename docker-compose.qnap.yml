@@ -8,13 +8,13 @@ services:
   backend:
     # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
     image: ghcr.io/kelvinguo1988/ai_fund_assistant/backend:latest
-    container_name: fund-quant-backend
+    container_name: ai-fund-assistant
     restart: unless-stopped
 
     # ⚠️ 必须使用绝对路径！Container Station 会将相对路径解析到 /tmp/
     # 请将下方路径改为你的 .env 实际位置
     env_file:
-      - /share/CACHEDEV1_DATA/.qpkg/container-station/fund-quant/.env
+      - /share/Container/AI_Fund_Assistant/.env
     environment:
       - FUND_QUANT_HOST=0.0.0.0
       - FUND_QUANT_PORT=8000
@@ -24,7 +24,7 @@ services:
 
     # 持久化数据库
     volumes:
-      - /share/CACHEDEV1_DATA/.qpkg/container-station/fund-quant/data:/app/data
+      - /share/Container/AI_Fund_Assistant/data:/app/data
 
     network_mode: bridge
     expose:
@@ -40,8 +40,8 @@ services:
   # ── 前端服务 ──────────────────────────────────────────────────────────
   frontend:
     # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
-    image: ghcr.io/<OWNER>/ai_fund_assistant/frontend:latest
-    container_name: fund-quant-frontend
+    image: ghcr.io/kelvinguo1988/ai_fund_assistant/frontend:latest
+    container_name: ai-fund-assistant
     restart: unless-stopped
     ports:
       - "80:80"
