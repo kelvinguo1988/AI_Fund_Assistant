@@ -1,0 +1,248 @@
+classDiagram
+    direction LR
+
+    %% ============ ORM Models ============
+    class Fund {
+        +int id
+        +str code
+        +str name
+        +str fund_type
+        +str tags
+        +str status
+        +datetime created_at
+        +datetime updated_at
+    }
+
+    class Factor {
+        +int id
+        +str name
+        +str code
+        +str data_field
+        +float weight
+        +str direction
+        +str params
+        +str status
+        +int sort_order
+        +datetime created_at
+        +datetime updated_at
+    }
+
+    class PushChannel {
+        +int id
+        +str name
+        +str channel_type
+        +str webhook_url
+        +str token
+        +str config
+        +bool enabled
+        +datetime created_at
+        +datetime updated_at
+    }
+
+    class Schedule {
+        +int id
+        +str name
+        +str cron_expr
+        +str time_point
+        +str task_type
+        +int channel_id
+        +bool enabled
+        +datetime last_run_at
+        +datetime created_at
+        +datetime updated_at
+    }
+
+    class ReportConfig {
+        +int id
+        +str name
+        +str item_key
+        +bool enabled
+        +int sort_order
+        +datetime created_at
+    }
+
+    class AnalysisResult {
+        +int id
+        +int fund_id
+        +date analysis_date
+        +float weighted_score
+        +str signal_direction
+        +str signal_strength
+        +str operation_advice
+        +str factor_scores
+        +datetime created_at
+    }
+
+    class AIConversation {
+        +int id
+        +str conversation_id
+        +str role
+        +str content
+        +str context_type
+        +int fund_id
+        +str model_name
+        +datetime created_at
+    }
+
+    class SystemConfig {
+        +int id
+        +str config_key
+        +str config_value
+        +str description
+        +datetime updated_at
+    }
+
+    Fund "1" --> "*" AnalysisResult : has
+    Fund "1" --> "*" AIConversation : referenced_in
+    PushChannel "1" --> "*" Schedule : used_by
+
+    %% ============ Data Sources ============
+    class BaseDataSource {
+        <<abstract>>
+        +get_fund_data(code, period)* FundData
+        +get_market_indices()* MarketData
+        +get_index_pe(index_code)* PEData
+    }
+
+    class AKShareAdapter {
+        +get_fund_data(code, period) FundData
+        +get_market_indices() MarketData
+        +get_index_pe(index_code) PEData
+        +get_fund_nav(code, period) List~NAV~
+        +get_fund_volume(code, period) List~Volume~
+    }
+
+    BaseDataSource <|-- AKShareAdapter
+
+    %% ============ Engines ============
+    class FactorEngine {
+        +calculate_all(fund_data, factors) List~FactorScore~
+        -pe_percentile(fund_data, params) FactorScore
+        -fed_model(fund_data, params) FactorScore
+        -macd_signal(fund_data, params) FactorScore
+        -ma_trend(fund_data, params) FactorScore
+        -volume_change(fund_data, params) FactorScore
+    }
+
+    class ScoringEngine {
+        +compute(factor_scores, weights) SignalResult
+        -weighted_score(scores, weights) float
+        -determine_direction(score) str
+        -determine_strength(score, direction) str
+        -generate_advice(direction, strength) str
+    }
+
+    class ReportEngine {
+        +generate_report(results, config) str
+        -format_factor_detail(scores) str
+        -format_signal_summary(result) str
+        -format_risk_warning(result) str
+    }
+
+    class TradingCalendar {
+        +is_trading_day(date) bool
+        +get_next_trading_day(date) date
+        +get_trading_days(start, end) List~date~
+    }
+
+    %% ============ Services ============
+    class FundService {
+        +list_funds(filters) List~Fund~
+        +create_fund(data) Fund
+        +update_fund(id, data) Fund
+        +delete_fund(id) None
+        +batch_action(ids, action) None
+    }
+
+    class FactorService {
+        +list_factors() List~Factor~
+        +create_factor(data) Factor
+        +update_factor(id, data) Factor
+        +delete_factor(id) None
+    }
+
+    class AnalysisService {
+        +run_daily_analysis() List~AnalysisResult~
+        +analyze_fund(fund_id) AnalysisResult
+        +get_latest_results() List~AnalysisResult~
+        +get_results_by_date(date) List~AnalysisResult~
+    }
+
+    class PushService {
+        +push_report(report_content) PushResult
+        +send_to_channel(channel, msg) bool
+        +test_channel(channel_id) bool
+    }
+
+    class AIService {
+        +chat(message) ChatResponse
+        +get_conversation_history(conv_id) List~Message~
+        -build_context(context_type, fund_id) str
+    }
+
+    %% ============ Push Providers ============
+    class BasePushProvider {
+        <<abstract>>
+        +send(webhook_url, content)* bool
+        +format_message(report_content)* dict
+    }
+
+    class FeishuPush {
+        +send(webhook_url, content) bool
+        +format_message(report_content) dict
+        -build_card(report_content) dict
+    }
+
+    BasePushProvider <|-- FeishuPush
+
+    %% ============ LLM Providers ============
+    class BaseLLMProvider {
+        <<abstract>>
+        +chat(system_prompt, messages)* str
+        +get_model_name()* str
+    }
+
+    class DeepSeekProvider {
+        +chat(system_prompt, messages) str
+        +get_model_name() str
+    }
+
+    class OpenAIProvider {
+        +chat(system_prompt, messages) str
+        +get_model_name() str
+    }
+
+    class TongyiProvider {
+        +chat(system_prompt, messages) str
+        +get_model_name() str
+    }
+
+    class LLMFactory {
+        +create_provider(model_name) BaseLLMProvider
+    }
+
+    BaseLLMProvider <|-- DeepSeekProvider
+    BaseLLMProvider <|-- OpenAIProvider
+    BaseLLMProvider <|-- TongyiProvider
+    LLMFactory --> BaseLLMProvider : creates
+
+    %% ============ Scheduler ============
+    class TaskScheduler {
+        +start() None
+        +shutdown() None
+        +add_schedule(schedule) None
+        +remove_schedule(schedule_id) None
+        +reload_schedules() None
+    }
+
+    %% ============ Service Dependencies ============
+    AnalysisService --> FundService : uses
+    AnalysisService --> AKShareAdapter : uses
+    AnalysisService --> FactorEngine : uses
+    AnalysisService --> ScoringEngine : uses
+    AnalysisService --> ReportEngine : uses
+    AnalysisService --> PushService : uses
+    PushService --> FeishuPush : uses
+    AIService --> LLMFactory : uses
+    AIService --> AKShareAdapter : uses
+    TaskScheduler --> AnalysisService : triggers

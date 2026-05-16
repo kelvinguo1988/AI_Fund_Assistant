@@ -1,0 +1,61 @@
+# ============================================================================
+# 基金量化交易系统 — Docker Compose 编排
+# 使用方式: docker compose up -d --build
+# ============================================================================
+
+services:
+  # ── 后端服务 ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fund-quant-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Docker 环境下覆盖默认值
+      - FUND_QUANT_HOST=0.0.0.0
+      - FUND_QUANT_PORT=8000
+      - FUND_QUANT_DATABASE_DIR=/app/data
+      - FUND_QUANT_DATABASE_NAME=fund_quant.db
+      - FUND_QUANT_CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:5173,http://frontend
+    volumes:
+      # SQLite 数据持久化：宿主机 ./data 映射到容器 /app/data
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - fund-quant-network
+
+  # ── 前端服务 ──────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fund-quant-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    networks:
+      - fund-quant-network
+
+# ── 网络 ────────────────────────────────────────────────────────────────
+networks:
+  fund-quant-network:
+    driver: bridge

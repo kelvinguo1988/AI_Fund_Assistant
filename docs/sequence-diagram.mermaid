@@ -1,0 +1,146 @@
+# 交易日定时分析+推送 流程
+sequenceDiagram
+    participant Sched as TaskScheduler
+    participant Cal as TradingCalendar
+    participant AS as AnalysisService
+    participant DS as AKShareAdapter
+    participant FE as FactorEngine
+    participant SE as ScoringEngine
+    participant RE as ReportEngine
+    participant DB as SQLite
+    participant PS as PushService
+    participant FS as FeishuPush
+
+    Sched->>Cal: 检查今天是否交易日
+    Cal-->>Sched: is_trading_day=True
+
+    Sched->>AS: run_daily_analysis()
+
+    AS->>DB: 查询启用基金池
+    DB-->>AS: funds[]
+
+    loop 每只基金
+        AS->>DS: get_fund_data(code, period=250)
+        DS-->>AS: FundData(pe, pb, close, volume, ...)
+
+        AS->>FE: calculate_factors(fund_data, active_factors)
+        FE->>FE: pe_percentile() → 4.2
+        FE->>FE: fed_model() → 3.8
+        FE->>FE: macd_signal() → 3.0
+        FE->>FE: ma_trend() → 3.5
+        FE->>FE: volume_change() → 2.8
+        FE-->>AS: factor_scores[]
+
+        AS->>SE: compute_weighted_score(factor_scores, factor_weights)
+        SE->>SE: 加权计算 → 3.52
+        SE->>SE: 判定信号方向 → buy
+        SE->>SE: 判定信号强度 → light_buy
+        SE-->>AS: signal_result{score, direction, strength}
+
+        AS->>DB: 存储分析结果
+    end
+
+    AS->>RE: generate_report(results, report_config)
+    RE-->>AS: report_content(markdown)
+
+    AS->>PS: push_report(report_content)
+    PS->>DB: 查询启用的推送渠道
+    loop 每个渠道
+        PS->>FS: send(webhook_url, formatted_msg)
+        FS-->>PS: success/failure
+    end
+
+    AS-->>Sched: analysis_complete
+
+# AI 对话流程
+sequenceDiagram
+    participant User as 用户
+    participant FE as 前端
+    participant API as /api/ai/chat
+    participant AS as AIService
+    participant LLM as LLMFactory
+    participant Prov as LLM Provider
+    participant DS as AKShareAdapter
+    participant DB as SQLite
+
+    User->>FE: 输入"分析基金510300"
+    FE->>API: POST {content, context_type, fund_id}
+    API->>AS: chat(message)
+
+    AS->>DB: 检查 ai_enabled
+    DB-->>AS: True
+
+    AS->>DB: 查询 conversation 历史
+    DB-->>AS: messages[]
+
+    alt context_type == single_fund
+        AS->>DS: get_fund_data(510300)
+        DS-->>AS: FundData
+        AS->>DB: 查询最新分析结果
+        DB-->>AS: AnalysisResult
+        AS->>AS: 构建上下文 prompt（基金数据+因子评分）
+    else context_type == pool
+        AS->>DB: 查询所有基金最新分析
+        AS->>AS: 构建基金池概览 prompt
+    else context_type == market
+        AS->>DS: get_market_indices()
+        AS->>AS: 构建市场行情 prompt
+    end
+
+    AS->>LLM: create_provider(model_name)
+    LLM-->>AS: Provider实例
+
+    AS->>Prov: chat(system_prompt, messages + user_msg)
+    Prov-->>AS: AI回复文本
+
+    AS->>DB: 存储用户消息
+    AS->>DB: 存储AI回复
+
+    AS-->>API: ChatResponse
+    API-->>FE: ApiResponse[ChatResponse]
+    FE-->>User: 显示AI回复
+
+# 前台配置变更流程
+sequenceDiagram
+    participant User as 管理员
+    participant FE as 前端
+    participant API as REST API
+    participant Svc as Service
+    participant DB as SQLite
+    participant Sched as TaskScheduler
+
+    alt 修改因子权重
+        User->>FE: 拖拽调整因子权重
+        FE->>API: PUT /api/factors/{id} {weight: 2.0}
+        API->>Svc: update_factor(id, data)
+        Svc->>DB: UPDATE factors SET weight=2.0
+        DB-->>Svc: OK
+        Svc-->>API: FactorOut
+        API-->>FE: 200 OK
+    else 新增推送渠道
+        User->>FE: 填写 Webhook 地址
+        FE->>API: POST /api/push-channels {type: feishu, ...}
+        API->>Svc: create_push_channel(data)
+        Svc->>DB: INSERT INTO push_channels
+        DB-->>Svc: OK
+        Svc-->>API: PushChannelOut
+        API-->>FE: 200 OK
+    else 修改调度时间
+        User->>FE: 修改推送时间 14:50→15:00
+        FE->>API: PUT /api/schedules/{id} {time_point: "15:00"}
+        API->>Svc: update_schedule(id, data)
+        Svc->>DB: UPDATE schedules
+        Svc->>Sched: remove_job(id) + add_job(id, new_cron)
+        Sched-->>Svc: OK
+        Svc-->>API: ScheduleOut
+        API-->>FE: 200 OK
+    else 切换AI开关
+        User->>FE: 点击 AI 开关 → 关闭
+        FE->>API: PUT /api/system/config {ai_enabled: false}
+        API->>Svc: update_system_config(data)
+        Svc->>DB: UPDATE system_config SET config_value='false'
+        DB-->>Svc: OK
+        Svc-->>API: AIConfigOut
+        API-->>FE: 200 OK
+        FE->>FE: 隐藏 AI 对话入口
+    end

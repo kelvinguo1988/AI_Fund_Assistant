@@ -1,0 +1,72 @@
+# ============================================================================
+# 基金量化交易系统 — Docker Compose 开发模式
+# 使用方式: docker compose -f docker-compose.dev.yml up
+# 特性: 源码挂载 + 热重载 + 调试端口
+# ============================================================================
+
+services:
+  # ── 后端服务（开发模式）─────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fund-quant-backend-dev
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - FUND_QUANT_HOST=0.0.0.0
+      - FUND_QUANT_PORT=8000
+      - FUND_QUANT_DATABASE_DIR=/app/data
+      - FUND_QUANT_DATABASE_NAME=fund_quant.db
+      - FUND_QUANT_CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost
+      - FUND_QUANT_DEBUG=true
+    volumes:
+      # 源码挂载：修改代码后自动重载
+      - ./backend:/app/backend
+      # 数据持久化
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    # 开发模式使用 --reload 热重载
+    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - fund-quant-network
+
+  # ── 前端服务（开发模式）─────────────────────────────────────────────────
+  frontend:
+    image: node:20-alpine
+    container_name: fund-quant-frontend-dev
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      # 源码挂载：修改代码后 Vite HMR 自动刷新
+      - ./frontend:/app
+      # 使用命名卷保存 node_modules，避免宿主机覆盖
+      - frontend-node-modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - VITE_API_PROXY_TARGET=http://backend:8000
+    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - fund-quant-network
+
+# ── 命名卷 ──────────────────────────────────────────────────────────────
+volumes:
+  frontend-node-modules:
+
+# ── 网络 ────────────────────────────────────────────────────────────────
+networks:
+  fund-quant-network:
+    driver: bridge
