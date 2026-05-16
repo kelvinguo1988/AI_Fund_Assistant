@@ -1,8 +1,9 @@
 """量化因子 Pydantic Schema"""
 
+import json
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, field_validator
 
 
 class FactorCreate(BaseModel):
@@ -34,9 +35,16 @@ class FactorOut(BaseModel):
     data_field: Optional[str]
     weight: float
     direction: str
-    params: Optional[dict]
+    params: Optional[dict] = None
     status: str
     sort_order: int
     weight_percentage: float = 0.0  # 计算字段：当前权重/总权重*100
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def parse_params(cls, v):
+        if isinstance(v, str):
+            return json.loads(v) if v else None
+        return v
 
     model_config = {"from_attributes": True}

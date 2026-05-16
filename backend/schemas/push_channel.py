@@ -1,9 +1,10 @@
 """推送渠道 Pydantic Schema"""
 
+import json
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PushChannelCreate(BaseModel):
@@ -33,9 +34,16 @@ class PushChannelOut(BaseModel):
     channel_type: str
     webhook_url: Optional[str]
     token: Optional[str]
-    config: Optional[dict]
+    config: Optional[dict] = None
     enabled: bool
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("config", mode="before")
+    @classmethod
+    def parse_config(cls, v):
+        if isinstance(v, str):
+            return json.loads(v) if v else None
+        return v
 
     model_config = {"from_attributes": True}
