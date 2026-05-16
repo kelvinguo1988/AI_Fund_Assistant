@@ -22,7 +22,6 @@ import {
   DialogActions,
   TextField,
   MenuItem,
-  FormControlLabel,
   Checkbox,
   Snackbar,
   Alert,

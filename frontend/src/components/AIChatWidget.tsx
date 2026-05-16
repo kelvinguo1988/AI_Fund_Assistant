@@ -18,7 +18,6 @@ import {
 import { SmartToy as AIIcon, Close as CloseIcon, Send as SendIcon } from '@mui/icons-material';
 import { aiApi } from '../api/ai';
 import { useAppStore } from '../store';
-import type { ChatResponse } from '../types';
 
 interface Message {
   role: 'user' | 'assistant';

@@ -93,7 +93,7 @@ const FactorManagement: React.FC = () => {
         await factorApi.update(editFactor.id, data);
       } else {
         const data: FactorCreate = {
-          name: formName, code: formCode, weight: formWeight, direction: formDirection,
+          name: formName, code: formCode, weight: formWeight, direction: formDirection, sort_order: 0,
         };
         await factorApi.create(data);
       }
