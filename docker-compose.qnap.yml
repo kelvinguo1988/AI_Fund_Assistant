@@ -1,0 +1,59 @@
+# QNAP Container Station 部署配置
+# 注意：不要使用 version 字段（新版 Docker Compose 已废弃）
+# 注意：env_file 必须用绝对路径，Container Station 不会按 YAML 位置解析相对路径
+# 前后端分离架构：Nginx(前端:80) + FastAPI(后端:8000)
+
+services:
+  # ── 后端服务 ──────────────────────────────────────────────────────────
+  backend:
+    # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
+    image: ghcr.io/<OWNER>/ai_fund_assistant/backend:latest
+    container_name: fund-quant-backend
+    restart: unless-stopped
+
+    # ⚠️ 必须使用绝对路径！Container Station 会将相对路径解析到 /tmp/
+    # 请将下方路径改为你的 .env 实际位置
+    env_file:
+      - /share/CACHEDEV1_DATA/.qpkg/container-station/fund-quant/.env
+    environment:
+      - FUND_QUANT_HOST=0.0.0.0
+      - FUND_QUANT_PORT=8000
+      - FUND_QUANT_DATABASE_DIR=/app/data
+      - FUND_QUANT_DATABASE_NAME=fund_quant.db
+      - TZ=Asia/Shanghai
+
+    # 持久化数据库
+    volumes:
+      - /share/CACHEDEV1_DATA/.qpkg/container-station/fund-quant/data:/app/data
+
+    network_mode: bridge
+    expose:
+      - "8000"
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ── 前端服务 ──────────────────────────────────────────────────────────
+  frontend:
+    # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
+    image: ghcr.io/<OWNER>/ai_fund_assistant/frontend:latest
+    container_name: fund-quant-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    network_mode: bridge
+
+    # 日志配置（防止日志无限增长占满NAS存储）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"

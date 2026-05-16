@@ -1,0 +1,39 @@
+# ============================================================================
+# 基金量化交易系统 — 前端 Docker 忽略文件
+# 减少构建上下文大小，排除不需要的文件
+# ============================================================================
+
+# 依赖目录（构建时重新安装）
+node_modules/
+
+# 构建产物（构建时重新生成）
+dist/
+build/
+
+# 环境变量文件
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
+
+# 测试
+coverage/
+
+# 文档
+*.md

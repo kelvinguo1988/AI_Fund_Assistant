@@ -1,0 +1,88 @@
+/* ── Tailwind 指令 ─────────────────────────────────────────────────── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── 红涨绿跌 CSS 变量 ─────────────────────────────────────────────── */
+:root {
+  --signal-buy: #E74C3C;         /* 红色 — 加仓/上涨 */
+  --signal-sell: #27AE60;        /* 绿色 — 减仓/下跌 */
+  --signal-hold: #95A5A6;        /* 灰色 — 观望 */
+  --signal-buy-light: #FADBD8;
+  --signal-sell-light: #D5F5E3;
+
+  /* MUI 主题色覆盖（可选） */
+  --mui-primary: #1976D2;
+  --mui-secondary: #9C27B0;
+  --mui-background: #F5F5F5;
+}
+
+/* ── 全局基础样式 ───────────────────────────────────────────────────── */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
+    'Helvetica Neue', Arial, sans-serif;
+  background-color: var(--mui-background);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── 信号灯样式工具类 ─────────────────────────────────────────────── */
+.signal-buy {
+  color: var(--signal-buy);
+}
+
+.signal-sell {
+  color: var(--signal-sell);
+}
+
+.signal-hold {
+  color: var(--signal-hold);
+}
+
+.signal-buy-bg {
+  background-color: var(--signal-buy);
+  color: #fff;
+}
+
+.signal-sell-bg {
+  background-color: var(--signal-sell);
+  color: #fff;
+}
+
+.signal-hold-bg {
+  background-color: var(--signal-hold);
+  color: #fff;
+}
+
+.signal-buy-light-bg {
+  background-color: var(--signal-buy-light);
+}
+
+.signal-sell-light-bg {
+  background-color: var(--signal-sell-light);
+}
+
+/* ── 滚动条美化 ───────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c0c0;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a0a0a0;
+}

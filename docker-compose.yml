@@ -1,0 +1,61 @@
+# ============================================================================
+# 基金量化交易系统 — Docker Compose 生产模式
+# 前后端分离架构：Nginx(前端) + FastAPI(后端)
+# 使用方式: docker compose up -d
+# ============================================================================
+
+services:
+  # ── 后端服务 ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: fund-quant-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - FUND_QUANT_HOST=0.0.0.0
+      - FUND_QUANT_PORT=8000
+      - FUND_QUANT_DATABASE_DIR=/app/data
+      - FUND_QUANT_DATABASE_NAME=fund_quant.db
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - fund-quant-network
+
+  # ── 前端服务 ──────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: fund-quant-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - fund-quant-network
+
+    # 日志配置（防止日志无限增长）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+# ── 网络 ────────────────────────────────────────────────────────────────
+networks:
+  fund-quant-network:
+    driver: bridge

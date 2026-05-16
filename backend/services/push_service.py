@@ -1,0 +1,114 @@
+from __future__ import annotations
+from typing import Optional
+"""推送编排服务 — 遍历渠道→格式化→发送"""
+
+import json
+import logging
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.models.push_channel import PushChannel
+from backend.push.feishu import FeishuPush
+from backend.schemas.analysis import AnalysisResultOut
+
+logger = logging.getLogger(__name__)
+
+
+class PushService:
+    """推送编排服务"""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def push_analysis_results(
+        self,
+        results: list[AnalysisResultOut],
+        channel_id: int | None = None,
+    ) -> dict[str, bool]:
+        """推送分析结果
+
+        Args:
+            results: 分析结果列表
+            channel_id: 指定推送渠道 ID，None 表示推送到所有启用渠道
+
+        Returns:
+            渠道名→是否成功 的映射
+        """
+        if not results:
+            logger.info("无分析结果，跳过推送")
+            return {}
+
+        # 获取推送渠道
+        stmt = select(PushChannel).where(PushChannel.enabled == True)
+        if channel_id:
+            stmt = stmt.where(PushChannel.id == channel_id)
+        result = await self.db.execute(stmt)
+        channels = result.scalars().all()
+
+        if not channels:
+            logger.warning("无启用的推送渠道")
+            return {}
+
+        # 生成报告文本
+        from backend.engines.report_engine import report_engine
+        from backend.engines.scoring_engine import SignalResult
+        from backend.engines.factor_engine import FactorScoreResult
+
+        push_results: dict[str, bool] = {}
+
+        for channel in channels:
+            try:
+                if channel.channel_type == "feishu":
+                    pusher = FeishuPush(
+                        webhook_url=channel.webhook_url or "",
+                        secret=channel.token,
+                    )
+
+                    # 逐只基金推送
+                    for r in results:
+                        # 重建 FactorScoreResult 用于报告生成
+                        from backend.engines.factor_engine import FactorScoreResult as FSR
+                        factor_scores = [
+                            FSR(
+                                factor_code=fs.factor_code,
+                                factor_name=fs.factor_name,
+                                raw_value=fs.raw_value,
+                                score=fs.score,
+                                direction=fs.direction,
+                            )
+                            for fs in r.factor_scores
+                        ]
+                        signal = SignalResult(
+                            weighted_score=r.weighted_score,
+                            signal_direction=r.signal_direction,
+                            signal_strength=r.signal_strength,
+                            operation_advice=r.operation_advice,
+                        )
+
+                        report_md = report_engine.generate_markdown(
+                            fund_code=r.fund_code,
+                            fund_name=r.fund_name,
+                            analysis_date=str(r.analysis_date),
+                            signal=signal,
+                            factor_scores=factor_scores,
+                        )
+
+                        success = await pusher.send_analysis_report(
+                            fund_name=r.fund_name,
+                            fund_code=r.fund_code,
+                            signal_direction=r.signal_direction,
+                            weighted_score=r.weighted_score,
+                            report_markdown=report_md,
+                        )
+                        push_results[f"{channel.name}:{r.fund_code}"] = success
+
+                else:
+                    logger.warning(f"不支持的渠道类型: {channel.channel_type}")
+                    push_results[channel.name] = False
+
+            except Exception as e:
+                logger.error(f"推送渠道 {channel.name} 失败: {e}")
+                push_results[channel.name] = False
+
+        return push_results
