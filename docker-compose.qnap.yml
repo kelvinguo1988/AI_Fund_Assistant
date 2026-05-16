@@ -29,16 +29,6 @@ services:
     expose:
       - "8000"
 
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
-
-    networks:
-      - fund-quant-network
-
     # 日志配置（防止日志无限增长占满NAS存储）
     logging:
       driver: "json-file"
@@ -55,11 +45,10 @@ services:
     ports:
       - "80:80"
     depends_on:
-      backend:
-        condition: service_healthy
-
-    networks:
-      - fund-quant-network
+      - backend
+    # links 在 /etc/hosts 中添加 backend 解析，解决 Container Station DNS 问题
+    links:
+      - backend
 
     # 日志配置（防止日志无限增长占满NAS存储）
     logging:
@@ -67,10 +56,3 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
-
-# ── 网络 ────────────────────────────────────────────────────────────────
-# 必须使用自定义网络！Docker 默认 bridge 网络不支持服务名 DNS 解析
-# 前端 nginx.conf 中 proxy_pass http://backend:8000 依赖此 DNS
-networks:
-  fund-quant-network:
-    driver: bridge
