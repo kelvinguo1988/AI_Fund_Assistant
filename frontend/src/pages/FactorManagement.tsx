@@ -39,7 +39,7 @@ const DIRECTION_OPTIONS = [
 
 const FactorManagement: React.FC = () => {
   const [factors, setFactors] = useState<FactorOut[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [_loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editFactor, setEditFactor] = useState<FactorOut | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FactorOut | null>(null);

@@ -38,7 +38,7 @@ const FUND_TYPES = [
 
 const FundPool: React.FC = () => {
   const [funds, setFunds] = useState<FundOut[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [_loading, setLoading] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editFund, setEditFund] = useState<FundOut | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FundOut | null>(null);

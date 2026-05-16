@@ -2,7 +2,7 @@
  * 分析数据 Hook
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { analysisApi } from '../api/analysis';
 import type { AnalysisResultOut } from '../types';
 
