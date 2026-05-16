@@ -8,7 +8,7 @@ services:
   backend:
     # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
     image: ghcr.io/kelvinguo1988/ai_fund_assistant/backend:latest
-    container_name: ai-fund-assistant
+    container_name: ai-fund-backend
     restart: unless-stopped
 
     # ⚠️ 必须使用绝对路径！Container Station 会将相对路径解析到 /tmp/
@@ -26,7 +26,6 @@ services:
     volumes:
       - /share/Container/AI_Fund_Assistant/data:/app/data
 
-    network_mode: bridge
     expose:
       - "8000"
 
@@ -37,19 +36,8 @@ services:
       start_period: 15s
       retries: 3
 
-  # ── 前端服务 ──────────────────────────────────────────────────────────
-  frontend:
-    # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
-    image: ghcr.io/kelvinguo1988/ai_fund_assistant/frontend:latest
-    container_name: ai-fund-assistant
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    depends_on:
-      backend:
-        condition: service_healthy
-
-    network_mode: bridge
+    networks:
+      - fund-quant-network
 
     # 日志配置（防止日志无限增长占满NAS存储）
     logging:
@@ -57,3 +45,32 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+  # ── 前端服务 ──────────────────────────────────────────────────────────
+  frontend:
+    # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
+    image: ghcr.io/kelvinguo1988/ai_fund_assistant/frontend:latest
+    container_name: ai-fund-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    networks:
+      - fund-quant-network
+
+    # 日志配置（防止日志无限增长占满NAS存储）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+# ── 网络 ────────────────────────────────────────────────────────────────
+# 必须使用自定义网络！Docker 默认 bridge 网络不支持服务名 DNS 解析
+# 前端 nginx.conf 中 proxy_pass http://backend:8000 依赖此 DNS
+networks:
+  fund-quant-network:
+    driver: bridge
