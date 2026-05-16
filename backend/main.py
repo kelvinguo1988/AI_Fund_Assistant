@@ -1,9 +1,11 @@
 """FastAPI 应用入口 — 生命周期管理、路由挂载"""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from backend.config import settings
 from backend.database import init_db
@@ -53,3 +55,37 @@ app.include_router(api_router, prefix="/api")
 @app.get("/health", tags=["系统"])
 async def health_check():
     return {"status": "ok"}
+
+
+# ── 前端静态文件服务 ─────────────────────────────────────────────────
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+def _frontend_available() -> bool:
+    return FRONTEND_DIST.is_dir() and (FRONTEND_DIST / "index.html").is_file()
+
+
+@app.get("/", tags=["前端"])
+async def serve_frontend_index():
+    """提供前端首页（SPA 入口）"""
+    if not _frontend_available():
+        raise HTTPException(
+            status_code=404,
+            detail="Frontend not built. Run: cd frontend && npm install && npm run build",
+        )
+    return FileResponse(FRONTEND_DIST / "index.html", media_type="text/html")
+
+
+@app.get("/{full_path:path}", tags=["前端"])
+async def serve_frontend(full_path: str):
+    """提供前端静态资源 + SPA 路由回退"""
+    # 不影响 API 路由（FastAPI 优先匹配精确路由）
+    file_path = FRONTEND_DIST / full_path
+    if file_path.is_file():
+        return FileResponse(file_path)
+
+    # SPA 回退：未匹配的前端路径统一返回 index.html
+    if _frontend_available():
+        return FileResponse(FRONTEND_DIST / "index.html", media_type="text/html")
+
+    raise HTTPException(status_code=404, detail="Not Found")
