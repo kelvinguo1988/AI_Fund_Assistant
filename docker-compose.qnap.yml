@@ -7,7 +7,7 @@ services:
   # ── 后端服务 ──────────────────────────────────────────────────────────
   backend:
     # GHCR 远程镜像 — 替换 <OWNER> 为你的 GitHub 用户名
-    image: ghcr.io/<OWNER>/ai_fund_assistant/backend:latest
+    image: ghcr.io/kelvinguo1988/ai_fund_assistant/backend:latest
     container_name: fund-quant-backend
     restart: unless-stopped
 
