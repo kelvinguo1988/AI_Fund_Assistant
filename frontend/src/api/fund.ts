@@ -22,4 +22,7 @@ export const fundApi = {
 
   batchUpdate: (ids: number[], action: 'active' | 'disabled') =>
     apiClient.patch<ApiResponse<null>>(`${BASE}/batch`, { ids, action }).then((r) => r.data),
+
+  batchImport: (items: { code: string; name: string; tags?: string }[]) =>
+    apiClient.post<ApiResponse<{ total: number; created: number; skipped: string[]; errors: string[] }>>(`${BASE}/import`, { items }).then((r) => r.data),
 };

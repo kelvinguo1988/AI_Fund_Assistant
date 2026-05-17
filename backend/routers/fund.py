@@ -65,6 +65,29 @@ async def delete_fund(
     return ApiResponse()
 
 
+@router.post("/import", response_model=ApiResponse[dict])
+async def import_funds(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量导入基金
+
+    body: {
+      "items": [
+        {"code": "510300", "name": "沪深300ETF", "tags": "宽基,大盘"},
+        {"code": "018495", "name": "融通产业趋势臻选股票C"}
+      ]
+    }
+    已有代码自动跳过，返回导入摘要。
+    """
+    items = body.get("items", [])
+    if not items:
+        raise HTTPException(status_code=400, detail="items 不能为空")
+    svc = FundService(db)
+    result = await svc.batch_import(items)
+    return ApiResponse(data=result)
+
+
 @router.patch("/batch", response_model=ApiResponse[None])
 async def batch_update_funds(
     body: dict,

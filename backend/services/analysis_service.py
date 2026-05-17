@@ -8,7 +8,8 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.data_sources.akshare_adapter import AKShareAdapter
+from backend.data_sources.data_source_manager import DataSourceManager
+from backend.data_sources.base import FundData
 from backend.engines.factor_engine import factor_engine
 from backend.engines.scoring_engine import scoring_engine, SignalResult
 from backend.engines.report_engine import report_engine
@@ -24,9 +25,9 @@ logger = logging.getLogger(__name__)
 class AnalysisService:
     """分析编排服务"""
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, tushare_token: str = "") -> None:
         self.db = db
-        self.data_source = AKShareAdapter()
+        self.data_source = DataSourceManager(tushare_token=tushare_token)
 
     async def run_analysis(
         self,

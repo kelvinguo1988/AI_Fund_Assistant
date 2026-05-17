@@ -41,6 +41,11 @@ class MarketIndices:
 class BaseDataSource(ABC):
     """数据源抽象基类"""
 
+    @property
+    def available(self) -> bool:
+        """数据源当前是否可用（默认 True）"""
+        return True
+
     @abstractmethod
     async def get_fund_data(self, code: str, period: int = 250) -> FundData:
         """获取基金数据

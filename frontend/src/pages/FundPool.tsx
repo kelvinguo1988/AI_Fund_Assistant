@@ -26,7 +26,7 @@ import {
   Snackbar,
   Alert,
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Upload as UploadIcon } from '@mui/icons-material';
 import { fundApi } from '../api/fund';
 import type { FundOut, FundCreate, FundUpdate } from '../types';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -44,6 +44,12 @@ const FundPool: React.FC = () => {
   const [deleteTarget, setDeleteTarget] = useState<FundOut | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+
+  // 批量导入状态
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [_importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ total: number; created: number; skipped: string[]; errors: string[] } | null>(null);
 
   // 表单状态
   const [formCode, setFormCode] = useState('');
@@ -140,6 +146,7 @@ const FundPool: React.FC = () => {
               <Button size="small" variant="outlined" color="warning" onClick={() => handleBatchAction('disabled')}>批量停用</Button>
             </>
           )}
+          <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => { setImportOpen(true); setImportResult(null); setImportText(''); }}>批量导入</Button>
           <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenAdd}>新增基金</Button>
         </Box>
       </Box>
@@ -203,6 +210,60 @@ const FundPool: React.FC = () => {
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>取消</Button>
           <Button variant="contained" onClick={handleSave}>保存</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* 批量导入弹窗 */}
+      <Dialog open={importOpen} onClose={() => setImportOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>批量导入基金</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <Typography variant="body2" color="text.secondary">
+            每行一个基金，格式：<code>代码 名称 标签(可选)</code>。例如：<br />
+            <code>510300 沪深300ETF 宽基,大盘</code><br />
+            <code>018495 融通产业趋势臻选股票C</code><br />
+            已有代码会被自动跳过。
+          </Typography>
+          <TextField
+            label="基金列表"
+            multiline
+            rows={10}
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            placeholder="510300 沪深300ETF 宽基,大盘&#10;018495 融通产业趋势臻选股票C"
+            disabled={_importing}
+          />
+          {importResult && (
+            <Alert severity={importResult.errors.length > 0 ? 'warning' : 'success'}>
+              共 {importResult.total} 条，成功导入 {importResult.created} 条
+              {importResult.skipped.length > 0 && `，跳过 ${importResult.skipped.length} 条（已存在）`}
+              {importResult.errors.length > 0 && `，${importResult.errors.length} 条失败`}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setImportOpen(false)} disabled={_importing}>关闭</Button>
+          <Button variant="contained" onClick={async () => {
+            const lines = importText.split('\n').filter(Boolean);
+            const items = lines.map((line) => {
+              const parts = line.trim().split(/\s+/);
+              return { code: parts[0], name: parts[1] || '', tags: parts.slice(2).join(',') || undefined };
+            }).filter((item) => item.code);
+            if (items.length === 0) return;
+            setImporting(true);
+            try {
+              const res = await fundApi.batchImport(items);
+              setImportResult(res.data || { total: items.length, created: 0, skipped: [], errors: [] });
+              if (res.data && res.data.created > 0) loadFunds();
+            } catch (err: any) {
+              const detail = err?.response?.data?.detail || err?.message || '';
+              console.error('批量导入失败:', detail, err);
+              setSnackbar({ open: true, message: '批量导入失败' + (detail ? ': ' + detail : ''), severity: 'error' });
+            } finally {
+              setImporting(false);
+            }
+          }} disabled={_importing || !importText.trim()}>
+            {_importing ? '导入中...' : '开始导入'}
+          </Button>
         </DialogActions>
       </Dialog>
 

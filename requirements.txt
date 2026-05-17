@@ -8,6 +8,12 @@ python-dateutil>=2.8.2
 # TuShare（需申请Token）
 tushare>=1.4.0
 
+# BaoStock（免费备用数据源）
+baostock>=1.0.0
+
+# TickFlow（末级保底数据源，可选）
+# tickflow>=1.0.0
+
 # 定时任务（可选，如果不用内置调度器）
 # APScheduler>=3.10.0
 

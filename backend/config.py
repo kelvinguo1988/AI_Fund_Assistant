@@ -41,6 +41,9 @@ class Settings:
     DEFAULT_AI_API_KEY: str = ""
     DEFAULT_AI_BASE_URL: str = "https://api.deepseek.com/v1"
 
+    # 数据源
+    TUSHARE_TOKEN: str = os.getenv("TUSHARE_TOKEN", "")
+
     # 评分阈值
     DEFAULT_BUY_THRESHOLD: float = 3.5
     DEFAULT_SELL_THRESHOLD: float = 2.0

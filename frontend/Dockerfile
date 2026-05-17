@@ -33,6 +33,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # 从构建阶段复制产物到 nginx 默认静态文件目录
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# 添加启动前等待脚本（QNAP Container Station 兼容）
+COPY docker-entrypoint.d/ /docker-entrypoint.d/
+
 # 暴露 HTTP 端口
 EXPOSE 80
 

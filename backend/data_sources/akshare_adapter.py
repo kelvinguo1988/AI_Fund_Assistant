@@ -4,6 +4,8 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+import asyncio
+
 import akshare as ak  # type: ignore
 import pandas as pd
 
@@ -22,6 +24,35 @@ class AKShareAdapter(BaseDataSource):
     - 市场主要指数
     - 10 年期国债收益率
     """
+
+    MAX_RETRIES = 3       # 最大重试次数
+    BASE_DELAY = 1.0      # 初始退避延迟（秒）
+
+    async def _call(self, func, *args, **kwargs):
+        """带指数退避重试的异步 API 调用
+
+        AKShare 的 HTTP 连接可能因网络波动、限流等原因断开，
+        重试可大幅提高数据获取成功率。
+
+        使用 asyncio.to_thread 避免阻塞事件循环，配合指数退避重试。
+        """
+        import functools
+        last_exc = None
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                partial = functools.partial(func, *args, **kwargs)
+                return await asyncio.to_thread(partial)
+            except Exception as e:
+                last_exc = e
+                if attempt < self.MAX_RETRIES:
+                    delay = self.BASE_DELAY * (2 ** (attempt - 1))
+                    logger.warning(
+                        f"{func.__name__} 失败 (attempt {attempt}/{self.MAX_RETRIES}): {e}, "
+                        f"{delay:.1f}s 后重试..."
+                    )
+                    await asyncio.sleep(delay)
+        logger.error(f"{func.__name__} 重试 {self.MAX_RETRIES} 次后仍然失败: {last_exc}")
+        raise last_exc
 
     async def get_fund_data(self, code: str, period: int = 250) -> FundData:
         """获取基金完整数据
@@ -56,29 +87,26 @@ class AKShareAdapter(BaseDataSource):
         """获取 ETF 场内交易数据"""
         fund_data = FundData(code=code)
 
-        # 尝试获取 ETF 行情数据
-        try:
-            # ETF 历史行情
-            df = ak.fund_etf_hist_em(symbol=code, period="daily", adjust="qfq")
-            if df is not None and not df.empty:
-                # 取最近 period 条
-                df = df.tail(period)
-                df = df.sort_values("日期")
+        # 尝试获取 ETF 行情数据（带重试）
+        df = await self._call(ak.fund_etf_hist_em, symbol=code, period="daily", adjust="qfq")
+        if df is None or df.empty:
+            raise ValueError(f"ETF 行情数据为空 code={code}")
 
-                fund_data.close_history = df["收盘"].astype(float).tolist()
-                fund_data.volume_history = df["成交量"].astype(float).tolist()
-                fund_data.date_history = df["日期"].astype(str).tolist()
+        df = df.tail(period)
+        df = df.sort_values("日期")
 
-                last_row = df.iloc[-1]
-                fund_data.close = float(last_row["收盘"])
-                fund_data.volume = float(last_row["成交量"])
-                fund_data.date = str(last_row["日期"])
-        except Exception as e:
-            logger.warning(f"ETF 行情数据获取失败 code={code}: {e}")
+        fund_data.close_history = df["收盘"].astype(float).tolist()
+        fund_data.volume_history = df["成交量"].astype(float).tolist()
+        fund_data.date_history = df["日期"].astype(str).tolist()
+
+        last_row = df.iloc[-1]
+        fund_data.close = float(last_row["收盘"])
+        fund_data.volume = float(last_row["成交量"])
+        fund_data.date = str(last_row["日期"])
 
         # 尝试获取基金名称
         try:
-            info_df = ak.fund_etf_spot_em()
+            info_df = await self._call(ak.fund_etf_spot_em)
             if info_df is not None and not info_df.empty:
                 match = info_df[info_df["代码"] == code]
                 if not match.empty:
@@ -99,7 +127,7 @@ class AKShareAdapter(BaseDataSource):
         fund_data = FundData(code=code)
 
         try:
-            df = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")
+            df = await self._call(ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势")
             if df is not None and not df.empty:
                 df = df.tail(period)
                 df = df.sort_values("净值日期")
@@ -115,7 +143,7 @@ class AKShareAdapter(BaseDataSource):
 
         # 尝试获取基金名称
         try:
-            info_df = ak.fund_name_em()
+            info_df = await self._call(ak.fund_name_em)
             if info_df is not None and not info_df.empty:
                 match = info_df[info_df["基金代码"] == code]
                 if not match.empty:
@@ -146,7 +174,7 @@ class AKShareAdapter(BaseDataSource):
             return
 
         try:
-            df = ak.index_value_name_funddb()
+            df = await self._call(ak.index_value_name_funddb)
             if df is not None and not df.empty:
                 match = df[df["指数代码"] == index_code]
                 if not match.empty:
@@ -164,7 +192,7 @@ class AKShareAdapter(BaseDataSource):
         """获取市场主要指数数据"""
         indices = MarketIndices()
         try:
-            df = ak.stock_zh_index_spot_em()
+            df = await self._call(ak.stock_zh_index_spot_em)
             if df is not None and not df.empty:
                 today = date.today().strftime("%Y-%m-%d")
                 indices.date = today
@@ -192,7 +220,7 @@ class AKShareAdapter(BaseDataSource):
         """获取 10 年期国债收益率"""
         try:
             # 尝试从 bond_china_yield 接口获取
-            df = ak.bond_china_yield(start_date="20240101")
+            df = await self._call(ak.bond_china_yield, start_date="20240101")
             if df is not None and not df.empty:
                 # 筛选 10 年期国债
                 bond_10y = df[df["债券类型"] == "国债"]

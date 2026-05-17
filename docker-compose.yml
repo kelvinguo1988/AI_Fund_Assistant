@@ -3,6 +3,12 @@
 # 前后端分离架构：Nginx(前端) + FastAPI(后端)
 # 使用方式: docker compose up -d
 # ============================================================================
+#
+# QNAP Container Station 兼容说明：
+# - 使用 extra_hosts 将 backend 写入 /etc/hosts，不依赖 Docker DNS
+# - backend 暴露端口 8000，frontend 通过 Docker 网关 IP 访问 backend
+# - links 作为额外保护层
+# ============================================================================
 
 services:
   # ── 后端服务 ──────────────────────────────────────────────────────────
@@ -24,14 +30,22 @@ services:
       - ./data:/app/data
     expose:
       - "8000"
+    # Container Station 兼容：frontend 通过 Docker 网关 IP + 本端口访问 backend
+    ports:
+      - "8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       start_period: 15s
       retries: 3
-    networks:
-      - fund-quant-network
+
+    # 日志配置（防止日志无限增长）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   # ── 前端服务 ──────────────────────────────────────────────────────────
   frontend:
@@ -42,20 +56,19 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+    extra_hosts:
+      # host-gateway 自动解析为 Docker 宿主机网关 IP（默认 172.17.0.1）
+      # 即使 Container Station 不支持自定义网络和 links，/etc/hosts 也能生效
+      - "backend:host-gateway"
     depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - fund-quant-network
+      - backend
+    # links 在 /etc/hosts 中添加 backend 解析，作为 extra_hosts 的补充
+    links:
+      - backend
 
     # 日志配置（防止日志无限增长）
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
-        max-file: "5"
-
-# ── 网络 ────────────────────────────────────────────────────────────────
-networks:
-  fund-quant-network:
-    driver: bridge
+        max-file: "3"

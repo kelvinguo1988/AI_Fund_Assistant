@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional
 
 from sqlalchemy import select, update
@@ -11,6 +12,15 @@ from backend.models.fund import Fund
 from backend.schemas.fund import FundCreate, FundUpdate
 
 logger = logging.getLogger(__name__)
+
+
+# ETF 代码前缀规则
+_ETF_CODE_PATTERN = re.compile(r"^(51|15|58|159|588|512|513|515|516|517|518|560|561|562|563|588)")
+
+
+def _guess_fund_type(code: str) -> str:
+    """根据基金代码前缀推测类型"""
+    return "etf" if _ETF_CODE_PATTERN.match(code) else "otc"
 
 
 class FundService:
@@ -124,6 +134,66 @@ class FundService:
         await self.db.delete(fund)
         await self.db.commit()
         return True
+
+    async def batch_import(self, items: list[dict]) -> dict:
+        """批量导入基金
+
+        已有代码跳过不重复创建，其余自动识别类型并创建。
+
+        Args:
+            items: [{"code": "000001", "name": "示例基金", "tags": "宽基"}]
+
+        Returns:
+            {"total": 3, "created": 2, "skipped": ["000001"], "errors": []}
+        """
+        created = 0
+        skipped: list[str] = []
+        errors: list[str] = []
+
+        logger.info("批量导入 %d 个基金", len(items))
+        for item in items:
+            code = str(item.get("code", "")).strip()
+            name = str(item.get("name", "")).strip()
+            tags = str(item.get("tags", "")).strip() or None
+
+            if not code or not name:
+                errors.append(f"代码或名称为空: {item}")
+                continue
+            if not re.match(r"^\d{6}$", code):
+                errors.append(f"代码格式无效: {code}")
+                continue
+
+            try:
+                existing = await self.get_fund_by_code(code)
+                if existing:
+                    skipped.append(code)
+                    continue
+
+                fund = Fund(
+                    code=code,
+                    name=name,
+                    fund_type=_guess_fund_type(code),
+                    tags=tags,
+                    status="active",
+                )
+                self.db.add(fund)
+                await self.db.flush()
+                created += 1
+            except Exception as e:
+                errors.append(f"{code}: {e}")
+                continue
+
+        await self.db.commit()
+        logger.info("批量导入完成: total=%d created=%d skipped=%d errors=%d",
+                     len(items), created, len(skipped), len(errors))
+        if errors:
+            logger.warning("导入失败项: %s", errors)
+        return {
+            "total": len(items),
+            "created": created,
+            "skipped": skipped,
+            "errors": errors,
+        }
 
     async def batch_update_status(self, ids: list[int], action: str) -> None:
         """批量更新基金状态

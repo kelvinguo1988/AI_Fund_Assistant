@@ -120,8 +120,9 @@ async def trigger_analysis(
     body: {"fund_ids": [1, 2, 3]} 或空对象表示全部
     """
     try:
+        from backend.config import settings
         from backend.services.analysis_service import AnalysisService
-        svc = AnalysisService(db)
+        svc = AnalysisService(db, tushare_token=settings.TUSHARE_TOKEN)
         fund_ids = body.get("fund_ids") if body else None
         results = await svc.run_analysis(fund_ids=fund_ids)
         return ApiResponse(data=results)
