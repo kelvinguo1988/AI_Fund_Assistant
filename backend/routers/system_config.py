@@ -17,7 +17,7 @@ from backend.schemas.system_config import (
     ScoringConfigUpdate,
     ScoringTier,
 )
-from backend.engines.scoring_engine import DEFAULT_THRESHOLDS, DEFAULT_LAST_TIER
+from backend.engines.scoring_engine import DEFAULT_THRESHOLDS
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

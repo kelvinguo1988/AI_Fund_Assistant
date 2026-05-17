@@ -193,9 +193,6 @@ const ScoringConfig: React.FC = () => {
             </Typography>
           );
         })}
-        <Typography variant="body2" color="text.secondary">
-          &lt; {thresholds.length > 0 ? thresholds[thresholds.length - 1].min_score : -3.0} → 强烈减仓（权益 10%）
-        </Typography>
       </Box>
 
       <Snackbar open={snackbar.open} autoHideDuration={4000} onClose={() => setSnackbar({ ...snackbar, open: false })}>

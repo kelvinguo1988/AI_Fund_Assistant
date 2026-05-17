@@ -19,6 +19,7 @@ from backend.engines.factor_engine import FactorScoreResult
 logger = logging.getLogger(__name__)
 
 # ── 默认五档阈值配置（因子总分理论范围 -6.0 ~ +6.0）────────────────────
+# min_score 降序排列，末档设 -100 作为兜底（低于理论最小值 -6）
 DEFAULT_THRESHOLDS: list[dict] = [
     {
         "min_score": 3.0,
@@ -52,15 +53,15 @@ DEFAULT_THRESHOLDS: list[dict] = [
         "operation_advice": "综合评分 {score}，建议适度减仓，权益仓位降至 {equity_pct}%",
         "equity_ratio": 0.3,
     },
+    {
+        "min_score": -100.0,
+        "label": "强烈减仓",
+        "signal_direction": "sell",
+        "signal_strength": "heavy_sell",
+        "operation_advice": "综合评分 {score}，强烈建议减仓或清仓，权益仓位降至 {equity_pct}%",
+        "equity_ratio": 0.1,
+    },
 ]
-
-DEFAULT_LAST_TIER: dict = {
-    "label": "强烈减仓",
-    "signal_direction": "sell",
-    "signal_strength": "heavy_sell",
-    "operation_advice": "综合评分 {score}，强烈建议减仓或清仓，权益仓位降至 {equity_pct}%",
-    "equity_ratio": 0.1,
-}
 
 
 @dataclass
@@ -166,7 +167,8 @@ class ScoringEngine:
                     tier["equity_ratio"],
                 )
 
-        last = DEFAULT_LAST_TIER
+        # 末档兜底（正常情况下不会到达）
+        last = thresholds[-1] if thresholds else DEFAULT_THRESHOLDS[-1]
         advice = last["operation_advice"].format(
             score=score,
             equity_pct=int(last["equity_ratio"] * 100),
