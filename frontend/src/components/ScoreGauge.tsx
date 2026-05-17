@@ -1,5 +1,6 @@
 /**
  * 评分仪表盘 — ECharts
+ * 使用 axisLine color stops 替代 progress，避免溢出
  */
 
 import React, { useMemo } from 'react';
@@ -12,82 +13,73 @@ interface ScoreGaugeProps {
 
 const ScoreGauge: React.FC<ScoreGaugeProps> = ({ score, height = 200 }) => {
   const option = useMemo(() => {
-    // 根据评分确定颜色（-6.0 ~ +6.0 范围）
+    const clampedScore = Math.max(-6, Math.min(6, score));
+
+    // 根据评分确定颜色
     let color: string;
-    if (score >= 1.5) {
-      color = 'var(--signal-buy)'; // 红（偏多）
-    } else if (score <= -1.5) {
-      color = 'var(--signal-sell)'; // 绿（偏空）
+    if (clampedScore >= 1.5) {
+      color = '#E74C3C'; // 红（偏多）
+    } else if (clampedScore <= -1.5) {
+      color = '#27AE60'; // 绿（偏空）
     } else {
-      color = 'var(--signal-hold)'; // 灰（中性）
+      color = '#95A5A6'; // 灰（中性）
     }
 
-    // ECharts 不支持 CSS 变量，转成具体颜色值
-    const colorMap: Record<string, string> = {
-      'var(--signal-buy)': '#E74C3C',
-      'var(--signal-sell)': '#27AE60',
-      'var(--signal-hold)': '#95A5A6',
-    };
-    const realColor = colorMap[color] || '#95A5A6';
+    // 分值在 -6~+6 范围中的比例（0~1）
+    const ratio = Math.max(0, (clampedScore + 6) / 12);
 
     return {
       series: [
         {
           type: 'gauge',
-          startAngle: 200,
-          endAngle: -20,
+          startAngle: 210,
+          endAngle: -30,
           min: -6,
           max: 6,
           splitNumber: 6,
           itemStyle: {
-            color: realColor,
+            color,
           },
-          progress: {
-            show: true,
-            width: 18,
-          },
+          progress: { show: false },
           pointer: {
             show: true,
-            length: '60%',
-            width: 4,
-            itemStyle: {
-              color: realColor,
-            },
+            length: '55%',
+            width: 3,
+            itemStyle: { color },
           },
           axisLine: {
             lineStyle: {
-              width: 18,
-              color: [[1, '#e0e0e0']],
+              width: 20,
+              color: [
+                [ratio, color],
+                [1, '#e8e8e8'],
+              ],
             },
           },
           axisTick: {
-            distance: -25,
-            lineStyle: {
-              color: '#999',
-              width: 1,
-            },
+            distance: -28,
+            lineStyle: { color: '#999', width: 1 },
+            length: 6,
           },
           splitLine: {
-            distance: -30,
-            lineStyle: {
-              color: '#999',
-              width: 2,
-            },
+            distance: -34,
+            lineStyle: { color: '#999', width: 2 },
+            length: 14,
           },
           axisLabel: {
-            distance: -15,
+            distance: -22,
             color: '#999',
             fontSize: 11,
           },
           detail: {
             valueAnimation: true,
             formatter: '{value}',
-            fontSize: 24,
+            fontSize: 22,
             fontWeight: 'bold',
-            color: realColor,
-            offsetCenter: [0, '70%'],
+            color,
+            offsetCenter: [0, '72%'],
           },
-          data: [{ value: score }],
+          data: [{ value: clampedScore }],
         },
       ],
     };
