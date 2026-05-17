@@ -231,6 +231,13 @@ class TestCrossSectionalZScore:
         for v in result.values():
             assert -1 <= v <= 1
 
+    def test_old_3_threshold_compatibility(self):
+        # 旧版 3 阈值 [1.0, 0, -1.0] 应自动扩展为新版 4 阈值
+        scores = {"A": 0.2, "B": 0, "C": -0.3}
+        result = apply_cross_sectional_zscore(scores, [1.0, 0, -1.0])
+        for v in result.values():
+            assert -1 <= v <= 1
+
 
 # ── 因子引擎统一入口测试 ──────────────────────────────────────────────
 

@@ -155,11 +155,11 @@ def apply_cross_sectional_zscore(
     scores: dict[str, float],
     thresholds: Optional[list[float]] = None,
 ) -> dict[str, float]:
-    """截面 Z-score 标准化 → -1~+1 映射
+    """截面 Z-score 标准化 → -1~+1 映射（五档对称）
 
     Args:
         scores: {fund_code: pre_norm_score}
-        thresholds: [upper, middle, lower] 默认 [1.0, 0, -1.0]
+        thresholds: [upper, mid_upper, mid_lower, lower] 默认 [1.0, 0.5, -0.5, -1.0]
 
     Returns:
         {fund_code: normalized_score}
@@ -170,10 +170,14 @@ def apply_cross_sectional_zscore(
 
     mean = float(np.mean(values))
     std = float(np.std(values))
-    t = thresholds or [1.0, 0, -1.0]
+    t = thresholds or [1.0, 0.5, -0.5, -1.0]
+
+    # 兼容旧版 3 阈值 → 扩展为 4 阈值
+    if len(t) == 3:
+        t = [t[0], (t[0] + t[1]) / 2, (t[1] + t[2]) / 2, t[2]]
 
     return {
-        code: 1.0 if z > t[0] else 0.5 if z > t[1] else -0.5 if z >= t[2] else -1.0
+        code: 1.0 if z > t[0] else 0.5 if z > t[1] else 0.0 if z > t[2] else -0.5 if z > t[3] else -1.0
         for code, z in ((code, (val - mean) / std) for code, val in scores.items())
     }
 
@@ -501,6 +505,11 @@ class FactorEngine:
                     scores_map[fund_code] = results_list[fi].score
 
             if len(scores_map) < 2:
+                # 单只基金：截面标准化不可行，赋中性值 0.0
+                for fund_code in scores_map:
+                    if fi < len(all_results[fund_code]):
+                        all_results[fund_code][fi].score = 0.0
+                logger.info(f"截面标准化: 单只基金，因子索引 {fi} 使用中性值 0.0")
                 continue
 
             normalized = apply_cross_sectional_zscore(scores_map, thresholds)

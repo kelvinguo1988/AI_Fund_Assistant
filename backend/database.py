@@ -86,6 +86,26 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+    # ── 修复已有因子记录的标准化配置 ──
+    async with async_session_factory() as session:
+        from sqlalchemy import select, update
+        # 已有数据库中的 inv_volatility / roe_stability 可能因 ALTER TABLE
+        # 的默认值 'none' 导致截面标准化不生效，需修正
+        fix_normalization = {
+            "inv_volatility": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+            "roe_stability": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+        }
+        for code, norm_conf in fix_normalization.items():
+            result = await session.execute(
+                select(Factor).where(Factor.code == code, Factor.normalization == "none")
+            )
+            stale = result.scalars().first()
+            if stale:
+                stale.normalization = "cross_sectional_zscore"
+                stale.normalization_config = norm_conf
+                stale.signal_rules = json.dumps([]) if stale.signal_rules is None else stale.signal_rules
+        await session.commit()
+
     # 插入初始数据
     async with async_session_factory() as session:
         # ── 检查是否已有因子数据 ──
@@ -178,7 +198,7 @@ async def init_db() -> None:
                     window_unit="day",
                     signal_rules=json.dumps([]),
                     normalization="cross_sectional_zscore",
-                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0, -1.0]}),
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
                     status="active",
                     sort_order=4,
                     created_at=now,
@@ -197,7 +217,7 @@ async def init_db() -> None:
                     window_unit="quarter",
                     signal_rules=json.dumps([]),
                     normalization="cross_sectional_zscore",
-                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0, -1.0]}),
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
                     status="active",
                     sort_order=5,
                     created_at=now,
