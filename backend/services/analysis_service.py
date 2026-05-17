@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data_sources.data_source_manager import DataSourceManager
 from backend.data_sources.base import FundData
-from backend.engines.factor_engine import factor_engine
+from backend.engines.factor_engine import factor_engine, FactorScoreResult
 from backend.engines.scoring_engine import scoring_engine, SignalResult
 from backend.engines.report_engine import report_engine
 from backend.models.analysis_result import AnalysisResult
@@ -35,11 +35,12 @@ class AnalysisService:
     ) -> list[AnalysisResultOut]:
         """执行分析流程
 
-        Args:
-            fund_ids: 指定基金 ID 列表，None 表示分析全部启用基金
-
-        Returns:
-            分析结果列表
+        流程：
+        1. 获取基金列表 + 活跃因子配置 + 系统配置
+        2. 逐只基金获取数据、计算因子原始值
+        3. 跨基金截面标准化（如波动率倒数）
+        4. 逐只基金计算加权评分、信号、报告
+        5. 存储结果并返回
         """
         # 1. 获取基金池
         stmt = select(Fund).where(Fund.status == "active")
@@ -61,10 +62,11 @@ class AnalysisService:
             logger.warning("没有启用的因子，跳过分析")
             return []
 
-        # 3. 获取评分阈值
+        # 3. 获取评分阈值配置
         config_map = await self._get_config_map()
         buy_threshold = float(config_map.get("buy_threshold", "3.5"))
         sell_threshold = float(config_map.get("sell_threshold", "2.0"))
+        thresholds_json = config_map.get("scoring_thresholds", "")
 
         # 4. 获取报告配置
         report_result = await self.db.execute(
@@ -72,63 +74,70 @@ class AnalysisService:
         )
         enabled_report_items = [r.item_key for r in report_result.scalars().all()]
 
-        # 5. 逐只基金分析
-        results: list[AnalysisResultOut] = []
+        # 5. 逐只基金获取数据 + 计算因子（第一遍）
+        fund_data_map: dict[str, FundData] = {}
+        all_factor_results: dict[str, list[FactorScoreResult]] = {}
 
         for fund in funds:
             try:
-                result_out = await self._analyze_fund(
-                    fund=fund,
-                    active_factors=active_factors,
-                    buy_threshold=buy_threshold,
-                    sell_threshold=sell_threshold,
-                    enabled_report_items=enabled_report_items,
-                )
-                if result_out:
-                    results.append(result_out)
+                fund_data = await self.data_source.get_fund_data(fund.code)
+                fund_data_map[fund.code] = fund_data
+
+                factor_scores = factor_engine.calculate_all(fund_data, active_factors)
+                all_factor_results[fund.code] = factor_scores
+
+                logger.info(f"因子计算完成: {fund.code} ({fund.name}), {len(factor_scores)} 个因子")
             except Exception as e:
-                logger.error(f"分析基金 {fund.code} 失败: {e}")
-                # 单只基金分析失败不中断整体流程
+                logger.error(f"获取/计算基金 {fund.code} 失败: {e}")
                 continue
+
+        # 6. 跨基金截面标准化
+        all_factor_results = factor_engine.normalize_cross_sectional(all_factor_results, active_factors)
+
+        # 7. 逐只基金评分 + 信号 + 存储
+        results: list[AnalysisResultOut] = []
+        for fund in funds:
+            if fund.code not in all_factor_results:
+                continue
+
+            factor_scores = all_factor_results[fund.code]
+
+            # 加权评分 + 信号
+            weights = [f.get("weight", 1.0) for f in active_factors]
+            signal = scoring_engine.compute(
+                factor_scores=factor_scores,
+                factor_weights=weights,
+                buy_threshold=buy_threshold,
+                sell_threshold=sell_threshold,
+                thresholds_json=thresholds_json,
+            )
+
+            # 生成报告
+            fund_data = fund_data_map.get(fund.code)
+            analysis_date = date.today().isoformat()
+            report_md = report_engine.generate_markdown(
+                fund_code=fund.code,
+                fund_name=fund.name,
+                analysis_date=analysis_date,
+                signal=signal,
+                factor_scores=factor_scores,
+                enabled_items=enabled_report_items,
+            )
+
+            # 存储结果
+            result_out = await self._save_result(fund, signal, factor_scores)
+            if result_out:
+                results.append(result_out)
 
         return results
 
-    async def _analyze_fund(
+    async def _save_result(
         self,
         fund: Fund,
-        active_factors: list[dict],
-        buy_threshold: float,
-        sell_threshold: float,
-        enabled_report_items: list[str],
+        signal: SignalResult,
+        factor_scores: list[FactorScoreResult],
     ) -> Optional[AnalysisResultOut]:
-        """分析单只基金"""
-        # 获取基金数据
-        fund_data = await self.data_source.get_fund_data(fund.code)
-
-        # 计算因子评分
-        factor_scores = factor_engine.calculate_all(fund_data, active_factors)
-
-        # 计算加权评分 + 信号
-        weights = [f.get("weight", 1.0) for f in active_factors]
-        signal = scoring_engine.compute(
-            factor_scores=factor_scores,
-            factor_weights=weights,
-            buy_threshold=buy_threshold,
-            sell_threshold=sell_threshold,
-        )
-
-        # 生成报告
-        analysis_date = date.today().isoformat()
-        report_md = report_engine.generate_markdown(
-            fund_code=fund.code,
-            fund_name=fund.name,
-            analysis_date=analysis_date,
-            signal=signal,
-            factor_scores=factor_scores,
-            enabled_items=enabled_report_items,
-        )
-
-        # 存储结果
+        """存储分析结果到数据库"""
         factor_scores_json = json.dumps({
             fs.factor_code: {
                 "name": fs.factor_name,
@@ -139,7 +148,6 @@ class AnalysisService:
             for fs in factor_scores
         }, ensure_ascii=False)
 
-        # 检查是否已有当日结果
         existing_result = await self.db.execute(
             select(AnalysisResult).where(
                 AnalysisResult.fund_id == fund.id,
@@ -149,15 +157,14 @@ class AnalysisService:
         existing = existing_result.scalars().first()
 
         if existing:
-            # 更新
             existing.weighted_score = signal.weighted_score
             existing.signal_direction = signal.signal_direction
             existing.signal_strength = signal.signal_strength
             existing.operation_advice = signal.operation_advice
+            existing.equity_ratio = signal.equity_ratio
             existing.factor_scores = factor_scores_json
             analysis_id = existing.id
         else:
-            # 新增
             new_result = AnalysisResult(
                 fund_id=fund.id,
                 analysis_date=date.today(),
@@ -165,6 +172,7 @@ class AnalysisService:
                 signal_direction=signal.signal_direction,
                 signal_strength=signal.signal_strength,
                 operation_advice=signal.operation_advice,
+                equity_ratio=signal.equity_ratio,
                 factor_scores=factor_scores_json,
             )
             self.db.add(new_result)
@@ -173,7 +181,6 @@ class AnalysisService:
 
         await self.db.commit()
 
-        # 构建输出
         return AnalysisResultOut(
             id=analysis_id,
             fund_id=fund.id,
@@ -184,6 +191,7 @@ class AnalysisService:
             signal_direction=signal.signal_direction,
             signal_strength=signal.signal_strength,
             operation_advice=signal.operation_advice,
+            equity_ratio=signal.equity_ratio,
             factor_scores=[
                 FactorScore(
                     factor_code=fs.factor_code,

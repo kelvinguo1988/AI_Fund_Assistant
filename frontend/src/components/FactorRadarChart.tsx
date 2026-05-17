@@ -18,7 +18,8 @@ const FactorRadarChart: React.FC<FactorRadarChartProps> = ({
   const option = useMemo(() => {
     const indicators = factorScores.map((fs) => ({
       name: fs.factor_name,
-      max: 5,
+      max: 1,
+      min: -1,
     }));
 
     const values = factorScores.map((fs) => fs.score);
@@ -30,7 +31,7 @@ const FactorRadarChart: React.FC<FactorRadarChartProps> = ({
       radar: {
         indicator: indicators,
         shape: 'polygon' as const,
-        splitNumber: 5,
+        splitNumber: 4,
         axisName: {
           color: '#666',
           fontSize: 12,

@@ -65,8 +65,8 @@ class ReportEngine:
         if "factor_detail" in enabled_items:
             lines.append("## 因子详情")
             lines.append("")
-            lines.append("| 因子 | 原始值 | 评分(0-5) | 方向 |")
-            lines.append("|------|--------|-----------|------|")
+            lines.append("| 因子 | 原始值 | 评分(-1~+1) | 方向 |")
+            lines.append("|------|--------|-------------|------|")
             for fs in factor_scores:
                 direction_label = "正向" if fs.direction == "positive" else "反向"
                 lines.append(f"| {fs.factor_name} | {fs.raw_value} | {fs.score} | {direction_label} |")
@@ -77,7 +77,8 @@ class ReportEngine:
             lines.append("## 加权评分")
             lines.append("")
             score_bar = self._score_bar(signal.weighted_score)
-            lines.append(f"**综合评分**: {score_bar} {signal.weighted_score}/5.0")
+            lines.append(f"**综合评分**: {score_bar} {signal.weighted_score}（-6.0 ~ +6.0）")
+            lines.append(f"**建议权益仓位**: {int(signal.equity_ratio * 100)}%")
             lines.append("")
 
         # 操作建议
@@ -155,21 +156,21 @@ class ReportEngine:
         return emoji_map.get(direction, "⚪")
 
     def _score_bar(self, score: float) -> str:
-        """评分进度条（5 格）"""
-        filled = int(round(score))
-        empty = 5 - filled
+        """评分进度条（10 格，-6.0 ~ +6.0 映射到 0-10 格）"""
+        segments = int(round((score + 6.0) / 12.0 * 10))
+        segments = max(0, min(10, segments))
+        filled = segments
+        empty = 10 - filled
         return "█" * filled + "░" * empty
 
     def _strength_label(self, strength: str) -> str:
         """信号强度中文标签"""
         labels = {
-            "heavy_buy": "🔴🔴🔴 强烈买入",
-            "moderate_buy": "🔴🔴 适度买入",
-            "light_buy": "🔴 轻仓买入",
-            "hold": "⚪ 观望持有",
-            "light_sell": "🟢 轻仓减仓",
-            "moderate_sell": "🟢🟢 适度减仓",
-            "heavy_sell": "🟢🟢🟢 强烈减仓",
+            "heavy_buy": "🔴🔴🔴 强烈加仓（权益仓位90%）",
+            "moderate_buy": "🔴🔴 适度加仓（权益仓位70%）",
+            "hold": "⚪ 中性观望（基准仓位50%）",
+            "moderate_sell": "🟢🟢 适度减仓（权益仓位30%）",
+            "heavy_sell": "🟢🟢🟢 强烈减仓（权益仓位10%）",
         }
         return labels.get(strength, strength)
 
@@ -181,21 +182,21 @@ class ReportEngine:
         """生成风险提示文本"""
         warnings: list[str] = []
 
-        # 检查是否有因子数据不足
-        low_score_factors = [fs for fs in factor_scores if fs.score == 2.5 and fs.raw_value == 0.0]
+        # 检查是否有因子数据不足（score=0 且 raw_value=0 表示缺失）
+        low_score_factors = [fs for fs in factor_scores if fs.score == 0.0 and fs.raw_value == 0.0]
         if low_score_factors:
             names = ", ".join(fs.factor_name for fs in low_score_factors)
             warnings.append(f"以下因子数据不足，评分可能不准确：{names}")
 
-        # 检查评分极端情况
-        if signal.weighted_score >= 4.5:
-            warnings.append("评分极高，注意追高风险，建议分批建仓")
-        elif signal.weighted_score <= 1.0:
+        # 检查评分极端情况（-6.0 ~ +6.0 范围）
+        if signal.weighted_score >= 4.0:
+            warnings.append("评分偏高，注意追高风险，建议分批建仓")
+        elif signal.weighted_score <= -4.0:
             warnings.append("评分极低，可能存在系统性风险，谨慎操作")
 
-        # 检查因子评分分歧
+        # 检查因子评分分歧（-1~+1 范围，2.0 为满幅）
         scores = [fs.score for fs in factor_scores]
-        if scores and (max(scores) - min(scores)) > 3.0:
+        if scores and (max(scores) - min(scores)) > 1.5:
             warnings.append("因子评分分歧较大，信号可靠性降低，建议综合判断")
 
         if not warnings:

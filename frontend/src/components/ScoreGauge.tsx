@@ -12,14 +12,14 @@ interface ScoreGaugeProps {
 
 const ScoreGauge: React.FC<ScoreGaugeProps> = ({ score, height = 200 }) => {
   const option = useMemo(() => {
-    // 根据评分确定颜色
+    // 根据评分确定颜色（-6.0 ~ +6.0 范围）
     let color: string;
-    if (score >= 3.5) {
-      color = 'var(--signal-buy)'; // 红
-    } else if (score <= 2.0) {
-      color = 'var(--signal-sell)'; // 绿
+    if (score >= 1.5) {
+      color = 'var(--signal-buy)'; // 红（偏多）
+    } else if (score <= -1.5) {
+      color = 'var(--signal-sell)'; // 绿（偏空）
     } else {
-      color = 'var(--signal-hold)'; // 灰
+      color = 'var(--signal-hold)'; // 灰（中性）
     }
 
     // ECharts 不支持 CSS 变量，转成具体颜色值
@@ -36,9 +36,9 @@ const ScoreGauge: React.FC<ScoreGaugeProps> = ({ score, height = 200 }) => {
           type: 'gauge',
           startAngle: 200,
           endAngle: -20,
-          min: 0,
-          max: 5,
-          splitNumber: 5,
+          min: -6,
+          max: 6,
+          splitNumber: 6,
           itemStyle: {
             color: realColor,
           },

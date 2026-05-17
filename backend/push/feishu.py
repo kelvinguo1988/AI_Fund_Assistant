@@ -95,7 +95,7 @@ class FeishuPush(BasePush):
                         "tag": "div",
                         "text": {
                             "tag": "lark_md",
-                            "content": f"**信号方向**: {signal_label}\n**综合评分**: {weighted_score}/5.0",
+                            "content": f"**信号方向**: {signal_label}\n**综合评分**: {weighted_score}（-6.0 ~ +6.0）",
                         },
                     },
                     {"tag": "hr"},

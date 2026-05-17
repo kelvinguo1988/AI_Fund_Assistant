@@ -10,7 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.models.system_config import SystemConfig
 from backend.schemas.common import ApiResponse
-from backend.schemas.system_config import AIConfigUpdate, AIConfigOut
+from backend.schemas.system_config import (
+    AIConfigUpdate,
+    AIConfigOut,
+    ScoringConfigOut,
+    ScoringConfigUpdate,
+    ScoringTier,
+)
+from backend.engines.scoring_engine import DEFAULT_THRESHOLDS, DEFAULT_LAST_TIER
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -69,3 +76,73 @@ async def update_system_config(
         ai_model=config_map.get("ai_model", "deepseek"),
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
     ))
+
+
+def _default_thresholds_to_schema() -> list[ScoringTier]:
+    """将引擎默认阈值转为 Pydantic schema 列表"""
+    tiers = []
+    for t in DEFAULT_THRESHOLDS:
+        tiers.append(ScoringTier(
+            min_score=t["min_score"],
+            label=t["label"],
+            signal_direction=t["signal_direction"],
+            signal_strength=t["signal_strength"],
+            operation_advice=t["operation_advice"],
+            equity_ratio=t["equity_ratio"],
+        ))
+    return tiers
+
+
+@router.get("/scoring-config", response_model=ApiResponse[ScoringConfigOut])
+async def get_scoring_config(db: AsyncSession = Depends(get_db)):
+    """获取评分阈值配置"""
+    config_map = await _get_config_map(db)
+    raw = config_map.get("scoring_thresholds", "")
+
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                thresholds = [ScoringTier(**t) for t in data]
+                return ApiResponse(data=ScoringConfigOut(thresholds=thresholds))
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning("评分阈值配置解析失败，使用默认值: %s", e)
+
+    # 使用默认值
+    return ApiResponse(data=ScoringConfigOut(thresholds=_default_thresholds_to_schema()))
+
+
+@router.put("/scoring-config", response_model=ApiResponse[ScoringConfigOut])
+async def update_scoring_config(
+    body: ScoringConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """更新评分阈值配置"""
+    # 验证：至少需要 3 个档位，且按 min_score 降序
+    tiers = body.thresholds
+    if len(tiers) < 3:
+        raise HTTPException(status_code=400, detail="至少需要 3 个档位")
+
+    # 检查降序
+    for i in range(len(tiers) - 1):
+        if tiers[i].min_score <= tiers[i + 1].min_score:
+            raise HTTPException(
+                status_code=400,
+                detail="档位必须按 min_score 降序排列",
+            )
+
+    # 序列化并保存
+    raw = json.dumps([t.model_dump() for t in tiers], ensure_ascii=False)
+
+    result = await db.execute(
+        select(SystemConfig).where(SystemConfig.config_key == "scoring_thresholds")
+    )
+    config = result.scalars().first()
+    if config:
+        config.config_value = raw
+    else:
+        db.add(SystemConfig(config_key="scoring_thresholds", config_value=raw))
+
+    await db.commit()
+
+    return ApiResponse(data=ScoringConfigOut(thresholds=tiers))

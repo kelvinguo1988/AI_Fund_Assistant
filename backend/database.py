@@ -3,6 +3,7 @@
 import json
 from datetime import datetime
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -63,6 +64,28 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # ── 迁移合集 ──
+    async with engine.begin() as conn:
+        # equity_ratio 列
+        try:
+            await conn.execute(text("ALTER TABLE analysis_results ADD COLUMN equity_ratio FLOAT NOT NULL DEFAULT 0.5"))
+        except Exception:
+            pass
+        # factor 表新列
+        for col_sql in [
+            "ALTER TABLE factors ADD COLUMN data_fields TEXT",
+            "ALTER TABLE factors ADD COLUMN formula TEXT",
+            "ALTER TABLE factors ADD COLUMN window INTEGER",
+            "ALTER TABLE factors ADD COLUMN window_unit VARCHAR(10)",
+            "ALTER TABLE factors ADD COLUMN signal_rules TEXT",
+            "ALTER TABLE factors ADD COLUMN normalization VARCHAR(30) NOT NULL DEFAULT 'none'",
+            "ALTER TABLE factors ADD COLUMN normalization_config TEXT",
+        ]:
+            try:
+                await conn.execute(text(col_sql))
+            except Exception:
+                pass
+
     # 插入初始数据
     async with async_session_factory() as session:
         # ── 检查是否已有因子数据 ──
@@ -75,9 +98,21 @@ async def init_db() -> None:
                     name="PE百分位",
                     code="pe_percentile",
                     data_field="pe",
-                    weight=1.5,
-                    direction="positive",
-                    params=json.dumps({"period": 5}),
+                    data_fields=json.dumps(["pe_ttm"]),
+                    weight=1.2,
+                    direction="negative",
+                    params=json.dumps({"window": 1250}),
+                    formula="percentile_rank(pe_ttm, 1250)",
+                    window=1250,
+                    window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "<= 0.2", "score": 1.0},
+                        {"condition": "<= 0.4", "score": 0.5},
+                        {"condition": "<= 0.6", "score": 0.0},
+                        {"condition": "<= 0.8", "score": -0.5},
+                        {"condition": "> 0.8", "score": -1.0},
+                    ]),
+                    normalization="none",
                     status="active",
                     sort_order=1,
                     created_at=now,
@@ -87,11 +122,84 @@ async def init_db() -> None:
                     name="股债性价比FED",
                     code="fed_model",
                     data_field="fed",
-                    weight=1.5,
+                    data_fields=json.dumps(["index_pe", "bond_yield_10y"]),
+                    weight=1.2,
                     direction="positive",
-                    params=json.dumps({}),
+                    params=json.dumps({"window": 756}),
+                    formula="(1 / index_pe) - bond_yield_10y",
+                    window=756,
+                    window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> percentile(756, 0.8)", "score": 1.0},
+                        {"condition": "> percentile(756, 0.6)", "score": 0.5},
+                        {"condition": "< percentile(756, 0.4)", "score": -0.5},
+                        {"condition": "< percentile(756, 0.2)", "score": -1.0},
+                    ]),
+                    normalization="rolling_percentile",
                     status="active",
                     sort_order=2,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                Factor(
+                    name="动量因子",
+                    code="momentum_6m",
+                    data_field="nav",
+                    data_fields=json.dumps(["nav"]),
+                    weight=1.0,
+                    direction="positive",
+                    params=json.dumps({"window": 126}),
+                    formula="(nav / shift(nav, 126) - 1) / (std(returns, 126) * sqrt(126))",
+                    window=126,
+                    window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> 1.0", "score": 1.0},
+                        {"condition": "> 0.5", "score": 0.5},
+                        {"condition": ">= -0.5 and <= 0.5", "score": 0.0},
+                        {"condition": ">= -1.0 and < -0.5", "score": -0.5},
+                        {"condition": "< -1.0", "score": -1.0},
+                    ]),
+                    normalization="none",
+                    status="active",
+                    sort_order=3,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                Factor(
+                    name="波动率倒数",
+                    code="inv_volatility",
+                    data_field="nav",
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.8,
+                    direction="positive",
+                    params=json.dumps({"window": 60}),
+                    formula="1 / std(returns, 60)",
+                    window=60,
+                    window_unit="day",
+                    signal_rules=json.dumps([]),
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0, -1.0]}),
+                    status="active",
+                    sort_order=4,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                Factor(
+                    name="ROE稳定性",
+                    code="roe_stability",
+                    data_field="roe",
+                    data_fields=json.dumps(["roe"]),
+                    weight=0.8,
+                    direction="positive",
+                    params=json.dumps({"window": 4}),
+                    formula="mean(roe, 4) / std(roe, 4)",
+                    window=4,
+                    window_unit="quarter",
+                    signal_rules=json.dumps([]),
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0, -1.0]}),
+                    status="active",
+                    sort_order=5,
                     created_at=now,
                     updated_at=now,
                 ),
@@ -99,35 +207,45 @@ async def init_db() -> None:
                     name="MACD信号",
                     code="macd_signal",
                     data_field="macd",
-                    weight=1.0,
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.6,
                     direction="positive",
                     params=json.dumps({"fast": 12, "slow": 26, "signal": 9}),
+                    formula="ema(12) - ema(26)",
+                    window=26,
+                    window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "dif > dea and macd_hist_delta > 0", "score": 1.0},
+                        {"condition": "dif > dea and macd_hist_delta <= 0", "score": 0.5},
+                        {"condition": "dif < dea and macd_hist_delta < 0", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
+                    normalization="none",
                     status="active",
-                    sort_order=3,
+                    sort_order=6,
                     created_at=now,
                     updated_at=now,
                 ),
                 Factor(
-                    name="均线趋势",
-                    code="ma_trend",
-                    data_field="ma",
-                    weight=1.0,
+                    name="量价配合",
+                    code="volume_price",
+                    data_field="volume_price",
+                    data_fields=json.dumps(["close", "volume"]),
+                    weight=0.4,
                     direction="positive",
-                    params=json.dumps({"short_period": 20, "long_period": 60}),
+                    params=json.dumps({"window": 5}),
+                    formula="((close > shift(close, 5)) * 2 - 1) * (volume / mean(volume, 5) - 1)",
+                    window=5,
+                    window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> 0.5", "score": 1.0},
+                        {"condition": "> 0", "score": 0.5},
+                        {"condition": ">= -0.5 and <= 0", "score": -0.5},
+                        {"condition": "< -0.5", "score": -1.0},
+                    ]),
+                    normalization="none",
                     status="active",
-                    sort_order=4,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                Factor(
-                    name="成交量变化",
-                    code="volume_change",
-                    data_field="volume",
-                    weight=1.0,
-                    direction="positive",
-                    params=json.dumps({"period": 20}),
-                    status="active",
-                    sort_order=5,
+                    sort_order=7,
                     created_at=now,
                     updated_at=now,
                 ),

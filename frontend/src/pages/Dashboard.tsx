@@ -145,7 +145,8 @@ const Dashboard: React.FC = () => {
                 <TableRow>
                   <TableCell>基金代码</TableCell>
                   <TableCell>基金名称</TableCell>
-                  <TableCell>评分</TableCell>
+                  <TableCell>评分(-6~+6)</TableCell>
+                  <TableCell>权益仓位</TableCell>
                   <TableCell>信号</TableCell>
                   <TableCell>强度</TableCell>
                 </TableRow>
@@ -162,6 +163,7 @@ const Dashboard: React.FC = () => {
                     <TableCell>{r.fund_code}</TableCell>
                     <TableCell>{r.fund_name}</TableCell>
                     <TableCell>{r.weighted_score}</TableCell>
+                    <TableCell>{Math.round((r as any).equity_ratio * 100)}%</TableCell>
                     <TableCell>
                       <SignalIndicator direction={r.signal_direction} size={12} showLabel={false} />
                     </TableCell>
@@ -176,7 +178,7 @@ const Dashboard: React.FC = () => {
                 ))}
                 {results.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} align="center">暂无分析数据</TableCell>
+                    <TableCell colSpan={6} align="center">暂无分析数据</TableCell>
                   </TableRow>
                 )}
               </TableBody>

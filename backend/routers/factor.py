@@ -1,5 +1,7 @@
 """因子 CRUD 路由"""
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,24 +13,33 @@ from backend.services.factor_service import FactorService
 router = APIRouter()
 
 
+def _enrich_factor_out(f: "Factor", total_weight: float) -> FactorOut:
+    """ORM → Schema 转换，处理 JSON 字段和 weight_percentage"""
+    out = FactorOut.model_validate(f)
+    # 解析 JSON 字符串字段
+    json_fields = {
+        "params": f.params,
+        "data_fields": f.data_fields,
+        "signal_rules": f.signal_rules,
+        "normalization_config": f.normalization_config,
+    }
+    for field, raw in json_fields.items():
+        if raw and isinstance(raw, str):
+            try:
+                setattr(out, field, json.loads(raw))
+            except (json.JSONDecodeError, TypeError):
+                pass
+    out.weight_percentage = round(f.weight / total_weight * 100, 2) if total_weight > 0 else 0.0
+    return out
+
+
 @router.get("", response_model=ApiResponse[list[FactorOut]])
 async def list_factors(db: AsyncSession = Depends(get_db)):
     """获取因子列表"""
     svc = FactorService(db)
     factors = await svc.list_factors()
     total_weight = await svc.get_total_weight(status="active")
-
-    results = []
-    for f in factors:
-        out = FactorOut.model_validate(f)
-        # 计算 weight_percentage
-        if f.params and isinstance(f.params, str):
-            out.params = __import__("json").loads(f.params)
-        else:
-            out.params = f.params
-        out.weight_percentage = round(f.weight / total_weight * 100, 2) if total_weight > 0 else 0.0
-        results.append(out)
-
+    results = [_enrich_factor_out(f, total_weight) for f in factors]
     return ApiResponse(data=results)
 
 
@@ -41,8 +52,8 @@ async def create_factor(
     svc = FactorService(db)
     try:
         factor = await svc.create_factor(body)
-        out = FactorOut.model_validate(factor)
-        out.weight_percentage = 0.0  # 新增后需重新计算
+        total_weight = await svc.get_total_weight(status="active")
+        out = _enrich_factor_out(factor, total_weight)
         return ApiResponse(data=out)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -61,11 +72,7 @@ async def update_factor(
         raise HTTPException(status_code=404, detail="因子不存在")
 
     total_weight = await svc.get_total_weight(status="active")
-    out = FactorOut.model_validate(factor)
-    if factor.params and isinstance(factor.params, str):
-        import json
-        out.params = json.loads(factor.params)
-    out.weight_percentage = round(factor.weight / total_weight * 100, 2) if total_weight > 0 else 0.0
+    out = _enrich_factor_out(factor, total_weight)
     return ApiResponse(data=out)
 
 

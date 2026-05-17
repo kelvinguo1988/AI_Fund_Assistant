@@ -31,6 +31,7 @@ import {
   History as HistoryIcon,
   Menu as MenuIcon,
   SmartToy as AIIcon,
+  Tune as ScoringIcon,
 } from '@mui/icons-material';
 import { useAppStore } from './store';
 import AIChatWidget from './components/AIChatWidget';
@@ -43,6 +44,7 @@ import PushConfig from './pages/PushConfig';
 import ReportConfig from './pages/ReportConfig';
 import SchedulePlan from './pages/SchedulePlan';
 import HistoryReports from './pages/HistoryReports';
+import ScoringConfig from './pages/ScoringConfig';
 
 /* ── MUI 主题（红涨绿跌） ─────────────────────────────────────────── */
 const theme = createTheme({
@@ -67,6 +69,7 @@ const NAV_ITEMS = [
   { key: 'push', label: '推送配置', icon: <PushIcon />, path: '/push' },
   { key: 'report', label: '报告配置', icon: <ReportIcon />, path: '/report' },
   { key: 'schedule', label: '调度计划', icon: <ScheduleIcon />, path: '/schedule' },
+  { key: 'scoring', label: '评分配置', icon: <ScoringIcon />, path: '/scoring' },
   { key: 'history', label: '历史报告', icon: <HistoryIcon />, path: '/history' },
 ];
 
@@ -176,6 +179,7 @@ const AppLayout: React.FC = () => {
           <Route path="/push" element={<PushConfig />} />
           <Route path="/report" element={<ReportConfig />} />
           <Route path="/schedule" element={<SchedulePlan />} />
+          <Route path="/scoring" element={<ScoringConfig />} />
           <Route path="/history" element={<HistoryReports />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>

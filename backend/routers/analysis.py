@@ -56,6 +56,7 @@ def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResul
         signal_direction=r.signal_direction,
         signal_strength=r.signal_strength or "",
         operation_advice=r.operation_advice or "",
+        equity_ratio=getattr(r, "equity_ratio", 0.5),
         factor_scores=factor_scores,
         created_at=r.created_at,
     )

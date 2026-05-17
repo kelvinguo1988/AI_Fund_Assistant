@@ -1,11 +1,15 @@
-"""因子计算引擎 — 5 因子注册 + 计算调度
+"""因子计算引擎 — 7 因子 + 信号规则 + 截面标准化
 
-因子列表：
-1. PE百分位 (pe_percentile)  — 权重 1.5, 正向
-2. 股债性价比FED (fed_model)  — 权重 1.5, 正向
-3. MACD信号 (macd_signal)    — 权重 1.0, 正向
-4. 均线趋势 (ma_trend)       — 权重 1.0, 正向
-5. 成交量变化 (volume_change) — 权重 1.0, 正向
+因子列表（来自 README_1.md 配置体系）：
+1. PE百分位 (pe_percentile)    — 负向, 权重 1.2
+2. 股债性价比FED (fed_model)    — 正向, 权重 1.2
+3. 动量因子 (momentum_6m)      — 正向, 权重 1.0
+4. 波动率倒数 (inv_volatility)  — 正向, 权重 0.8
+5. ROE稳定性 (roe_stability)    — 正向, 权重 0.8
+6. MACD信号 (macd_signal)      — 正向, 权重 0.6
+7. 量价配合 (volume_price)      — 正向, 权重 0.4
+
+分值范围: -1.0 ~ +1.0（每因子），加权求和 → -6.0 ~ +6.0
 """
 
 import json
@@ -25,386 +29,374 @@ class FactorScoreResult:
     """因子评分结果"""
     factor_code: str
     factor_name: str
-    raw_value: float      # 原始值
-    score: float          # 0-5 标准化评分
+    raw_value: float      # 原始计算值
+    score: float          # -1.0 ~ +1.0 标准化评分
     direction: str        # positive / negative
 
 
-# ── 评分工具函数 ─────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
+# 公式工具函数
+# ═══════════════════════════════════════════════════════════════════════
 
-def percentile_to_score(percentile: float) -> float:
-    """百分位 → 0-5 评分
+def ema(data: np.ndarray, period: int) -> np.ndarray:
+    """指数移动平均"""
+    if len(data) < period:
+        return np.array([float(np.mean(data))] * len(data))
+    multiplier = 2.0 / (period + 1)
+    result = np.zeros_like(data, dtype=float)
+    result[period - 1] = float(np.mean(data[:period]))
+    for i in range(period, len(data)):
+        result[i] = (data[i] - result[i - 1]) * multiplier + result[i - 1]
+    result[:period - 1] = result[period - 1]
+    return result
 
-    百分位越高，评分越高（正向因子用）。
-    百分位 0% → 0 分，100% → 5 分
+
+def rolling_mean(data: np.ndarray, period: int) -> np.ndarray:
+    """滚动均值"""
+    if len(data) < period or period <= 0:
+        return np.array([float(np.mean(data))] * len(data)) if len(data) > 0 else data
+    result = np.zeros_like(data, dtype=float)
+    cumsum = np.cumsum(data)
+    result[period - 1] = cumsum[period - 1] / period
+    for i in range(period, len(data)):
+        result[i] = (cumsum[i] - cumsum[i - period]) / period
+    result[:period - 1] = result[period - 1]
+    return result
+
+
+def rolling_std(data: np.ndarray, period: int) -> np.ndarray:
+    """滚动标准差"""
+    if len(data) < period:
+        return np.array([float(np.std(data))] * len(data)) if len(data) > 0 else data
+    result = np.zeros_like(data, dtype=float)
+    for i in range(period - 1, len(data)):
+        result[i] = float(np.std(data[i - period + 1:i + 1]))
+    result[:period - 1] = result[period - 1]
+    return result
+
+
+def shift(data: np.ndarray, n: int) -> np.ndarray:
+    """向前移位，前 n 个元素用第一个值填充"""
+    result = np.zeros_like(data)
+    if len(data) <= n:
+        result[:] = data[0]
+        return result
+    result[n:] = data[:-n]
+    result[:n] = data[0]
+    return result
+
+
+def percentile_rank(value: float, history: np.ndarray) -> float:
+    """计算 value 在 history 中的百分位排名 (0~1)"""
+    if len(history) == 0:
+        return 0.5
+    return float(np.sum(history <= value)) / len(history)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 信号规则评估
+# ═══════════════════════════════════════════════════════════════════════
+
+def _parse_simple(value: float, cond: str) -> bool:
+    """解析简单比较条件 (<=, >=, <, >, ==, !=)"""
+    cond = cond.strip()
+    if cond.startswith(">="):
+        return value >= float(cond[2:].strip())
+    if cond.startswith("<="):
+        return value <= float(cond[2:].strip())
+    if cond.startswith(">"):
+        return value > float(cond[1:].strip())
+    if cond.startswith("<"):
+        return value < float(cond[1:].strip())
+    if cond.startswith("=="):
+        return value == float(cond[2:].strip())
+    if cond.startswith("!="):
+        return value != float(cond[2:].strip())
+    return False
+
+
+def _evaluate_rule(value: float, condition: str) -> bool:
+    """评估一条规则条件"""
+    cond = condition.strip()
+    if cond == "else":
+        return True
+    if " and " in cond:
+        parts = cond.split(" and ")
+        return all(_parse_simple(value, p) for p in parts)
+    if " or " in cond:
+        parts = cond.split(" or ")
+        return any(_parse_simple(value, p) for p in parts)
+    return _parse_simple(value, cond)
+
+
+def evaluate_signal_rules(raw_value: float, rules: list[dict]) -> float:
+    """按顺序匹配信号规则，返回首发匹配的得分
 
     Args:
-        percentile: 0-100 的百分位值
+        raw_value: 原始计算值
+        rules: 信号规则数组 [{"condition":"<= 0.2","score":1.0}, ...]
 
     Returns:
-        0-5 的评分
+        -1.0 ~ +1.0 得分；无匹配则返回 0.0
     """
-    return max(0.0, min(5.0, percentile / 20.0))
+    if not rules:
+        return raw_value  # 无规则时值本身即为得分（后续可能做截面标准化）
+    for rule in rules:
+        if _evaluate_rule(raw_value, rule.get("condition", "")):
+            return float(rule["score"])
+    return 0.0
 
 
-def inverse_percentile_to_score(percentile: float) -> float:
-    """百分位 → 反向 0-5 评分
+# ═══════════════════════════════════════════════════════════════════════
+# 截面标准化
+# ═══════════════════════════════════════════════════════════════════════
 
-    百分位越低，评分越高（反向因子用）。
-    百分位 0% → 5 分，100% → 0 分
+def apply_cross_sectional_zscore(
+    scores: dict[str, float],
+    thresholds: Optional[list[float]] = None,
+) -> dict[str, float]:
+    """截面 Z-score 标准化 → -1~+1 映射
 
     Args:
-        percentile: 0-100 的百分位值
+        scores: {fund_code: pre_norm_score}
+        thresholds: [upper, middle, lower] 默认 [1.0, 0, -1.0]
 
     Returns:
-        0-5 的评分
+        {fund_code: normalized_score}
     """
-    return max(0.0, min(5.0, (100.0 - percentile) / 20.0))
+    values = np.array(list(scores.values()))
+    if len(values) < 2 or np.std(values) == 0:
+        return {k: 0.0 for k in scores}
+
+    mean = float(np.mean(values))
+    std = float(np.std(values))
+    t = thresholds or [1.0, 0, -1.0]
+
+    return {
+        code: 1.0 if z > t[0] else 0.5 if z > t[1] else -0.5 if z >= t[2] else -1.0
+        for code, z in ((code, (val - mean) / std) for code, val in scores.items())
+    }
 
 
-# ── 5 个因子计算函数 ─────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
+# 7 个因子计算函数
+# ═══════════════════════════════════════════════════════════════════════
 
 def calculate_pe_percentile(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """PE 百分位因子
+    """PE 百分位 — 负向（低估值得分高）
 
-    计算当前 PE 在历史 PE 序列中的百分位，百分位越高表示估值越低（越值得买）。
-
-    Args:
-        fund_data: 基金数据
-        params: 参数，含 period（回看年数，默认 5）
-
-    Returns:
-        FactorScoreResult
+    公式: percentile_rank(pe, 1250)
+    信号: ≤0.2→1.0, ≤0.4→0.5, ≤0.6→0, ≤0.8→-0.5, >0.8→-1.0
     """
-    period_years = (params or {}).get("period", 5)
+    window = (params or {}).get("window", 1250)
 
-    if fund_data.pe is None or not fund_data.close_history:
-        logger.warning(f"PE 百分位因子数据不足 code={fund_data.code}")
-        return FactorScoreResult(
-            factor_code="pe_percentile",
-            factor_name="PE百分位",
-            raw_value=0.0,
-            score=2.5,  # 默认中性评分
-            direction="positive",
-        )
+    if fund_data.pe is None:
+        logger.warning(f"PE百分位数据不足 code={fund_data.code}")
+        return FactorScoreResult("pe_percentile", "PE百分位", 0.0, 0.0, "negative")
 
-    # 如果有 close_history，用价格序列近似百分位
-    # 真正的 PE 百分位需要 PE 历史数据，此处用价格百分位作为近似
-    closes = np.array(fund_data.close_history)
-    current = fund_data.pe  # 使用 PE 作为原始值
+    history = np.array(fund_data.close_history[-window:]) if fund_data.close_history else np.array([fund_data.pe])
+    pct = percentile_rank(fund_data.pe, history)
 
-    # 计算 PE 在历史中的百分位
-    percentile = float(np.sum(closes[-1] >= closes) / len(closes) * 100) if len(closes) > 0 else 50.0
-
-    score = percentile_to_score(percentile)
-
-    return FactorScoreResult(
-        factor_code="pe_percentile",
-        factor_name="PE百分位",
-        raw_value=round(percentile, 2),
-        score=round(score, 2),
-        direction="positive",
-    )
+    rules = [
+        {"condition": "<= 0.2", "score": 1.0},
+        {"condition": "<= 0.4", "score": 0.5},
+        {"condition": "<= 0.6", "score": 0.0},
+        {"condition": "<= 0.8", "score": -0.5},
+        {"condition": "> 0.8", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(pct, rules)
+    return FactorScoreResult("pe_percentile", "PE百分位", round(pct, 4), score, "negative")
 
 
 def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """股债性价比 FED 模型因子
+    """股债性价比 FED — 正向
 
-    FED = 1/PE - 债券收益率
-    FED 越高，股票相对债券越有吸引力。
-
-    Args:
-        fund_data: 基金数据
-        params: 无特殊参数
-
-    Returns:
-        FactorScoreResult
+    公式: (1/PE) - 10Y_bond_yield
+    信号: 基于滚动百分位阈值
     """
-    if fund_data.pe is None or fund_data.pe <= 0 or fund_data.bond_yield is None:
-        logger.warning(f"FED 模型因子数据不足 code={fund_data.code}")
-        return FactorScoreResult(
-            factor_code="fed_model",
-            factor_name="股债性价比FED",
-            raw_value=0.0,
-            score=2.5,
-            direction="positive",
-        )
+    if fund_data.pe is None or fund_data.pe <= 0:
+        logger.warning(f"FED模型数据不足 code={fund_data.code}")
+        return FactorScoreResult("fed_model", "股债性价比FED", 0.0, 0.0, "positive")
 
-    # 计算 FED 值
-    earnings_yield = 1.0 / fund_data.pe * 100  # 盈利收益率（%）
-    fed_value = earnings_yield - fund_data.bond_yield  # FED 差值
+    earnings_yield = 1.0 / fund_data.pe * 100
+    bond = fund_data.bond_yield if fund_data.bond_yield is not None else 2.5
+    fed_value = earnings_yield - bond
 
-    # FED 值映射到 0-5 评分
-    # 典型范围：-3% 到 +6%
-    # FED > 3% → 非常有吸引力 → 4.5+
-    # FED 0-3% → 中等吸引力 → 2.5-4.5
-    # FED < 0% → 无吸引力 → 0-2.5
-    if fed_value >= 3.0:
-        score = 4.5 + min(0.5, (fed_value - 3.0) / 6.0)
-    elif fed_value >= 0:
-        score = 2.5 + (fed_value / 3.0) * 2.0
-    else:
-        score = max(0.0, 2.5 + (fed_value / 3.0) * 2.5)
+    # 用 close_history 分布近似历史 FED 分位数（真实场景需 PE 历史）
+    history = np.array(fund_data.close_history) if fund_data.close_history else np.array([fed_value])
+    pct = percentile_rank(fed_value, history)
 
-    return FactorScoreResult(
-        factor_code="fed_model",
-        factor_name="股债性价比FED",
-        raw_value=round(fed_value, 4),
-        score=round(score, 2),
-        direction="positive",
-    )
+    # 将百分位映射为类似 rolling_percentile 的信号
+    rules = [
+        {"condition": "> 0.8", "score": 1.0},
+        {"condition": "> 0.6", "score": 0.5},
+        {"condition": "< 0.4", "score": -0.5},
+        {"condition": "< 0.2", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(pct, rules)
+    return FactorScoreResult("fed_model", "股债性价比FED", round(fed_value, 4), score, "positive")
+
+
+def calculate_momentum_6m(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """动量因子 — 正向
+
+    公式: (nav/shift(nav,126)-1) / (std(returns,126)*sqrt(126))
+    信号: >1.0→1.0, >0.5→0.5, 中间→0, <-0.5→-0.5, <-1.0→-1.0
+    """
+    window = (params or {}).get("window", 126)
+
+    if not fund_data.close_history or len(fund_data.close_history) < window + 10:
+        logger.warning(f"动量因子数据不足 code={fund_data.code}")
+        return FactorScoreResult("momentum_6m", "动量因子", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history)
+    returns = np.diff(prices) / prices[:-1]
+
+    if len(returns) < window:
+        return FactorScoreResult("momentum_6m", "动量因子", 0.0, 0.0, "positive")
+
+    recent_returns = returns[-window:]
+    total_return = prices[-1] / prices[-window] - 1 if window < len(prices) else 0.0
+    vol = float(np.std(recent_returns))
+    momentum = total_return / (vol * np.sqrt(window)) if vol > 0 else 0.0
+
+    rules = [
+        {"condition": "> 1.0", "score": 1.0},
+        {"condition": "> 0.5", "score": 0.5},
+        {"condition": ">= -0.5 and <= 0.5", "score": 0.0},
+        {"condition": ">= -1.0 and < -0.5", "score": -0.5},
+        {"condition": "< -1.0", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(momentum, rules)
+    return FactorScoreResult("momentum_6m", "动量因子", round(momentum, 4), score, "positive")
+
+
+def calculate_inv_volatility(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """波动率倒数 — 正向（低波动加分）
+
+    公式: 1 / std(returns, 60)
+    返回值作为 pre-norm score，后续做截面 Z-score
+    """
+    window = (params or {}).get("window", 60)
+
+    if not fund_data.close_history or len(fund_data.close_history) < window + 5:
+        logger.warning(f"波动率倒数数据不足 code={fund_data.code}")
+        return FactorScoreResult("inv_volatility", "波动率倒数", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history)
+    returns = np.diff(prices) / prices[:-1]
+    recent = returns[-window:]
+    vol = float(np.std(recent))
+    inv_vol = 1.0 / vol if vol > 0 else 0.0
+
+    # 返回 raw 的 inv_vol 作为评分（标准化阶段会做 Z-score 映射）
+    return FactorScoreResult("inv_volatility", "波动率倒数", round(inv_vol, 4), round(inv_vol, 4), "positive")
+
+
+def calculate_roe_stability(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """ROE 稳定性 — 正向
+
+    公式: mean(roe,4) / std(roe,4)
+    依赖季报 ROE 数据，数据不可用时返回中性。
+    """
+    # FundData 无 ROE 历史，返回中性
+    return FactorScoreResult("roe_stability", "ROE稳定性", 0.0, 0.0, "positive")
 
 
 def calculate_macd_signal(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """MACD 信号因子
+    """MACD 信号 — 正向
 
-    基于 MACD 金叉/死叉判断趋势方向。
-    - MACD > 0 且 Signal > 0 → 强多头 → 4-5
-    - MACD > 0 且 Signal < 0 → 弱多头 → 3-4
-    - MACD < 0 且 Signal > 0 → 弱空头 → 2-3
-    - MACD < 0 且 Signal < 0 → 强空头 → 0-2
-
-    Args:
-        fund_data: 基金数据
-        params: 参数，含 fast(12), slow(26), signal(9)
-
-    Returns:
-        FactorScoreResult
+    公式: DIF=EMA(12)-EMA(26), DEA=EMA(DIF,9), MACD柱=2*(DIF-DEA)
+    信号: 金叉+放量→1.0, 金叉+缩量→0.5, 死叉+放量→-1.0, else→0
     """
     p = params or {}
-    fast_period = p.get("fast", 12)
-    slow_period = p.get("slow", 26)
-    signal_period = p.get("signal", 9)
+    fast = p.get("fast", 12)
+    slow = p.get("slow", 26)
+    signal = p.get("signal", 9)
 
-    if not fund_data.close_history or len(fund_data.close_history) < slow_period + signal_period:
-        logger.warning(f"MACD 信号因子数据不足 code={fund_data.code}")
-        return FactorScoreResult(
-            factor_code="macd_signal",
-            factor_name="MACD信号",
-            raw_value=0.0,
-            score=2.5,
-            direction="positive",
-        )
+    if not fund_data.close_history or len(fund_data.close_history) < slow + signal + 5:
+        logger.warning(f"MACD数据不足 code={fund_data.code}")
+        return FactorScoreResult("macd_signal", "MACD信号", 0.0, 0.0, "positive")
 
     closes = np.array(fund_data.close_history)
-
-    # 计算 EMA
-    ema_fast = _calculate_ema(closes, fast_period)
-    ema_slow = _calculate_ema(closes, slow_period)
-
-    # DIF = 快线 - 慢线
+    ema_fast = ema(closes, fast)
+    ema_slow = ema(closes, slow)
     dif = ema_fast - ema_slow
-
-    # DEA = DIF 的 EMA
-    dea = _calculate_ema(dif, signal_period)
-
-    # MACD 柱 = 2 * (DIF - DEA)
+    dea = ema(dif, signal)
     macd_hist = 2 * (dif - dea)
 
-    # 取最新值
-    current_macd = float(macd_hist[-1]) if len(macd_hist) > 0 else 0.0
-    current_dif = float(dif[-1]) if len(dif) > 0 else 0.0
+    current_dif = float(dif[-1])
+    current_dea = float(dea[-1])
+    current_hist = float(macd_hist[-1])
+    prev_hist = float(macd_hist[-2]) if len(macd_hist) > 1 else current_hist
+    hist_delta = current_hist - prev_hist
 
-    # 评分逻辑
-    if current_dif > 0 and current_macd > 0:
-        score = 4.0 + min(1.0, abs(current_macd) / (np.std(macd_hist) + 1e-8) * 0.3)
-    elif current_dif > 0 and current_macd <= 0:
-        score = 3.0 + min(1.0, abs(current_dif) / (np.std(dif) + 1e-8) * 0.3)
-    elif current_dif <= 0 and current_macd > 0:
-        score = 2.0 + min(1.0, abs(current_macd) / (np.std(macd_hist) + 1e-8) * 0.3)
+    if current_dif > current_dea and hist_delta > 0:
+        score = 1.0
+    elif current_dif > current_dea and hist_delta <= 0:
+        score = 0.5
+    elif current_dif < current_dea and hist_delta < 0:
+        score = -1.0
     else:
-        score = max(0.0, 2.0 - min(2.0, abs(current_macd) / (np.std(macd_hist) + 1e-8) * 0.3))
+        score = 0.0
 
-    return FactorScoreResult(
-        factor_code="macd_signal",
-        factor_name="MACD信号",
-        raw_value=round(current_macd, 4),
-        score=round(max(0.0, min(5.0, score)), 2),
-        direction="positive",
-    )
+    return FactorScoreResult("macd_signal", "MACD信号", round(current_hist, 4), score, "positive")
 
 
-def calculate_ma_trend(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """均线趋势因子
+def calculate_volume_price(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """量价配合 — 正向
 
-    短期均线与长期均线的位置关系及趋势强度。
-    - 价格 > MA_short > MA_long → 多头排列 → 4-5
-    - MA_short > MA_long → 弱多头 → 3-4
-    - MA_short < MA_long → 弱空头 → 2-3
-    - 价格 < MA_short < MA_long → 空头排列 → 0-2
-
-    Args:
-        fund_data: 基金数据
-        params: 参数，含 short_period(20), long_period(60)
-
-    Returns:
-        FactorScoreResult
+    公式: ((close>shift(close,5))*2-1) * (volume/mean(volume,5)-1)
+    信号: >0.5→1.0, >0→0.5, ≤0→-0.5, <-0.5→-1.0
     """
-    p = params or {}
-    short_period = p.get("short_period", 20)
-    long_period = p.get("long_period", 60)
+    window = (params or {}).get("window", 5)
 
-    if not fund_data.close_history or len(fund_data.close_history) < long_period + 5:
-        logger.warning(f"均线趋势因子数据不足 code={fund_data.code}")
-        return FactorScoreResult(
-            factor_code="ma_trend",
-            factor_name="均线趋势",
-            raw_value=0.0,
-            score=2.5,
-            direction="positive",
-        )
+    if (not fund_data.close_history or not fund_data.volume_history
+            or len(fund_data.close_history) < window + 2
+            or len(fund_data.volume_history) < window + 2):
+        logger.warning(f"量价配合数据不足 code={fund_data.code}")
+        return FactorScoreResult("volume_price", "量价配合", 0.0, 0.0, "positive")
 
     closes = np.array(fund_data.close_history)
-
-    ma_short = float(np.mean(closes[-short_period:]))
-    ma_long = float(np.mean(closes[-long_period:]))
-    current_price = float(closes[-1])
-
-    # MA 趋势差值百分比
-    ma_diff_pct = (ma_short - ma_long) / ma_long * 100 if ma_long > 0 else 0.0
-
-    # 评分逻辑
-    if current_price > ma_short > ma_long:
-        # 多头排列
-        score = 4.0 + min(1.0, abs(ma_diff_pct) / 2.0)
-    elif ma_short > ma_long:
-        # 弱多头
-        score = 3.0 + min(1.0, abs(ma_diff_pct) / 2.0)
-    elif current_price < ma_short < ma_long:
-        # 空头排列
-        score = max(0.0, 2.0 - min(2.0, abs(ma_diff_pct) / 2.0))
-    else:
-        # 弱空头
-        score = max(0.0, 2.0 + ma_diff_pct / 2.0)
-
-    return FactorScoreResult(
-        factor_code="ma_trend",
-        factor_name="均线趋势",
-        raw_value=round(ma_diff_pct, 4),
-        score=round(max(0.0, min(5.0, score)), 2),
-        direction="positive",
-    )
-
-
-def calculate_volume_change(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """成交量变化因子
-
-    近期成交量相对历史均量的变化率。
-    - 放量上涨 → 看多信号 → 3.5-5
-    - 温和放量 → 中性偏多 → 2.5-3.5
-    - 缩量 → 中性偏空 → 1.5-2.5
-    - 放量下跌 → 看空信号 → 0-1.5
-
-    Args:
-        fund_data: 基金数据
-        params: 参数，含 period(20)
-
-    Returns:
-        FactorScoreResult
-    """
-    period = (params or {}).get("period", 20)
-
-    if not fund_data.volume_history or len(fund_data.volume_history) < period + 5:
-        logger.warning(f"成交量变化因子数据不足 code={fund_data.code}")
-        return FactorScoreResult(
-            factor_code="volume_change",
-            factor_name="成交量变化",
-            raw_value=0.0,
-            score=2.5,
-            direction="positive",
-        )
-
     volumes = np.array(fund_data.volume_history)
-    closes = np.array(fund_data.close_history)
 
-    # 近 period 天平均成交量
-    avg_volume = float(np.mean(volumes[-period:]))
-    # 最新成交量
-    current_volume = float(volumes[-1])
+    price_up = float(closes[-1] > closes[-window - 1])
+    vol_mean = float(np.mean(volumes[-window:]))
+    vol_change = float(volumes[-1]) / vol_mean - 1 if vol_mean > 0 else 0.0
 
-    # 成交量比率
-    volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
+    raw = (price_up * 2 - 1) * vol_change
 
-    # 价格变化方向
-    price_change = 0.0
-    if len(closes) >= 2:
-        price_change = (float(closes[-1]) - float(closes[-2])) / float(closes[-2]) * 100
-
-    # 评分逻辑：结合量比和价格方向
-    if price_change > 0:
-        # 上涨 + 放量 → 强多
-        if volume_ratio >= 1.5:
-            score = 4.0 + min(1.0, (volume_ratio - 1.5) / 2.0)
-        elif volume_ratio >= 1.0:
-            score = 3.0 + (volume_ratio - 1.0) * 2.0
-        else:
-            # 上涨但缩量 → 偏弱
-            score = 2.5 + (volume_ratio - 0.5)
-    else:
-        # 下跌
-        if volume_ratio >= 1.5:
-            # 放量下跌 → 偏空
-            score = max(0.0, 1.5 - (volume_ratio - 1.5) * 0.5)
-        elif volume_ratio >= 1.0:
-            score = 2.0 - (volume_ratio - 1.0) * 0.5
-        else:
-            # 缩量下跌 → 可能见底
-            score = 2.5
-
-    return FactorScoreResult(
-        factor_code="volume_change",
-        factor_name="成交量变化",
-        raw_value=round(volume_ratio, 4),
-        score=round(max(0.0, min(5.0, score)), 2),
-        direction="positive",
-    )
+    rules = [
+        {"condition": "> 0.5", "score": 1.0},
+        {"condition": "> 0", "score": 0.5},
+        {"condition": ">= -0.5 and <= 0", "score": -0.5},
+        {"condition": "< -0.5", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(raw, rules)
+    return FactorScoreResult("volume_price", "量价配合", round(raw, 4), score, "positive")
 
 
-# ── EMA 计算辅助函数 ─────────────────────────────────────────────────
-
-def _calculate_ema(data: np.ndarray, period: int) -> np.ndarray:
-    """计算指数移动平均线
-
-    Args:
-        data: 输入序列
-        period: EMA 周期
-
-    Returns:
-        EMA 序列（与输入等长）
-    """
-    if len(data) < period:
-        return np.array([float(np.mean(data))] * len(data))
-
-    multiplier = 2.0 / (period + 1)
-    ema = np.zeros_like(data, dtype=float)
-
-    # 初始值用 SMA
-    ema[period - 1] = float(np.mean(data[:period]))
-
-    for i in range(period, len(data)):
-        ema[i] = (data[i] - ema[i - 1]) * multiplier + ema[i - 1]
-
-    # 前 period-1 个值用第一个有效值填充
-    ema[:period - 1] = ema[period - 1]
-
-    return ema
-
-
-# ── 因子注册表 ───────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
+# 因子注册表
+# ═══════════════════════════════════════════════════════════════════════
 
 FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreResult]] = {
     "pe_percentile": calculate_pe_percentile,
     "fed_model": calculate_fed_model,
+    "momentum_6m": calculate_momentum_6m,
+    "inv_volatility": calculate_inv_volatility,
+    "roe_stability": calculate_roe_stability,
     "macd_signal": calculate_macd_signal,
-    "ma_trend": calculate_ma_trend,
-    "volume_change": calculate_volume_change,
+    "volume_price": calculate_volume_price,
 }
 
 
-# ── 因子引擎主类 ─────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
+# 因子引擎主类
+# ═══════════════════════════════════════════════════════════════════════
 
 class FactorEngine:
-    """因子计算引擎 — 注册 + 调度 + 计算"""
+    """因子计算引擎 — 注册 + 调度 + 计算 + 标准化"""
 
     def __init__(self) -> None:
         self._calculators = FACTOR_CALCULATORS.copy()
@@ -418,14 +410,14 @@ class FactorEngine:
         fund_data: FundData,
         factors: list[dict],
     ) -> list[FactorScoreResult]:
-        """计算所有启用的因子评分
+        """计算单只基金的所有因子评分
 
         Args:
             fund_data: 基金数据
-            factors: 因子配置列表，每个元素含 code, name, params, direction 等
+            factors: 因子配置列表
 
         Returns:
-            因子评分结果列表
+            因子评分结果列表（score 范围 -1.0 ~ +1.0）
         """
         results: list[FactorScoreResult] = []
 
@@ -435,45 +427,87 @@ class FactorEngine:
             params_str = factor.get("params", "{}")
             direction = factor.get("direction", "positive")
 
-            # 解析 params
             if isinstance(params_str, str):
                 try:
                     params = json.loads(params_str) if params_str else {}
                 except json.JSONDecodeError:
                     params = {}
             else:
-                params = params_str if params_str else {}
+                params = params_str or {}
 
             calculator = self._calculators.get(code)
             if calculator is None:
                 logger.warning(f"因子 {code} 无注册计算函数，跳过")
                 results.append(FactorScoreResult(
-                    factor_code=code,
-                    factor_name=name,
-                    raw_value=0.0,
-                    score=2.5,
-                    direction=direction,
+                    factor_code=code, factor_name=name,
+                    raw_value=0.0, score=0.0, direction=direction,
                 ))
                 continue
 
             try:
                 result = calculator(fund_data, params)
-                # 如果因子方向是反向，翻转评分
-                if direction == "negative":
-                    result.score = round(5.0 - result.score, 2)
-                    result.direction = "negative"
+                # direction 指导评分方向（仅在正向/反向规则相反时翻转）
+                # 注意: signal_rules 已经编码了方向，通常不再翻转
                 results.append(result)
             except Exception as e:
-                logger.error(f"因子 {code} 计算异常: {e}")
+                logger.error(f"因子 {code} 计算异常: {e}", exc_info=True)
                 results.append(FactorScoreResult(
-                    factor_code=code,
-                    factor_name=name,
-                    raw_value=0.0,
-                    score=2.5,
-                    direction=direction,
+                    factor_code=code, factor_name=name,
+                    raw_value=0.0, score=0.0, direction=direction,
                 ))
 
         return results
+
+    def normalize_cross_sectional(
+        self,
+        all_results: dict[str, list[FactorScoreResult]],
+        factors: list[dict],
+    ) -> dict[str, list[FactorScoreResult]]:
+        """对所有基金的因子结果做截面标准化
+
+        需要 cross_sectional_zscore 的因子，收集所有基金该因子的
+        pre-norm score，做 Z-score 后重新映射为 -1~+1。
+
+        Args:
+            all_results: {fund_code: [FactorScoreResult, ...]}
+            factors: 因子配置列表
+
+        Returns:
+            更新后的 all_results
+        """
+        # 找出需要截面标准化的因子索引和配置
+        normalize_configs = {}
+        for fi, factor in enumerate(factors):
+            norm = factor.get("normalization", "none")
+            if norm == "cross_sectional_zscore":
+                norm_conf = factor.get("normalization_config") or {}
+                thresholds = None
+                if isinstance(norm_conf, dict):
+                    thresholds = norm_conf.get("zscore_thresholds")
+                normalize_configs[fi] = thresholds
+
+        if not normalize_configs:
+            return all_results
+
+        # 对每个需要标准化的因子索引做跨基金 Z-score
+        for fi, thresholds in normalize_configs.items():
+            scores_map = {}
+            for fund_code, results_list in all_results.items():
+                if fi < len(results_list):
+                    scores_map[fund_code] = results_list[fi].score
+
+            if len(scores_map) < 2:
+                continue
+
+            normalized = apply_cross_sectional_zscore(scores_map, thresholds)
+
+            for fund_code, new_score in normalized.items():
+                if fi < len(all_results[fund_code]):
+                    all_results[fund_code][fi].score = new_score
+
+            logger.info(f"截面标准化: 因子索引 {fi}, {len(normalized)} 只基金")
+
+        return all_results
 
 
 # 全局引擎实例

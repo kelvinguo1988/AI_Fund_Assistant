@@ -49,17 +49,32 @@ export interface FactorCreate {
   name: string;
   code: string;
   data_field?: string | null;
+  data_fields?: string[] | null;
   weight: number;
   direction: 'positive' | 'negative';
   params?: Record<string, unknown> | null;
+  formula?: string | null;
+  window?: number | null;
+  window_unit?: 'day' | 'quarter' | null;
+  signal_rules?: Array<{ condition: string; score: number }> | null;
+  normalization?: string | null;
+  normalization_config?: Record<string, unknown> | null;
   sort_order: number;
 }
 
 export interface FactorUpdate {
   name?: string | null;
+  data_field?: string | null;
+  data_fields?: string[] | null;
   weight?: number | null;
   direction?: 'positive' | 'negative' | null;
   params?: Record<string, unknown> | null;
+  formula?: string | null;
+  window?: number | null;
+  window_unit?: 'day' | 'quarter' | null;
+  signal_rules?: Array<{ condition: string; score: number }> | null;
+  normalization?: string | null;
+  normalization_config?: Record<string, unknown> | null;
   status?: 'active' | 'disabled' | null;
   sort_order?: number | null;
 }
@@ -69,9 +84,16 @@ export interface FactorOut {
   name: string;
   code: string;
   data_field: string | null;
+  data_fields: string[] | null;
   weight: number;
   direction: string;
   params: Record<string, unknown> | null;
+  formula: string | null;
+  window: number | null;
+  window_unit: string | null;
+  signal_rules: Array<{ condition: string; score: number }> | null;
+  normalization: string;
+  normalization_config: Record<string, unknown> | null;
   status: string;
   sort_order: number;
   weight_percentage: number;
@@ -206,6 +228,26 @@ export interface AIConfigOut {
   ai_enabled: boolean;
   ai_model: string;
   ai_base_url: string;
+}
+
+/* ── 评分阈值配置 ───────────────────────────────────────────────── */
+export interface ScoringTier {
+  min_score: number;
+  label: string;
+  signal_direction: 'buy' | 'hold' | 'sell';
+  signal_strength: string;
+  operation_advice: string;
+  equity_ratio: number;
+}
+
+export interface ScoringConfigOut {
+  score_range_min: number;
+  score_range_max: number;
+  thresholds: ScoringTier[];
+}
+
+export interface ScoringConfigUpdate {
+  thresholds: ScoringTier[];
 }
 
 /* ── 信号方向类型 ────────────────────────────────────────────────── */

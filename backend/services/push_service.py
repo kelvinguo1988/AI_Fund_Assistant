@@ -81,9 +81,11 @@ class PushService:
                         ]
                         signal = SignalResult(
                             weighted_score=r.weighted_score,
+                            raw_score=0.0,
                             signal_direction=r.signal_direction,
                             signal_strength=r.signal_strength,
                             operation_advice=r.operation_advice,
+                            equity_ratio=getattr(r, "equity_ratio", 0.5),
                         )
 
                         report_md = report_engine.generate_markdown(

@@ -23,14 +23,15 @@ class AnalysisResult(Base):
         Integer, ForeignKey("funds.id", ondelete="CASCADE"), nullable=False, comment="基金 ID"
     )
     analysis_date: Mapped[date] = mapped_column(Date, nullable=False, comment="分析日期")
-    weighted_score: Mapped[float] = mapped_column(Float, nullable=False, comment="加权总分 0-5")
+    weighted_score: Mapped[float] = mapped_column(Float, nullable=False, comment="归一化总分 -6.0 ~ +6.0")
     signal_direction: Mapped[str] = mapped_column(
         String(10), nullable=False, comment="buy / sell / hold"
     )
     signal_strength: Mapped[str] = mapped_column(
-        String(20), nullable=True, comment="light_buy / moderate_buy / heavy_buy 等"
+        String(20), nullable=True, comment="heavy_buy / moderate_buy / hold / moderate_sell / heavy_sell"
     )
     operation_advice: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="操作建议文本")
+    equity_ratio: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, comment="建议权益仓位比例 0.0-1.0")
     factor_scores: Mapped[str] = mapped_column(
         Text, nullable=False, comment='JSON: {"pe_percentile": 4.2, "fed": 3.8, ...}'
     )

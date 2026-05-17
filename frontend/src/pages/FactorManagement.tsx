@@ -26,6 +26,7 @@ import {
   Switch,
   Snackbar,
   Alert,
+  Tooltip,
 } from '@mui/material';
 import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { factorApi } from '../api/factor';
@@ -36,6 +37,18 @@ const DIRECTION_OPTIONS = [
   { value: 'positive', label: '正向（越高越好）' },
   { value: 'negative', label: '反向（越低越好）' },
 ];
+
+const NORMALIZATION_OPTIONS = [
+  { value: 'none', label: '无' },
+  { value: 'cross_sectional_zscore', label: '截面 Z-score' },
+  { value: 'rolling_percentile', label: '滚动百分位' },
+];
+
+const NORM_LABELS: Record<string, string> = {
+  none: '无',
+  cross_sectional_zscore: 'Z-score',
+  rolling_percentile: '百分位',
+};
 
 const FactorManagement: React.FC = () => {
   const [factors, setFactors] = useState<FactorOut[]>([]);
@@ -50,13 +63,16 @@ const FactorManagement: React.FC = () => {
   const [formCode, setFormCode] = useState('');
   const [formWeight, setFormWeight] = useState(1.0);
   const [formDirection, setFormDirection] = useState<'positive' | 'negative'>('positive');
+  const [formFormula, setFormFormula] = useState('');
+  const [formWindow, setFormWindow] = useState<number | null>(null);
+  const [formWindowUnit, setFormWindowUnit] = useState<'day' | 'quarter'>('day');
+  const [formNormalization, setFormNormalization] = useState('none');
 
   const loadFactors = async () => {
     setLoading(true);
     try {
       const res = await factorApi.list();
       if (res.data) {
-        // 计算 weight_percentage
         const totalWeight = res.data.reduce((sum, f) => sum + f.weight, 0);
         const enriched = res.data.map((f) => ({
           ...f,
@@ -75,7 +91,9 @@ const FactorManagement: React.FC = () => {
 
   const handleOpenAdd = () => {
     setEditFactor(null);
-    setFormName(''); setFormCode(''); setFormWeight(1.0); setFormDirection('positive');
+    setFormName(''); setFormCode(''); setFormWeight(1.0);
+    setFormDirection('positive'); setFormFormula(''); setFormWindow(null);
+    setFormWindowUnit('day'); setFormNormalization('none');
     setDialogOpen(true);
   };
 
@@ -83,17 +101,29 @@ const FactorManagement: React.FC = () => {
     setEditFactor(factor);
     setFormName(factor.name); setFormCode(factor.code);
     setFormWeight(factor.weight); setFormDirection(factor.direction as 'positive' | 'negative');
+    setFormFormula(factor.formula || ''); setFormWindow(factor.window);
+    setFormWindowUnit((factor.window_unit as 'day' | 'quarter') || 'day');
+    setFormNormalization(factor.normalization || 'none');
     setDialogOpen(true);
   };
 
   const handleSave = async () => {
     try {
       if (editFactor) {
-        const data: FactorUpdate = { name: formName, weight: formWeight, direction: formDirection };
+        const data: FactorUpdate = {
+          name: formName, weight: formWeight, direction: formDirection,
+          formula: formFormula || null,
+          window: formWindow, window_unit: formWindowUnit,
+          normalization: formNormalization,
+        };
         await factorApi.update(editFactor.id, data);
       } else {
         const data: FactorCreate = {
-          name: formName, code: formCode, weight: formWeight, direction: formDirection, sort_order: 0,
+          name: formName, code: formCode, weight: formWeight,
+          direction: formDirection, formula: formFormula || null,
+          window: formWindow, window_unit: formWindowUnit,
+          normalization: formNormalization,
+          sort_order: 0,
         };
         await factorApi.create(data);
       }
@@ -150,7 +180,10 @@ const FactorManagement: React.FC = () => {
               <TableCell>名称</TableCell>
               <TableCell>代码</TableCell>
               <TableCell>方向</TableCell>
-              <TableCell sx={{ minWidth: 200 }}>权重</TableCell>
+              <TableCell>公式</TableCell>
+              <TableCell>窗口</TableCell>
+              <TableCell>标准化</TableCell>
+              <TableCell sx={{ minWidth: 150 }}>权重</TableCell>
               <TableCell>占比</TableCell>
               <TableCell>状态</TableCell>
               <TableCell>操作</TableCell>
@@ -162,6 +195,15 @@ const FactorManagement: React.FC = () => {
                 <TableCell>{f.name}</TableCell>
                 <TableCell><Chip label={f.code} size="small" /></TableCell>
                 <TableCell>{f.direction === 'positive' ? '正向' : '反向'}</TableCell>
+                <TableCell>
+                  <Tooltip title={f.formula || ''}>
+                    <Typography variant="body2" sx={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {f.formula || '-'}
+                    </Typography>
+                  </Tooltip>
+                </TableCell>
+                <TableCell>{f.window ? `${f.window}${f.window_unit === 'quarter' ? '季' : '日'}` : '-'}</TableCell>
+                <TableCell>{NORM_LABELS[f.normalization] || '无'}</TableCell>
                 <TableCell>
                   <Slider
                     value={f.weight}
@@ -192,6 +234,17 @@ const FactorManagement: React.FC = () => {
           <TextField label="权重" type="number" value={formWeight} onChange={(e) => setFormWeight(parseFloat(e.target.value) || 1)} inputProps={{ min: 0, max: 5, step: 0.1 }} />
           <TextField label="方向" value={formDirection} onChange={(e) => setFormDirection(e.target.value as any)} select>
             {DIRECTION_OPTIONS.map((d) => <MenuItem key={d.value} value={d.value}>{d.label}</MenuItem>)}
+          </TextField>
+          <TextField label="计算公式" value={formFormula} onChange={(e) => setFormFormula(e.target.value)} placeholder="percentile_rank(pe, 1250)" helperText="可选的表达式" />
+          <Box sx={{ display: 'flex', gap: 2 }}>
+            <TextField label="窗口大小" type="number" value={formWindow ?? ''} onChange={(e) => setFormWindow(e.target.value ? parseInt(e.target.value) : null)} sx={{ width: 120 }} />
+            <TextField label="单位" value={formWindowUnit} onChange={(e) => setFormWindowUnit(e.target.value as any)} select sx={{ width: 120 }}>
+              <MenuItem value="day">日</MenuItem>
+              <MenuItem value="quarter">季</MenuItem>
+            </TextField>
+          </Box>
+          <TextField label="标准化方式" value={formNormalization} onChange={(e) => setFormNormalization(e.target.value)} select>
+            {NORMALIZATION_OPTIONS.map((o) => <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>)}
           </TextField>
         </DialogContent>
         <DialogActions>
