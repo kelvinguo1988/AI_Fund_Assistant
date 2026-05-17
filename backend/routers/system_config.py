@@ -95,7 +95,10 @@ def _default_thresholds_to_schema() -> list[ScoringTier]:
 
 @router.get("/scoring-config", response_model=ApiResponse[ScoringConfigOut])
 async def get_scoring_config(db: AsyncSession = Depends(get_db)):
-    """获取评分阈值配置"""
+    """获取评分阈值配置
+
+    自动迁移：若存储的配置不足 5 档（旧版），追加兜底档位（强烈减仓）。
+    """
     config_map = await _get_config_map(db)
     raw = config_map.get("scoring_thresholds", "")
 
@@ -104,6 +107,29 @@ async def get_scoring_config(db: AsyncSession = Depends(get_db)):
             data = json.loads(raw)
             if isinstance(data, list):
                 thresholds = [ScoringTier(**t) for t in data]
+                # 自动迁移：确保末档为 catch-all（min_score 极低）
+                if thresholds[-1].min_score > -50:
+                    catch_all = DEFAULT_THRESHOLDS[-1]
+                    thresholds.append(ScoringTier(
+                        min_score=catch_all["min_score"],
+                        label=catch_all["label"],
+                        signal_direction=catch_all["signal_direction"],
+                        signal_strength=catch_all["signal_strength"],
+                        operation_advice=catch_all["operation_advice"],
+                        equity_ratio=catch_all["equity_ratio"],
+                    ))
+                    # 持久化迁移后的配置
+                    raw = json.dumps([t.model_dump() for t in thresholds], ensure_ascii=False)
+                    result = await db.execute(
+                        select(SystemConfig).where(SystemConfig.config_key == "scoring_thresholds")
+                    )
+                    config = result.scalars().first()
+                    if config:
+                        config.config_value = raw
+                    else:
+                        db.add(SystemConfig(config_key="scoring_thresholds", config_value=raw))
+                    await db.commit()
+                    logger.info("评分配置自动迁移：追加第 5 档（强烈减仓）")
                 return ApiResponse(data=ScoringConfigOut(thresholds=thresholds))
         except (json.JSONDecodeError, Exception) as e:
             logger.warning("评分阈值配置解析失败，使用默认值: %s", e)

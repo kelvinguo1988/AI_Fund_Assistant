@@ -185,17 +185,20 @@ def apply_cross_sectional_zscore(
 def calculate_pe_percentile(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
     """PE 百分位 — 负向（低估值得分高）
 
-    公式: percentile_rank(pe, 1250)
+    用当前价格对比历史价格序列，近似判断估值高低：
+    价格处于历史低位 → 大概率低估 → 高分。
+    公式: percentile_rank(close, close_history)
     信号: ≤0.2→1.0, ≤0.4→0.5, ≤0.6→0, ≤0.8→-0.5, >0.8→-1.0
     """
     window = (params or {}).get("window", 1250)
 
-    if fund_data.pe is None:
+    current_close = fund_data.close or fund_data.pe
+    if current_close is None:
         logger.warning(f"PE百分位数据不足 code={fund_data.code}")
         return FactorScoreResult("pe_percentile", "PE百分位", 0.0, 0.0, "negative")
 
-    history = np.array(fund_data.close_history[-window:]) if fund_data.close_history else np.array([fund_data.pe])
-    pct = percentile_rank(fund_data.pe, history)
+    history = np.array(fund_data.close_history[-window:]) if fund_data.close_history else np.array([current_close])
+    pct = percentile_rank(current_close, history)
 
     rules = [
         {"condition": "<= 0.2", "score": 1.0},
@@ -211,8 +214,13 @@ def calculate_pe_percentile(fund_data: FundData, params: Optional[dict] = None) 
 def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
     """股债性价比 FED — 正向
 
-    公式: (1/PE) - 10Y_bond_yield
-    信号: 基于滚动百分位阈值
+    FED = (1/PE) × 100 - 10Y_bond_yield（%）
+    A 股经验阈值（沪深300）：
+      FED > 5%  → 极具性价比 → 1.0
+      FED > 3%  → 有性价比   → 0.5
+      FED > 1%  → 中性       → 0.0
+      FED > -1% → 偏贵       → -0.5
+      FED ≤ -1% → 很贵       → -1.0
     """
     if fund_data.pe is None or fund_data.pe <= 0:
         logger.warning(f"FED模型数据不足 code={fund_data.code}")
@@ -222,18 +230,14 @@ def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> F
     bond = fund_data.bond_yield if fund_data.bond_yield is not None else 2.5
     fed_value = earnings_yield - bond
 
-    # 用 close_history 分布近似历史 FED 分位数（真实场景需 PE 历史）
-    history = np.array(fund_data.close_history) if fund_data.close_history else np.array([fed_value])
-    pct = percentile_rank(fed_value, history)
-
-    # 将百分位映射为类似 rolling_percentile 的信号
     rules = [
-        {"condition": "> 0.8", "score": 1.0},
-        {"condition": "> 0.6", "score": 0.5},
-        {"condition": "< 0.4", "score": -0.5},
-        {"condition": "< 0.2", "score": -1.0},
+        {"condition": "> 5", "score": 1.0},
+        {"condition": "> 3", "score": 0.5},
+        {"condition": "> 1", "score": 0.0},
+        {"condition": "> -1", "score": -0.5},
+        {"condition": "else", "score": -1.0},
     ]
-    score = evaluate_signal_rules(pct, rules)
+    score = evaluate_signal_rules(fed_value, rules)
     return FactorScoreResult("fed_model", "股债性价比FED", round(fed_value, 4), score, "positive")
 
 
