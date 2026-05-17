@@ -1,179 +1,162 @@
-# 基金量化交易系统 — 最佳实践
+# AI Fund Assistant — 基金量化交易系统
 
-> 交易日定时获取目标基金实时数据，结合双层量化因子分析输出加减仓建议，通过飞书富文本卡片推送
+> 基于 FastAPI + React 的基金量化分析平台。多渠道数据源采集，双层因子评分，自动化信号推送。
 
 ---
 
 ## 系统架构
 
 ```
-fund_quant_system/
-├── config/
-│   └── settings.py          # 全局配置（基金池、因子权重、阈值、飞书配置）
-├── core/
-│   ├── data_fetcher.py       # 数据采集层（基金+市场数据）
-│   ├── factor_engine.py      # 双层量化因子引擎
-│   └── signal_generator.py  # 信号决策编排器
-├── notifier/
-│   └── feishu_notifier.py   # 飞书推送（总结卡片+详情卡片）
-├── fund_monitor_main.py     # 主入口 + 定时调度器
-├── Dockerfile               # 容器化配置
-├── docker-compose.yml       # 一键部署
-├── requirements.txt
-└── .env.example             # 环境变量模板
+AI_Fund_Assistant/
+├── backend/                    # FastAPI 后端
+│   ├── main.py                 # 应用入口 + 路由挂载
+│   ├── server.py               # 独立服务启动入口
+│   ├── config.py               # 配置（.env → Settings）
+│   ├── database.py             # SQLAlchemy 异步引擎
+│   ├── models/                 # ORM 模型（fund, analysis_result, factor...）
+│   ├── schemas/                # Pydantic 输出 Schema
+│   ├── routers/                # API 路由（fund, analysis, factor, schedule, ai...）
+│   ├── services/               # 业务逻辑层
+│   ├── data_sources/           # 数据源适配器
+│   │   ├── base.py             # 抽象基类
+│   │   ├── akshare_adapter.py  # 主数据源（AKShare + 东方财富 OTC 回退）
+│   │   ├── tushare_adapter.py  # 次级数据源（需 Token）
+│   │   ├── baostock_adapter.py # 备用数据源 1
+│   │   ├── tickflow_adapter.py # 备用数据源 2
+│   │   └── data_source_manager.py  # 数据源链编排 + 降级恢复
+│   └── scheduler/              # 定时任务调度器
+├── frontend/                   # React 前端（TypeScript + MUI）
+│   ├── src/pages/              # 页面（仪表盘、基金池、因子、分析、AI 对话...）
+│   ├── src/api/                # API 客户端
+│   └── nginx.conf              # Nginx 配置（API 反向代理 + SPA 回退）
+├── docker-compose.yml          # 一键部署
+├── .env.example                # 环境变量模板
+└── requirements.txt
 ```
 
 ---
 
-## 双层因子体系
+## 核心功能
 
-### 第一层：市场对比因子（权重45%）
-判断当前市场时机是否适合买入
-
-| 因子 | 权重 | 含义 | 评分逻辑 |
-|------|------|------|---------|
-| PE历史百分位 | 30% | 指数估值历史位置 | 百分位越低→评分越高（便宜） |
-| 股债性价比ERP | 30% | 1/PE - 10年国债收益率 | ERP越高→评分越高（股优于债） |
-| 市场动量 | 20% | 指数偏离MA20程度 | 超跌评分高，过热评分低（逆向） |
-| 市场广度 | 20% | 上涨股票占比 | 极度悲观时逆向买入信号 |
-
-### 第二层：基金自身因子（权重55%）
-评估基金当前状态是否适合加仓
-
-| 因子 | 权重 | 含义 | 评分逻辑 |
-|------|------|------|---------|
-| 距高点回撤 | 25% | 当前净值距历史最高点跌幅 | 回撤越大→评分越高（低位买） |
-| 60日动量 | 20% | 近60日净值涨幅 | 温和上涨或轻微超跌最优 |
-| 20日动量 | 15% | 近20日净值涨幅 | 短期急涨惩罚，超跌加分 |
-| 90日夏普 | 20% | 风险调整收益 | 夏普>1.0评分高，<0评分低 |
-| 相对基准强度 | 20% | 相对基准超额收益（alpha） | 超额越高→基金经理能力越强 |
-
----
-
-## 交易信号与建议
-
-| 综合评分 | 信号 | 建议操作 |
-|---------|------|---------|
-| ≥ 4.0分 | 🔥 强烈加仓 | 加仓10% |
-| ≥ 3.5分 | ✅ 建议加仓 | 加仓5% |
-| ≥ 2.5分 | ⏸️ 观望不动 | 不操作 |
-| ≥ 2.0分 | ⚠️ 适当减仓 | 减仓5% |
-| < 2.0分 | 🔴 建议减仓 | 减仓10% |
-
-> 评分设计：逆向价值思路为主（低估+超跌时买入），动量因子辅助趋势判断
-
----
-
-## 飞书推送格式
-
-### 总结卡片（每次分析必发）
-- 所有基金信号一览（信号分布 + 每基金一行）
-- 评分进度条 + 操作建议 + 今日实时涨幅
-
-### 详情卡片（评分 ≥ 3.5 的基金，每基金独立卡片）
-- 市场层4因子详细得分
-- 基金层5因子详细得分
-- 主要买入理由（Top 4）
-- 风险提示
+- **多数据源链**：AKShare → TuShare → BaoStock → TickFlow，自动降级与恢复
+- **双层因子评分**：市场层（PE百分位/ERP/动量/广度）+ 基金层（回撤/夏普/超额收益）
+- **Web 管理界面**：基金池管理、因子配置、分析结果可视化、AI 对话
+- **批量导入**：一键批量添加基金，自动识别类型（ETF/场外）
+- **定时分析**：交易日定时触发，支持手动触发
+- **多渠道推送**：飞书机器人推送分析报告（富文本卡片）
+- **AI 分析**：集成 DeepSeek/ChatGPT，生成自然语言分析建议
 
 ---
 
 ## 快速启动
 
-### 1. 配置
+### Docker 部署（推荐）
 
 ```bash
-# 复制并填写环境变量
+# 1. 配置环境变量
 cp .env.example .env
-vim .env   # 填入 FEISHU_WEBHOOK_URL 和 TUSHARE_TOKEN
+# 编辑 .env：填入 AI API Key、飞书 Webhook、TuShare Token（可选）
 
-# 修改目标基金池
-vim config/settings.py   # 编辑 TARGET_FUNDS 列表
-```
+# 2. 一键启动
+docker compose up -d
 
-### 2. 本地运行
-
-```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 立即执行一次分析（测试）
-python fund_monitor_main.py --now
-
-# 执行收盘分析
-python fund_monitor_main.py --close
-
-# 启动定时调度守护模式
-python fund_monitor_main.py
-```
-
-### 3. Docker部署
-
-```bash
-# 构建镜像
-docker build -t fund-quant .
-
-# 一键启动（后台运行）
-docker compose --env-file .env up -d
+# 3. 访问 Web 界面
+# http://localhost:8000 或 http://localhost
 
 # 查看日志
-docker compose logs -f fund-monitor
+docker compose logs -f backend
+docker compose logs -f frontend
+```
 
-# 停止
-docker compose down
+### 本地开发
+
+```bash
+# 后端
+pip install -r requirements.txt
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+
+# 前端
+cd frontend
+npm install
+npm run dev   # 默认 http://localhost:5173
 ```
 
 ---
 
-## 推送时间点（可在 settings.py 调整）
+## API 概览
 
-| 时间 | 触发类型 |
-|------|---------|
-| 09:35 | 盘中分析（开盘后5分钟） |
-| 11:30 | 盘中分析（午盘前） |
-| 14:00 | 盘中分析（下午开盘） |
-| 15:05 | 盘中分析（临近收盘） |
-| 15:10 | 收盘分析（最终建议） |
+| 路径 | 方法 | 说明 |
+|------|------|------|
+| `/api/funds` | GET/POST | 基金池列表 / 新增 |
+| `/api/funds/import` | POST | 批量导入基金 |
+| `/api/funds/{id}` | PUT/DELETE | 更新 / 删除 |
+| `/api/funds/batch` | PATCH | 批量启用/停用 |
+| `/api/analysis` | GET | 查询分析结果 |
+| `/api/analysis/latest` | GET | 最新分析结果 |
+| `/api/analysis/trigger` | POST | 手动触发分析 |
+| `/api/factors` | GET/POST | 因子管理 |
+| `/api/ai/chat` | POST | AI 对话分析 |
+| `/api/push-channels` | GET/POST | 推送渠道管理 |
+| `/api/schedules` | GET/POST | 调度计划配置 |
+| `/health` | GET | 健康检查 |
 
 ---
 
-## 数据流
+## 数据源链
 
 ```
-交易日触发
+请求数据
     │
     ▼
-获取市场宏观数据
-（PE百分位 + ERP + 动量 + 广度）
-    │
-    ▼ 并行
-获取各基金历史净值 + 实时估算净值
-（AKShare / 东方财富接口，带重试+缓存）
-    │
-    ▼
-双层因子计算
-（市场层评分 × 45% + 基金层评分 × 55%）
-    │
-    ▼
-信号判定 + 建议生成
-（分档建议 + 置信度 + 理由 + 风险提示）
-    │
-    ▼
-飞书卡片推送
-（总结卡片 + 高优先级详情卡片）
+┌──────────────────────────────────────────────┐
+│            DataSourceManager                  │
+│  主 → AKShareAdapter    (可用? 调用 → 成功 ✓) │
+│  次 → TuShareAdapter    (降级? 等待 5min → 重试) │
+│  备1→ BaoStockAdapter   (恢复? 提升为主)       │
+│  备2→ TickFlowAdapter                         │
+└──────────────────────────────────────────────┘
 ```
+
+- **AKShare**（主）：东方财富接口，ETF 数据 + OTC 基金回退
+- **TuShare**（次）：专业金融数据，需 [https://tushare.pro](https://tushare.pro) 注册获取 Token
+- **BaoStock**（备用）：免费数据源，无需 Token
+- **TickFlow**（末级保底）：可选安装
+
+任一数据源连续失败后降级，5 分钟后自动尝试恢复。
+
+---
+
+## 配置说明
+
+| 环境变量 | 必填 | 说明 |
+|---------|------|------|
+| `DEFAULT_AI_API_KEY` | 是 | AI 模型 API Key |
+| `FEISHU_WEBHOOK_URL` | 否 | 飞书推送 Webhook |
+| `TUSHARE_TOKEN` | 否 | TuShare Pro Token（增强数据源） |
+| `FUND_QUANT_CORS_ORIGINS` | 否 | CORS 允许的来源 |
+
+完整配置项见 `.env.example`。
+
+---
+
+## 评分体系
+
+| 综合评分 | 信号 | 建议操作 |
+|---------|------|---------|
+| ≥ 4.0 | 强烈加仓 | 加仓 10% |
+| ≥ 3.5 | 建议加仓 | 加仓 5% |
+| ≥ 2.5 | 观望不动 | 不操作 |
+| ≥ 2.0 | 适当减仓 | 减仓 5% |
+| < 2.0 | 建议减仓 | 减仓 10% |
+
+设计思路：逆向价值为主，低估+超跌时买入；动量因子辅助趋势判断。
 
 ---
 
 ## 关键设计原则
 
-1. **逆向买入为主**：PE低估+回撤大+动量弱 = 高分，符合价值投资逻辑
+1. **逆向买入为主**：PE 低估 + 回撤大 + 动量弱 = 高分
 2. **双重验证**：市场时机好 AND 基金状态好，两层都支持才给强信号
-3. **置信度过滤**：两层评分差异大时标注置信度低，提示谨慎
-4. **降级容错**：任何数据源失败均有默认值兜底，系统不中断
-5. **频率限制**：AKShare请求间隔0.5s，避免被封
-6. **环境变量隔离**：所有敏感配置通过.env注入，代码零硬编码
-
----
-
-*最后生成时间：2026-05-16*
+3. **数据源容错**：多源链自动降级，单一源失败不影响整体流程
+4. **异步非阻塞**：FastAPI + aiosqlite，全异步 I/O
+5. **配置不写死**：所有敏感信息通过 `.env` 注入
