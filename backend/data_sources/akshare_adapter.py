@@ -25,24 +25,36 @@ class AKShareAdapter(BaseDataSource):
     - 10 年期国债收益率
     """
 
-    MAX_RETRIES = 3       # 最大重试次数
+    MAX_RETRIES = 2       # 最大重试次数（含首次）
     BASE_DELAY = 1.0      # 初始退避延迟（秒）
+    _last_call_time: float = 0.0  # 上次 API 调用时间
+    _min_call_interval: float = 1.0  # 最小调用间隔（秒），防止触发限流
 
     async def _call(self, func, *args, **kwargs):
-        """带指数退避重试的异步 API 调用
+        """带限流 + 指数退避重试的异步 API 调用
 
-        AKShare 的 HTTP 连接可能因网络波动、限流等原因断开，
-        重试可大幅提高数据获取成功率。
-
-        使用 asyncio.to_thread 避免阻塞事件循环，配合指数退避重试。
+        AKShare 的 HTTP 连接可能因网络波动、限流等原因断开。
+        限制调用频率避免触发反爬。
         """
         import functools
+        import time
+
+        # 限流：确保两次调用间隔不少于 _min_call_interval
+        now = time.time()
+        since_last = now - self._last_call_time
+        if since_last < self._min_call_interval:
+            await asyncio.sleep(self._min_call_interval - since_last)
+        self._last_call_time = time.time()
+
         last_exc = None
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
                 partial = functools.partial(func, *args, **kwargs)
-                return await asyncio.to_thread(partial)
-            except Exception as e:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(partial),
+                    timeout=15.0,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
                 last_exc = e
                 if attempt < self.MAX_RETRIES:
                     delay = self.BASE_DELAY * (2 ** (attempt - 1))
