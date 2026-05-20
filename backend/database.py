@@ -1,6 +1,7 @@
 """SQLAlchemy 异步引擎 + Session 工厂 + 初始化函数"""
 
 import json
+import logging
 from datetime import datetime
 
 from sqlalchemy import text
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase
 
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 # ── 异步引擎 & Session 工厂 ──────────────────────────────────────────
@@ -89,11 +92,12 @@ async def init_db() -> None:
     # ── 修复已有因子记录的标准化配置 ──
     async with async_session_factory() as session:
         from sqlalchemy import select, update
-        # 已有数据库中的 inv_volatility / roe_stability 可能因 ALTER TABLE
-        # 的默认值 'none' 导致截面标准化不生效，需修正
+        # 对数据库中可能因 ALTER TABLE 默认值 'none' 导致截面标准化不生效的因子做修正
         fix_normalization = {
             "inv_volatility": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
-            "roe_stability": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+            "info_ratio": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+            "max_drawdown": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+            "size_stability": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
         }
         for code, norm_conf in fix_normalization.items():
             result = await session.execute(
@@ -106,7 +110,89 @@ async def init_db() -> None:
                 stale.signal_rules = json.dumps([]) if stale.signal_rules is None else stale.signal_rules
         await session.commit()
 
-    # 插入初始数据
+    # ── 因子表迁移：旧→新 8 因子体系（仅对已有数据库执行，空库跳过）──
+    async with async_session_factory() as session:
+        from sqlalchemy import select
+        result = await session.execute(select(Factor).limit(1))
+        if result.scalars().first() is None:
+            logger.info("空数据库，跳过因子迁移")
+        else:
+            now = datetime.now()
+
+            # 1. 禁用旧因子（roe_stability → info_ratio; volume_price → max_drawdown）
+            for old_code in ("roe_stability", "volume_price"):
+                result = await session.execute(select(Factor).where(Factor.code == old_code, Factor.status == "active"))
+                old_factor = result.scalars().first()
+                if old_factor:
+                    old_factor.status = "disabled"
+                    old_factor.updated_at = now
+                    logger.info(f"已禁用旧因子: {old_code}")
+
+            # 2. 更新 macd_signal 权重 0.6 → 0.5
+            result = await session.execute(select(Factor).where(Factor.code == "macd_signal"))
+            macd = result.scalars().first()
+            if macd and abs(macd.weight - 0.6) < 0.01:
+                macd.weight = 0.5
+                macd.updated_at = now
+                logger.info("已更新 MACD 信号权重: 0.6 → 0.5")
+
+            # 3. 添加新因子（如尚不存在）
+            new_factors_config = [
+                {
+                    "name": "信息比率", "code": "info_ratio", "data_field": "info_ratio",
+                    "data_fields": json.dumps(["nav", "benchmark_nav"]),
+                    "weight": 0.8, "direction": "positive",
+                    "params": json.dumps({"window": 252}),
+                    "formula": "annualize(excess_returns_mean, 252) / (std(excess_returns, 252) * sqrt(252))",
+                    "window": 252, "window_unit": "day", "sort_order": 5,
+                    "signal_rules": json.dumps([]),
+                    "normalization": "cross_sectional_zscore",
+                    "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                },
+                {
+                    "name": "最大回撤", "code": "max_drawdown", "data_field": "max_drawdown",
+                    "data_fields": json.dumps(["nav"]),
+                    "weight": 0.5, "direction": "positive",
+                    "params": json.dumps({"window": 252}),
+                    "formula": "max_drawdown(nav, 252)",
+                    "window": 252, "window_unit": "day", "sort_order": 7,
+                    "signal_rules": json.dumps([]),
+                    "normalization": "cross_sectional_zscore",
+                    "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                },
+                {
+                    "name": "规模稳定性", "code": "size_stability", "data_field": "fund_size",
+                    "data_fields": json.dumps(["fund_size_quarterly"]),
+                    "weight": 0.4, "direction": "positive",
+                    "params": json.dumps({"window": 4}),
+                    "formula": "1 / (std(size, 4) / mean(size, 4)) + size_bonus(size)",
+                    "window": 4, "window_unit": "quarter", "sort_order": 8,
+                    "signal_rules": json.dumps([]),
+                    "normalization": "cross_sectional_zscore",
+                    "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                },
+            ]
+            for cfg in new_factors_config:
+                result = await session.execute(select(Factor).where(Factor.code == cfg["code"]))
+                existing = result.scalars().first()
+                if not existing:
+                    session.add(Factor(
+                        name=cfg["name"], code=cfg["code"],
+                        data_field=cfg["data_field"], data_fields=cfg["data_fields"],
+                        weight=cfg["weight"], direction=cfg["direction"],
+                        params=cfg["params"], formula=cfg["formula"],
+                        window=cfg["window"], window_unit=cfg["window_unit"],
+                        signal_rules=cfg["signal_rules"],
+                        normalization=cfg["normalization"],
+                        normalization_config=cfg.get("normalization_config"),
+                        status="active", sort_order=cfg["sort_order"],
+                        created_at=now, updated_at=now,
+                    ))
+                    logger.info(f"已添加新因子: {cfg['name']} ({cfg['code']})")
+
+            await session.commit()
+
+    # 插入初始数据（空库时）
     async with async_session_factory() as session:
         # ── 检查是否已有因子数据 ──
         from sqlalchemy import select
@@ -205,16 +291,16 @@ async def init_db() -> None:
                     updated_at=now,
                 ),
                 Factor(
-                    name="ROE稳定性",
-                    code="roe_stability",
-                    data_field="roe",
-                    data_fields=json.dumps(["roe"]),
+                    name="信息比率",
+                    code="info_ratio",
+                    data_field="info_ratio",
+                    data_fields=json.dumps(["nav", "benchmark_nav"]),
                     weight=0.8,
                     direction="positive",
-                    params=json.dumps({"window": 4}),
-                    formula="mean(roe, 4) / std(roe, 4)",
-                    window=4,
-                    window_unit="quarter",
+                    params=json.dumps({"window": 252}),
+                    formula="annualize(excess_returns_mean, 252) / (std(excess_returns, 252) * sqrt(252))",
+                    window=252,
+                    window_unit="day",
                     signal_rules=json.dumps([]),
                     normalization="cross_sectional_zscore",
                     normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
@@ -228,7 +314,7 @@ async def init_db() -> None:
                     code="macd_signal",
                     data_field="macd",
                     data_fields=json.dumps(["nav"]),
-                    weight=0.6,
+                    weight=0.5,
                     direction="positive",
                     params=json.dumps({"fast": 12, "slow": 26, "signal": 9}),
                     formula="ema(12) - ema(26)",
@@ -247,25 +333,40 @@ async def init_db() -> None:
                     updated_at=now,
                 ),
                 Factor(
-                    name="量价配合",
-                    code="volume_price",
-                    data_field="volume_price",
-                    data_fields=json.dumps(["close", "volume"]),
-                    weight=0.4,
+                    name="最大回撤",
+                    code="max_drawdown",
+                    data_field="max_drawdown",
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.5,
                     direction="positive",
-                    params=json.dumps({"window": 5}),
-                    formula="((close > shift(close, 5)) * 2 - 1) * (volume / mean(volume, 5) - 1)",
-                    window=5,
+                    params=json.dumps({"window": 252}),
+                    formula="max_drawdown(nav, 252)",
+                    window=252,
                     window_unit="day",
-                    signal_rules=json.dumps([
-                        {"condition": "> 0.5", "score": 1.0},
-                        {"condition": "> 0", "score": 0.5},
-                        {"condition": ">= -0.5 and <= 0", "score": -0.5},
-                        {"condition": "< -0.5", "score": -1.0},
-                    ]),
-                    normalization="none",
+                    signal_rules=json.dumps([]),
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
                     status="active",
                     sort_order=7,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                Factor(
+                    name="规模稳定性",
+                    code="size_stability",
+                    data_field="fund_size",
+                    data_fields=json.dumps(["fund_size_quarterly"]),
+                    weight=0.4,
+                    direction="positive",
+                    params=json.dumps({"window": 4}),
+                    formula="1 / (std(size, 4) / mean(size, 4)) + size_bonus(size)",
+                    window=4,
+                    window_unit="quarter",
+                    signal_rules=json.dumps([]),
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                    status="active",
+                    sort_order=8,
                     created_at=now,
                     updated_at=now,
                 ),

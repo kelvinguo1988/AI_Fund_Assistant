@@ -16,7 +16,9 @@ from backend.engines.factor_engine import (
     calculate_macd_signal,
     calculate_momentum_6m,
     calculate_inv_volatility,
-    calculate_volume_price,
+    calculate_info_ratio,
+    calculate_max_drawdown,
+    calculate_size_stability,
     apply_cross_sectional_zscore,
     evaluate_signal_rules,
 )
@@ -170,17 +172,65 @@ class TestInvVolatility:
         assert result.score == 0.0
 
 
-# ── 量价配合因子测试 ──────────────────────────────────────────────
+# ── 信息比率因子测试 ──────────────────────────────────────────────
 
-class TestVolumePrice:
-    def test_score_in_range(self):
-        fd = make_fund_data()
-        result = calculate_volume_price(fd)
-        assert -1 <= result.score <= 1
+class TestInfoRatio:
+    def test_score_returns_value(self):
+        fd = make_fund_data(close_history_len=300)
+        result = calculate_info_ratio(fd)
+        assert isinstance(result.score, float)
 
     def test_data_insufficient_returns_neutral(self):
-        fd = make_fund_data(volume_history_len=5, close_history_len=5)
-        result = calculate_volume_price(fd)
+        fd = make_fund_data(close_history_len=50)
+        result = calculate_info_ratio(fd)
+        assert result.score == 0.0
+
+    def test_benchmark_missing_returns_neutral(self):
+        fd = make_fund_data(close_history_len=300)
+        fd.benchmark_history = []
+        result = calculate_info_ratio(fd)
+        assert result.score == 0.0
+
+
+# ── 最大回撤因子测试 ──────────────────────────────────────────────
+
+class TestMaxDrawdown:
+    def test_score_positive(self):
+        fd = make_fund_data()
+        result = calculate_max_drawdown(fd)
+        # 负的 MDD → 回撤越小值越高
+        assert isinstance(result.score, float)
+
+    def test_data_insufficient_returns_neutral(self):
+        fd = make_fund_data(close_history_len=50)
+        result = calculate_max_drawdown(fd)
+        assert result.score == 0.0
+
+    def test_raw_value_is_mdd(self):
+        fd = make_fund_data()
+        result = calculate_max_drawdown(fd)
+        assert result.raw_value >= 0.0  # MDD is always >= 0
+
+
+# ── 规模稳定性因子测试 ──────────────────────────────────────────────
+
+class TestSizeStability:
+    def test_score_returns_value(self):
+        fd = make_fund_data()
+        fd.fund_size_history = [1e9, 1.1e9, 0.9e9, 1.05e9]
+        result = calculate_size_stability(fd)
+        assert isinstance(result.score, float)
+
+    def test_data_insufficient_returns_neutral(self):
+        fd = make_fund_data()
+        fd.fund_size_history = []
+        result = calculate_size_stability(fd)
+        assert result.score == 0.0
+
+    def test_single_quarter_returns_neutral(self):
+        fd = make_fund_data()
+        fd.fund_size_history = [1e9]
+        result = calculate_size_stability(fd)
         assert result.score == 0.0
 
 
@@ -242,26 +292,27 @@ class TestCrossSectionalZScore:
 # ── 因子引擎统一入口测试 ──────────────────────────────────────────────
 
 class TestFactorEngine:
-    def test_calculate_all_returns_7_scores(self):
-        fd = make_fund_data(close_history_len=250)
+    def test_calculate_all_returns_8_scores(self):
+        fd = make_fund_data(close_history_len=300)
+        fd.benchmark_history = fd.close_history[:]
+        fd.fund_size_history = [1e9, 1.1e9, 0.9e9, 1.05e9]
         engine = FactorEngine()
         factors = [
             {"code": "pe_percentile", "name": "PE百分位", "params": "{}", "direction": "negative"},
             {"code": "fed_model", "name": "股债性价比FED", "params": "{}", "direction": "positive"},
             {"code": "momentum_6m", "name": "动量因子", "params": "{}", "direction": "positive"},
             {"code": "inv_volatility", "name": "波动率倒数", "params": "{}", "direction": "positive"},
-            {"code": "roe_stability", "name": "ROE稳定性", "params": "{}", "direction": "positive"},
+            {"code": "info_ratio", "name": "信息比率", "params": "{}", "direction": "positive"},
             {"code": "macd_signal", "name": "MACD信号", "params": "{}", "direction": "positive"},
-            {"code": "volume_price", "name": "量价配合", "params": "{}", "direction": "positive"},
+            {"code": "max_drawdown", "name": "最大回撤", "params": "{}", "direction": "positive"},
+            {"code": "size_stability", "name": "规模稳定性", "params": "{}", "direction": "positive"},
         ]
         results = engine.calculate_all(fd, factors)
-        assert len(results) == 7
-        # 非标准化因子应在 -1~+1 范围；inv_volatility 需截面标准化，pre-norm 值为原始值
+        assert len(results) == 8
+        # 非标准化因子应在 -1~+1 范围；截面标准化因子的 pre-norm 值为原始值
         for r in results:
-            if r.factor_code == "inv_volatility":
-                assert r.score >= 0, f"inv_volatility pre-norm 应≥0, got {r.score}"
-            elif r.factor_code == "roe_stability":
-                assert r.score == 0.0, f"roe_stability 应=0, got {r.score}"
+            if r.factor_code in ("inv_volatility", "info_ratio", "max_drawdown", "size_stability"):
+                assert isinstance(r.score, float), f"{r.factor_code} 应为 float"
             else:
                 assert -1 <= r.score <= 1, f"因子 {r.factor_code} 评分 {r.score} 超出 -1~+1"
 

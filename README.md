@@ -1,6 +1,6 @@
 # AI Fund Assistant — 基金量化交易系统
 
-> FastAPI + React 基金量化分析平台。7 因子配置体系、双层评分、Web 管理、自动化信号推送。
+> FastAPI + React 基金量化分析平台。8 因子配置体系、双层评分、Web 管理、自动化信号推送。
 
 ---
 
@@ -18,7 +18,7 @@ AI_Fund_Assistant/
 │   ├── routers/                # API 路由
 │   ├── services/               # 业务逻辑层
 │   ├── engines/                # 因子引擎 + 评分引擎 + 报告引擎
-│   │   ├── factor_engine.py    # 7 因子计算 + 信号规则 + 截面标准化
+│   │   ├── factor_engine.py    # 8 因子计算 + 信号规则 + 截面标准化
 │   │   ├── scoring_engine.py   # 加权评分 + 信号判定
 │   │   └── report_engine.py    # 报告生成（Markdown / HTML）
 │   ├── data_sources/           # 多数据源适配器
@@ -38,7 +38,7 @@ AI_Fund_Assistant/
 
 ## 核心功能
 
-- **7 因子配置体系**：PE 百分位、股债性价比 FED、动量因子、波动率倒数、ROE 稳定性、MACD 信号、量价配合
+- **8 因子配置体系**：PE 百分位、股债性价比 FED、动量因子、波动率倒数、信息比率、MACD 信号、最大回撤、规模稳定性
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
 - **多数据源链**：AKShare → TuShare → BaoStock → TickFlow，自动降级恢复
@@ -89,7 +89,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 ## 因子评分体系
 
-### 7 个内置因子
+### 8 个内置因子
 
 | 因子 | 方向 | 权重 | 数据字段 | 公式 | 标准化 |
 |------|------|------|---------|------|--------|
@@ -97,11 +97,12 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | 股债性价比 FED | 正向 | 1.2 | index_pe, bond_yield_10y | `(1/pe) - bond_yield` | 滚动百分位 |
 | 动量因子 | 正向 | 1.0 | nav | `(nav/shift(nav,126)-1) / (std×√126)` | 无 |
 | 波动率倒数 | 正向 | 0.8 | nav | `1 / std(returns, 60)` | 截面 Z-score |
-| ROE 稳定性 | 正向 | 0.8 | roe | `mean(roe,4) / std(roe,4)` | 截面 Z-score |
-| MACD 信号 | 正向 | 0.6 | nav | `ema(12) - ema(26)` | 无 |
-| 量价配合 | 正向 | 0.4 | close, volume | `(close>shift(c,5))×2-1 × (vol/mean-1)` | 无 |
+| 信息比率 | 正向 | 0.8 | nav, benchmark_nav | `annualize(excess_mean,252) / (std×√252)` | 截面 Z-score |
+| MACD 信号 | 正向 | 0.5 | nav | `ema(12) - ema(26)` | 无 |
+| 最大回撤 | 正向 | 0.5 | nav | `max_drawdown(nav, 252)` | 截面 Z-score |
+| 规模稳定性 | 正向 | 0.4 | fund_size_quarterly | `1 / cv(size) + size_bonus` | 截面 Z-score |
 
-每因子评分范围 -1.0 ~ +1.0（信号规则 IF-THEN 映射），加权求和总分 -6.0 ~ +6.0。
+每因子评分范围 -1.0 ~ +1.0（信号规则 IF-THEN 映射），加权求和总分 -6.4 ~ +6.4。
 
 ### 信号判定（五档对称阈值）
 
@@ -118,7 +119,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 ### 标准化机制
 
 - **滚动百分位**（FED 模型）：使用自身历史分布做动态阈值
-- **截面 Z-score**（波动率倒数、ROE 稳定性）：同一分组内跨基金标准化，按 Z 值映射到 -1~+1
+- **截面 Z-score**（波动率倒数、信息比率、最大回撤、规模稳定性）：同一分组内跨基金标准化，按 Z 值映射到 -1~+1
 
 ---
 

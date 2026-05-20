@@ -1,15 +1,16 @@
-"""因子计算引擎 — 7 因子 + 信号规则 + 截面标准化
+"""因子计算引擎 — 8 因子 + 信号规则 + 截面标准化
 
 因子列表（来自 README_1.md 配置体系）：
-1. PE百分位 (pe_percentile)    — 负向, 权重 1.2
-2. 股债性价比FED (fed_model)    — 正向, 权重 1.2
-3. 动量因子 (momentum_6m)      — 正向, 权重 1.0
-4. 波动率倒数 (inv_volatility)  — 正向, 权重 0.8
-5. ROE稳定性 (roe_stability)    — 正向, 权重 0.8
-6. MACD信号 (macd_signal)      — 正向, 权重 0.6
-7. 量价配合 (volume_price)      — 正向, 权重 0.4
+1. PE百分位 (pe_percentile)      — 负向, 权重 1.2
+2. 股债性价比FED (fed_model)      — 正向, 权重 1.2
+3. 动量因子 (momentum_6m)        — 正向, 权重 1.0
+4. 波动率倒数 (inv_volatility)    — 正向, 权重 0.8
+5. 信息比率 (info_ratio)          — 正向, 权重 0.8
+6. MACD信号 (macd_signal)        — 正向, 权重 0.5
+7. 最大回撤 (max_drawdown)       — 正向, 权重 0.5
+8. 规模稳定性 (size_stability)    — 正向, 权重 0.4
 
-分值范围: -1.0 ~ +1.0（每因子），加权求和 → -6.0 ~ +6.0
+分值范围: -1.0 ~ +1.0（每因子），加权求和 → -6.4 ~ +6.4
 """
 
 import json
@@ -301,14 +302,44 @@ def calculate_inv_volatility(fund_data: FundData, params: Optional[dict] = None)
     return FactorScoreResult("inv_volatility", "波动率倒数", round(inv_vol, 4), round(inv_vol, 4), "positive")
 
 
-def calculate_roe_stability(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """ROE 稳定性 — 正向
+def calculate_info_ratio(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """信息比率 — 正向（超额收益 / 跟踪误差）
 
-    公式: mean(roe,4) / std(roe,4)
-    依赖季报 ROE 数据，数据不可用时返回中性。
+    公式:
+      excess_returns = fund_returns - benchmark_returns
+      annualized_excess = mean(excess_returns) * 252
+      tracking_error = std(excess_returns) * sqrt(252)
+      IR = annualized_excess / tracking_error
+    返回值作为 pre-norm score，后续做截面 Z-score
     """
-    # FundData 无 ROE 历史，返回中性
-    return FactorScoreResult("roe_stability", "ROE稳定性", 0.0, 0.0, "positive")
+    window = (params or {}).get("window", 252)
+
+    if (not fund_data.close_history or not fund_data.benchmark_history
+            or len(fund_data.close_history) < window + 10
+            or len(fund_data.benchmark_history) < window + 10):
+        logger.warning(f"信息比率数据不足 code={fund_data.code}")
+        return FactorScoreResult("info_ratio", "信息比率", 0.0, 0.0, "positive")
+
+    fund_prices = np.array(fund_data.close_history)
+    bench_prices = np.array(fund_data.benchmark_history)
+
+    fund_returns = np.diff(fund_prices) / fund_prices[:-1]
+    bench_returns = np.diff(bench_prices) / bench_prices[:-1]
+
+    # 对齐长度
+    min_len = min(len(fund_returns), len(bench_returns))
+    fund_returns = fund_returns[-min_len:]
+    bench_returns = bench_returns[-min_len:]
+
+    excess = fund_returns - bench_returns
+    recent_excess = excess[-window:]
+
+    annualized_excess = float(np.mean(recent_excess)) * 252
+    tracking_error = float(np.std(recent_excess)) * np.sqrt(252)
+
+    ir = annualized_excess / tracking_error if tracking_error > 0 else 0.0
+
+    return FactorScoreResult("info_ratio", "信息比率", round(ir, 4), round(ir, 4), "positive")
 
 
 def calculate_macd_signal(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
@@ -351,37 +382,66 @@ def calculate_macd_signal(fund_data: FundData, params: Optional[dict] = None) ->
     return FactorScoreResult("macd_signal", "MACD信号", round(current_hist, 4), score, "positive")
 
 
-def calculate_volume_price(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """量价配合 — 正向
+def calculate_max_drawdown(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """最大回撤 — 正向（回撤小得分高）
 
-    公式: ((close>shift(close,5))*2-1) * (volume/mean(volume,5)-1)
-    信号: >0.5→1.0, >0→0.5, ≤0→-0.5, <-0.5→-1.0
+    公式: max_drawdown = max(1 - price / rolling_max_price) over window
+    返回值作为 pre-norm score（取负号：回撤越小值越高），后续做截面 Z-score
     """
-    window = (params or {}).get("window", 5)
+    window = (params or {}).get("window", 252)
 
-    if (not fund_data.close_history or not fund_data.volume_history
-            or len(fund_data.close_history) < window + 2
-            or len(fund_data.volume_history) < window + 2):
-        logger.warning(f"量价配合数据不足 code={fund_data.code}")
-        return FactorScoreResult("volume_price", "量价配合", 0.0, 0.0, "positive")
+    if not fund_data.close_history or len(fund_data.close_history) < window + 5:
+        logger.warning(f"最大回撤数据不足 code={fund_data.code}")
+        return FactorScoreResult("max_drawdown", "最大回撤", 0.0, 0.0, "positive")
 
-    closes = np.array(fund_data.close_history)
-    volumes = np.array(fund_data.volume_history)
+    prices = np.array(fund_data.close_history[-window:])
+    rolling_max = np.maximum.accumulate(prices)
+    drawdowns = 1 - prices / rolling_max
+    mdd = float(np.max(drawdowns))
 
-    price_up = float(closes[-1] > closes[-window - 1])
-    vol_mean = float(np.mean(volumes[-window:]))
-    vol_change = float(volumes[-1]) / vol_mean - 1 if vol_mean > 0 else 0.0
+    # 取负值：回撤越小 → 值越大（正分）
+    pre_norm = -mdd
 
-    raw = (price_up * 2 - 1) * vol_change
+    return FactorScoreResult("max_drawdown", "最大回撤", round(mdd, 4), round(pre_norm, 4), "positive")
 
-    rules = [
-        {"condition": "> 0.5", "score": 1.0},
-        {"condition": "> 0", "score": 0.5},
-        {"condition": ">= -0.5 and <= 0", "score": -0.5},
-        {"condition": "< -0.5", "score": -1.0},
-    ]
-    score = evaluate_signal_rules(raw, rules)
-    return FactorScoreResult("volume_price", "量价配合", round(raw, 4), score, "positive")
+
+def calculate_size_stability(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """规模稳定性 — 正向
+
+    公式:
+      size_cv = std(4季度规模) / mean(4季度规模)
+      stability = 1 / size_cv
+      附加调整：2亿~50亿 +0.2，超过100亿 -0.1
+      final = stability + bonus
+    返回值作为 pre-norm score，后续做截面 Z-score
+    """
+    window = (params or {}).get("window", 4)
+
+    if not fund_data.fund_size_history or len(fund_data.fund_size_history) < window:
+        logger.warning(f"规模稳定性数据不足 code={fund_data.code}")
+        return FactorScoreResult("size_stability", "规模稳定性", 0.0, 0.0, "positive")
+
+    sizes = np.array(fund_data.fund_size_history[-window:], dtype=float)
+    mean_size = float(np.mean(sizes))
+    std_size = float(np.std(sizes))
+
+    if mean_size <= 0 or std_size <= 0:
+        return FactorScoreResult("size_stability", "规模稳定性", 0.0, 0.0, "positive")
+
+    size_cv = std_size / mean_size
+    stability = 1.0 / size_cv
+
+    # 规模调整因子（当前最新规模）
+    latest_size = sizes[-1]
+    bonus = 0.0
+    if 2e8 <= latest_size <= 5e9:
+        bonus = 0.2
+    elif latest_size > 1e10:
+        bonus = -0.1
+
+    final = stability + bonus
+
+    return FactorScoreResult("size_stability", "规模稳定性", round(final, 4), round(final, 4), "positive")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -393,9 +453,10 @@ FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreRe
     "fed_model": calculate_fed_model,
     "momentum_6m": calculate_momentum_6m,
     "inv_volatility": calculate_inv_volatility,
-    "roe_stability": calculate_roe_stability,
+    "info_ratio": calculate_info_ratio,
     "macd_signal": calculate_macd_signal,
-    "volume_price": calculate_volume_price,
+    "max_drawdown": calculate_max_drawdown,
+    "size_stability": calculate_size_stability,
 }
 
 
