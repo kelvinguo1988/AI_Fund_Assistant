@@ -1,12 +1,13 @@
 """加权评分引擎 + 信号生成
 
-评分规则（-6.0 ~ +6.0 五档对称体系）：
+评分规则（-6.4 ~ +6.4 五档对称体系）：
 - 因子分值范围: -1.0 ~ +1.0 / 因子
-- 加权求和: Σ(score × weight)，总权重 ≈ 6.0 → 总分范围 ≈ -6.0 ~ +6.0
+- 加权求和: Σ(score × weight)，总权重 ≈ 6.4 → 总分范围 ≈ -6.4 ~ +6.4
 - 阈值可从 system_config 表动态加载，通过 /api/system/scoring-config 前端可调。
 
 变更记录:
 - 2025-05: 因子分值从 0-5 改为 -1~+1，加权求和替代归一化
+- 2026-05: 8 因子体系总权重 6.4，钳位范围对应调整
 """
 
 import json
@@ -18,8 +19,8 @@ from backend.engines.factor_engine import FactorScoreResult
 
 logger = logging.getLogger(__name__)
 
-# ── 默认五档阈值配置（因子总分理论范围 -6.0 ~ +6.0）────────────────────
-# min_score 降序排列，末档设 -100 作为兜底（低于理论最小值 -6）
+# ── 默认五档阈值配置（因子总分理论范围 -6.4 ~ +6.4）────────────────────
+# min_score 降序排列，末档设 -6.4 作为兜底（等于理论最小值）
 DEFAULT_THRESHOLDS: list[dict] = [
     {
         "min_score": 3.0,
@@ -54,7 +55,7 @@ DEFAULT_THRESHOLDS: list[dict] = [
         "equity_ratio": 0.3,
     },
     {
-        "min_score": -100.0,
+        "min_score": -6.4,
         "label": "强烈减仓",
         "signal_direction": "sell",
         "signal_strength": "heavy_sell",
@@ -129,8 +130,8 @@ class ScoringEngine:
             weighted_sum += score.score * weight
 
         raw_score = weighted_sum
-        # 钳位到理论范围
-        normalized = round(max(-6.0, min(6.0, weighted_sum)), 2)
+        # 钳位到理论范围（8 因子体系总权重 6.4）
+        normalized = round(max(-6.4, min(6.4, weighted_sum)), 2)
 
         # 加载阈值配置并判定信号
         thresholds = self._load_thresholds(thresholds_json)

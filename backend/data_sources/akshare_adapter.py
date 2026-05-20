@@ -93,6 +93,20 @@ class AKShareAdapter(BaseDataSource):
         except Exception as e:
             logger.warning(f"国债收益率获取失败: {e}")
 
+        # 补充基准指数行情（沪深300，用于信息比率计算）
+        if not fund_data.benchmark_history:
+            try:
+                await self._fill_benchmark_data(fund_data, period)
+            except Exception as e:
+                logger.warning(f"基准指数数据获取失败: {e}")
+
+        # 补充基金规模数据（用于规模稳定性计算）
+        if not fund_data.fund_size_history:
+            try:
+                await self._fill_fund_size(code, fund_data)
+            except Exception as e:
+                logger.warning(f"基金规模数据获取失败: {e}")
+
         return fund_data
 
     async def _get_etf_data(self, code: str, period: int) -> FundData:
@@ -199,6 +213,35 @@ class AKShareAdapter(BaseDataSource):
                         fund_data.pb = float(pb_str)
         except Exception as e:
             logger.warning(f"PE/PB 数据获取失败 index={index_code}: {e}")
+
+    async def _fill_benchmark_data(self, fund_data: FundData, period: int) -> None:
+        """填充基准指数（沪深300）历史行情用于信息比率计算"""
+        df = await self._call(ak.stock_zh_index_daily, symbol="sh000300")
+        if df is not None and not df.empty:
+            df = df.tail(period + 10)
+            df = df.sort_values("date")
+            fund_data.benchmark_history = df["close"].astype(float).tolist()
+            logger.info(f"基准指数数据填充完成: {len(fund_data.benchmark_history)} 行")
+
+    async def _fill_fund_size(self, code: str, fund_data: FundData) -> None:
+        """填充基金季度规模数据用于规模稳定性计算"""
+        try:
+            df = await self._call(ak.fund_scale_open_sina, symbol=code)
+            if df is not None and not df.empty:
+                # 寻找规模相关字段
+                size_col = None
+                for col in ["总募集规模", "总资产", "净资产", "最新规模", "基金规模"]:
+                    if col in df.columns:
+                        size_col = col
+                        break
+                if size_col:
+                    sizes = df[size_col].dropna().astype(float).tail(4).tolist()
+                    if sizes:
+                        fund_data.fund_size_history = sizes
+                        logger.info(f"基金规模数据填充完成: {len(sizes)} 期")
+        except Exception as e:
+            logger.debug(f"基金规模获取失败 code={code}: {e}")
+            # fund_scale_open_sina 可能对部分基金不返回数据，静默忽略
 
     async def get_market_indices(self) -> MarketIndices:
         """获取市场主要指数数据"""

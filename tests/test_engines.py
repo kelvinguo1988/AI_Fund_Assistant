@@ -407,5 +407,5 @@ class TestScoringEngine:
 
     def test_clamp_to_range(self):
         scores = self._make_factor_scores([2.0])  # impossible but test clamping
-        result = self.engine.compute(scores, [6.0])
-        assert result.weighted_score <= 6.0
+        result = self.engine.compute(scores, [6.4])
+        assert result.weighted_score <= 6.4

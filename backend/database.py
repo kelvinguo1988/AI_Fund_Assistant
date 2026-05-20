@@ -192,6 +192,35 @@ async def init_db() -> None:
 
             await session.commit()
 
+    # ── 修复评分阈值配置中的重复 heavy_sell 档位（旧版 -100 catch-all）──
+    async with async_session_factory() as session:
+        from sqlalchemy import select
+        result = await session.execute(
+            select(SystemConfig).where(SystemConfig.config_key == "scoring_thresholds")
+        )
+        config = result.scalars().first()
+        if config:
+            try:
+                data = json.loads(config.config_value)
+                if isinstance(data, list) and len(data) > 5:
+                    # 去重：只保留前 5 档（或唯一次序），末档 min_score 改为 -6.4
+                    seen_strengths = set()
+                    deduped = []
+                    for t in data:
+                        sig = t.get("signal_strength")
+                        if sig not in seen_strengths:
+                            seen_strengths.add(sig)
+                            deduped.append(t)
+                    # 确保末档 min_score = -6.4
+                    if deduped:
+                        deduped[-1]["min_score"] = -6.4
+                    config.config_value = json.dumps(deduped, ensure_ascii=False)
+                    config.updated_at = datetime.now()
+                    await session.commit()
+                    logger.info(f"已修复评分阈值：去重 {len(data)}→{len(deduped)} 档，末档 min_score=-6.4")
+            except Exception as e:
+                logger.warning(f"评分阈值修复失败: {e}")
+
     # 插入初始数据（空库时）
     async with async_session_factory() as session:
         # ── 检查是否已有因子数据 ──
@@ -455,6 +484,18 @@ async def init_db() -> None:
                     config_key="sell_threshold",
                     config_value="2.0",
                     description="卖出信号阈值（加权评分≤此值判定为卖出）",
+                    updated_at=now,
+                ),
+                SystemConfig(
+                    config_key="scoring_thresholds",
+                    config_value=json.dumps([
+                        {"min_score": 3.0, "label": "强烈加仓", "signal_direction": "buy", "signal_strength": "heavy_buy", "operation_advice": "综合评分 {score}，强烈建议加仓，权益仓位可升至 {equity_pct}%", "equity_ratio": 0.9},
+                        {"min_score": 1.5, "label": "适度加仓", "signal_direction": "buy", "signal_strength": "moderate_buy", "operation_advice": "综合评分 {score}，建议适度加仓，权益仓位可升至 {equity_pct}%", "equity_ratio": 0.7},
+                        {"min_score": -1.5, "label": "中性/观望", "signal_direction": "hold", "signal_strength": "hold", "operation_advice": "综合评分 {score}，建议持有观望，维持基准仓位 {equity_pct}%", "equity_ratio": 0.5},
+                        {"min_score": -3.0, "label": "适度减仓", "signal_direction": "sell", "signal_strength": "moderate_sell", "operation_advice": "综合评分 {score}，建议适度减仓，权益仓位降至 {equity_pct}%", "equity_ratio": 0.3},
+                        {"min_score": -6.4, "label": "强烈减仓", "signal_direction": "sell", "signal_strength": "heavy_sell", "operation_advice": "综合评分 {score}，强烈建议减仓或清仓，权益仓位降至 {equity_pct}%", "equity_ratio": 0.1},
+                    ], ensure_ascii=False),
+                    description="评分阈值配置（五档对称）",
                     updated_at=now,
                 ),
             ]
