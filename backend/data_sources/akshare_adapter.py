@@ -44,12 +44,13 @@ class AKShareAdapter(BaseDataSource):
     _min_call_interval: float = 3.0  # 最小调用间隔（秒），防止触发限流
     _ua_pool = _USER_AGENTS
 
-    # 类级缓存：fund_name_em 获取全部基金列表非常重（~10K+ 条），
-    # 高频分析时（~50只基金）不应重复下载。缓存 TTL 1 小时。
-    _fund_name_cache: Optional[pd.DataFrame] = None
-    _fund_rank_cache: Optional[pd.DataFrame] = None
+    # 类级缓存 + 文件持久化：通过 fund_open_fund_rank_em 批量获取基金名称映射，
+    # 避免每次查询都走网络请求。内存 dict 缓存 + JSON 文件持久化。
+    _fund_name_map: Optional[dict[str, str]] = None  # {code: name}
+    _fund_rank_df: Optional[pd.DataFrame] = None  # 原始 DataFrame，用于增量匹配
     _cache_timestamp: float = 0.0
     _CACHE_TTL: float = 3600.0
+    _CACHE_FILE: str = "fund_name_cache.json"
 
     async def _call(self, func, *args, **kwargs):
         """带限流 + User-Agent 轮换 + 指数退避重试的异步 API 调用
@@ -218,47 +219,68 @@ class AKShareAdapter(BaseDataSource):
 
         return fund_data
 
-    async def _get_cached_fund_name(self, code: str) -> Optional[str]:
-        """从缓存获取基金名称，避免重复下载全量基金列表
+    @classmethod
+    def _load_name_cache_from_file(cls) -> Optional[dict[str, str]]:
+        """从 JSON 文件加载持久化的基金名称映射"""
+        import json, os
+        if os.path.exists(cls._CACHE_FILE):
+            try:
+                with open(cls._CACHE_FILE, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.debug(f"基金名称缓存文件读取失败: {e}")
+        return None
 
-        策略 1: fund_name_em（主接口，全量基金列表）
-        策略 2: fund_open_fund_rank_em（备接口，仅场外基金）
+    @classmethod
+    def _save_name_cache_to_file(cls, name_map: dict[str, str]) -> None:
+        """将基金名称映射持久化到 JSON 文件"""
+        import json
+        try:
+            with open(cls._CACHE_FILE, "w") as f:
+                json.dump(name_map, f, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"基金名称缓存文件写入失败: {e}")
+
+    async def _get_cached_fund_name(self, code: str) -> Optional[str]:
+        """从缓存（内存 → 文件 → 网络）获取基金名称
+
+        优先使用 fund_open_fund_rank_em 批量拉取全量基金名称，
+        缓存在内存 dict 和 JSON 文件中，后续查询不产生网络调用。
+        完全避开 fund_name_em（东财反爬高危接口）。
         """
         import time
 
-        # 策略 1: fund_name_em
-        try:
-            now = time.time()
-            if (AKShareAdapter._fund_name_cache is not None
-                    and now - AKShareAdapter._cache_timestamp < AKShareAdapter._CACHE_TTL):
-                info_df = AKShareAdapter._fund_name_cache
-            else:
-                info_df = await self._call(ak.fund_name_em)
-                AKShareAdapter._fund_name_cache = info_df
+        # 步骤 1: 内存缓存（最快路径）
+        now = time.time()
+        if AKShareAdapter._fund_name_map is not None:
+            name = AKShareAdapter._fund_name_map.get(code)
+            if name is not None:
+                return name
+            # 内存中有但找不到该 code → 尝试刷新（可能新增基金）
+            if now - AKShareAdapter._cache_timestamp < AKShareAdapter._CACHE_TTL:
+                return None  # 缓存未过期，确实没有
+
+        # 步骤 2: 文件缓存（进程间持久化）
+        if AKShareAdapter._fund_name_map is None:
+            file_cache = self._load_name_cache_from_file()
+            if file_cache is not None:
+                AKShareAdapter._fund_name_map = file_cache
                 AKShareAdapter._cache_timestamp = now
+                name = file_cache.get(code)
+                if name is not None:
+                    return name
 
-            if info_df is not None and not info_df.empty:
-                match = info_df[info_df["基金代码"] == code]
-                if not match.empty:
-                    return str(match.iloc[0]["基金简称"])
-        except Exception as e:
-            logger.debug(f"场外基金名称获取失败 code={code} (name_em): {e}")
-
-        # 策略 2: fund_open_fund_rank_em（aktest.py 验证有效，也带缓存）
+        # 步骤 3: 网络请求（穿透缓存）
         try:
-            now = time.time()
-            if (AKShareAdapter._fund_rank_cache is not None
-                    and now - AKShareAdapter._cache_timestamp < AKShareAdapter._CACHE_TTL):
-                rank_df = AKShareAdapter._fund_rank_cache
-            else:
-                rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
-                AKShareAdapter._fund_rank_cache = rank_df
-                AKShareAdapter._cache_timestamp = now
-
+            rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
             if rank_df is not None and not rank_df.empty:
-                match = rank_df[rank_df["基金代码"] == code]
-                if not match.empty:
-                    return str(match.iloc[0]["基金简称"])
+                name_map = dict(zip(rank_df["基金代码"].astype(str), rank_df["基金简称"]))
+                AKShareAdapter._fund_name_map = name_map
+                AKShareAdapter._fund_rank_df = rank_df
+                AKShareAdapter._cache_timestamp = now
+                # 异步写文件（不阻塞）
+                self._save_name_cache_to_file(name_map)
+                return name_map.get(code)
         except Exception as e:
             logger.debug(f"场外基金名称获取失败 code={code} (rank_em): {e}")
 
