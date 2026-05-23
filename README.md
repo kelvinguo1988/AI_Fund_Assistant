@@ -45,6 +45,7 @@ AI_Fund_Assistant/
 - **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、因子管理、报告配置、调度计划
 - **一键批量导入**：自动识别 ETF/场外类型
 - **定时分析**：交易日自动执行 + 手动触发
+- **流式分析**：手动触发时分块处理基金数据，SSE 逐块推送结果至仪表盘，实时展示进度与中间结果
 - **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析）
 - **AI 分析**：集成 DeepSeek / ChatGPT，生成自然语言建议
 - **东方财富反爬虫补丁**：NID 授权令牌 + User-Agent 轮换 + 请求频率控制
@@ -136,7 +137,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/analysis` | GET | 查询分析结果 |
 | `/api/analysis/latest` | GET | 最新分析结果 |
 | `/api/analysis/summary` | GET | 市场概况汇总（信号TOP5 + 资金流 + 板块排行 + 涨跌分布 + 成交额） |
-| `/api/analysis/trigger` | POST | 手动触发分析 |
+| `/api/analysis/trigger` | POST | 手动触发分析（同步返回全部结果） |
+| `/api/analysis/trigger-stream` | POST | 手动触发分析（SSE 流式推送，逐块返回结果） |
 | `/api/factors` | GET/POST | 因子 CRUD |
 | `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
 | `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
@@ -181,4 +183,5 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 3. **数据容错**：多源链自动降级
 4. **前后端解耦**：因子配置 → 因子引擎 → 评分引擎 → 报告引擎，各层独立
 5. **异步非阻塞**：FastAPI + 异步 SQLAlchemy
-6. **配置不写死**：敏感信息通过 `.env`，阈值通过数据库存储
+6. **API 调用缓存**：高频数据源 API 自动缓存（全量基金列表 1h TTL），避免重复请求触发限流
+7. **配置不写死**：敏感信息通过 `.env`，阈值通过数据库存储

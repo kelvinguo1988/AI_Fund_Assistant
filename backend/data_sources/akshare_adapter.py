@@ -44,6 +44,13 @@ class AKShareAdapter(BaseDataSource):
     _min_call_interval: float = 3.0  # 最小调用间隔（秒），防止触发限流
     _ua_pool = _USER_AGENTS
 
+    # 类级缓存：fund_name_em 获取全部基金列表非常重（~10K+ 条），
+    # 高频分析时（~50只基金）不应重复下载。缓存 TTL 1 小时。
+    _fund_name_cache: Optional[pd.DataFrame] = None
+    _fund_rank_cache: Optional[pd.DataFrame] = None
+    _cache_timestamp: float = 0.0
+    _CACHE_TTL: float = 3600.0
+
     async def _call(self, func, *args, **kwargs):
         """带限流 + User-Agent 轮换 + 指数退避重试的异步 API 调用
 
@@ -203,28 +210,59 @@ class AKShareAdapter(BaseDataSource):
         except Exception as e:
             logger.warning(f"场外基金净值获取失败 code={code}: {e}")
 
-        # 尝试获取基金名称（多策略）
+        # 尝试获取基金名称（多策略，带缓存）
+        name = await self._get_cached_fund_name(code)
+        if name:
+            fund_data.name = name
+            return fund_data
+
+        return fund_data
+
+    async def _get_cached_fund_name(self, code: str) -> Optional[str]:
+        """从缓存获取基金名称，避免重复下载全量基金列表
+
+        策略 1: fund_name_em（主接口，全量基金列表）
+        策略 2: fund_open_fund_rank_em（备接口，仅场外基金）
+        """
+        import time
+
+        # 策略 1: fund_name_em
         try:
-            info_df = await self._call(ak.fund_name_em)
+            now = time.time()
+            if (AKShareAdapter._fund_name_cache is not None
+                    and now - AKShareAdapter._cache_timestamp < AKShareAdapter._CACHE_TTL):
+                info_df = AKShareAdapter._fund_name_cache
+            else:
+                info_df = await self._call(ak.fund_name_em)
+                AKShareAdapter._fund_name_cache = info_df
+                AKShareAdapter._cache_timestamp = now
+
             if info_df is not None and not info_df.empty:
                 match = info_df[info_df["基金代码"] == code]
                 if not match.empty:
-                    fund_data.name = str(match.iloc[0]["基金简称"])
-                    return fund_data
+                    return str(match.iloc[0]["基金简称"])
         except Exception as e:
             logger.debug(f"场外基金名称获取失败 code={code} (name_em): {e}")
 
-        # 备用策略：使用 fund_open_fund_rank_em（aktest.py 验证有效）
+        # 策略 2: fund_open_fund_rank_em（aktest.py 验证有效，也带缓存）
         try:
-            rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
+            now = time.time()
+            if (AKShareAdapter._fund_rank_cache is not None
+                    and now - AKShareAdapter._cache_timestamp < AKShareAdapter._CACHE_TTL):
+                rank_df = AKShareAdapter._fund_rank_cache
+            else:
+                rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
+                AKShareAdapter._fund_rank_cache = rank_df
+                AKShareAdapter._cache_timestamp = now
+
             if rank_df is not None and not rank_df.empty:
                 match = rank_df[rank_df["基金代码"] == code]
                 if not match.empty:
-                    fund_data.name = str(match.iloc[0]["基金简称"])
+                    return str(match.iloc[0]["基金简称"])
         except Exception as e:
             logger.debug(f"场外基金名称获取失败 code={code} (rank_em): {e}")
 
-        return fund_data
+        return None
 
     async def _fill_pe_pb_for_etf(self, code: str, fund_data: FundData) -> None:
         """根据 ETF 代码尝试填充 PE/PB 数据

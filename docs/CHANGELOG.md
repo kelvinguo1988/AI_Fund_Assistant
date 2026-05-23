@@ -1,0 +1,7 @@
+# Changelog
+
+## [Unreleased]
+
+- [新功能] 流式分析：手动触发时分块处理基金，SSE 逐批推送结果至仪表盘，支持进度条与取消
+- [改进] fund_name_em 类级缓存：避免高频分析时重复下载全量基金列表，消除 TimeoutError
+- [文档] README 补充流式分析 API 与缓存设计说明

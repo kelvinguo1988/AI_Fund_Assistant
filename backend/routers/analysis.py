@@ -6,7 +6,8 @@ import logging
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -192,3 +193,38 @@ async def trigger_analysis(
     except Exception as e:
         logger.error(f"触发分析失败: {e}")
         raise HTTPException(status_code=500, detail=f"分析执行失败: {str(e)}")
+
+
+@router.post("/trigger-stream")
+async def trigger_analysis_stream(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """流式触发分析 — 通过 SSE 逐批推送分析结果
+
+    Body: {"fund_ids": [1, 2, 3]} 或空对象表示全部
+    Returns: text/event-stream
+    """
+    from backend.config import settings
+    from backend.services.analysis_service import AnalysisService
+
+    svc = AnalysisService(db, tushare_token=settings.TUSHARE_TOKEN)
+
+    body = await request.json() if request.headers.get("content-type") else None
+    fund_ids = body.get("fund_ids") if isinstance(body, dict) else None
+
+    async def _event_stream():
+        async for event in svc.run_analysis_streaming(fund_ids=fund_ids):
+            yield event
+            if await request.is_disconnected():
+                break
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -62,8 +62,12 @@ const Dashboard: React.FC = () => {
   const [results, setResults] = useState<AnalysisResultOut[]>([]);
   const [summary, setSummary] = useState<MarketSummaryOut | null>(null);
   const [loading, setLoading] = useState(false);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'info' });
   const [selectedFund, setSelectedFund] = useState<AnalysisResultOut | null>(null);
+
+  // 流式分析进度
+  const [streaming, setStreaming] = useState<{ active: boolean; current: number; total: number } | null>(null);
+  const streamControlRef = React.useRef<{ abort: () => void } | null>(null);
 
   // 基金选择弹窗
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -99,6 +103,18 @@ const Dashboard: React.FC = () => {
     loadLatest();
   }, []);
 
+  // 组件卸载时中断流式请求
+  useEffect(() => {
+    return () => streamControlRef.current?.abort();
+  }, []);
+
+  // 当有新结果且未选中任何基金时，自动选中第一个
+  useEffect(() => {
+    if (results.length > 0 && !selectedFund) {
+      setSelectedFund(results[0]);
+    }
+  }, [results, selectedFund]);
+
   // 打开选择弹窗时加载基金列表
   const openSelectDialog = async () => {
     try {
@@ -128,31 +144,46 @@ const Dashboard: React.FC = () => {
     setSelectedFundIds([]);
   };
 
-  const handleTriggerAnalysis = async () => {
+  const handleTriggerAnalysis = () => {
     setDialogOpen(false);
     if (selectedFundIds.length === 0) {
       setSnackbar({ open: true, message: '请至少选择一只基金', severity: 'error' });
       return;
     }
-    setLoading(true);
-    try {
-      const res = await analysisApi.trigger(
-        selectedFundIds.length === availableFunds.length
-          ? undefined
-          : selectedFundIds
-      );
-      if (res.data) {
-        setResults(res.data);
-        setSnackbar({ open: true, message: `分析完成 (${res.data.length} 只)`, severity: 'success' });
+    const ids = selectedFundIds.length === availableFunds.length ? undefined : selectedFundIds;
+
+    setResults([]);
+    setSelectedFund(null);
+    setStreaming({ active: true, current: 0, total: selectedFundIds.length });
+
+    const control = analysisApi.triggerStream(ids, {
+      onProgress: (current, total) => {
+        setStreaming({ active: true, current, total });
+      },
+      onChunk: (chunkResults) => {
+        setResults((prev) => [...prev, ...chunkResults]);
+      },
+      onComplete: async (total, succeeded) => {
+        setStreaming(null);
+        setSnackbar({ open: true, message: `分析完成 (${succeeded}/${total})`, severity: 'success' });
         // 刷新汇总
         const sumRes = await analysisApi.summary().catch(() => null);
         if (sumRes?.data) setSummary(sumRes.data);
-      }
-    } catch (err: any) {
-      setSnackbar({ open: true, message: '触发分析失败', severity: 'error' });
-    } finally {
-      setLoading(false);
-    }
+        setRefreshTime(new Date().toLocaleString('zh-CN'));
+      },
+      onError: (error) => {
+        setStreaming(null);
+        setSnackbar({ open: true, message: `分析失败: ${error}`, severity: 'error' });
+      },
+    });
+    streamControlRef.current = control;
+  };
+
+  const handleCancelStream = () => {
+    streamControlRef.current?.abort();
+    streamControlRef.current = null;
+    setStreaming(null);
+    setSnackbar({ open: true, message: '分析已取消', severity: 'info' });
   };
 
   // 统计信号分布
@@ -177,7 +208,7 @@ const Dashboard: React.FC = () => {
             variant="outlined"
             startIcon={<RefreshIcon />}
             onClick={loadLatest}
-            disabled={loading}
+            disabled={loading || !!streaming?.active}
           >
             刷新
           </Button>
@@ -185,12 +216,50 @@ const Dashboard: React.FC = () => {
             variant="contained"
             startIcon={<PlayArrowIcon />}
             onClick={openSelectDialog}
-            disabled={loading}
+            disabled={loading || !!streaming?.active}
           >
             手动触发分析
           </Button>
         </Box>
       </Box>
+
+      {/* ── 流式分析进度条 ── */}
+      {streaming?.active && (
+        <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Box sx={{ flex: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="body2" color="text.secondary">
+                正在分析基金...
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {streaming.current} / {streaming.total}
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                width: '100%',
+                height: 8,
+                bgcolor: 'action.hover',
+                borderRadius: 4,
+                overflow: 'hidden',
+              }}
+            >
+              <Box
+                sx={{
+                  width: `${Math.round((streaming.current / streaming.total) * 100)}%`,
+                  height: '100%',
+                  bgcolor: 'primary.main',
+                  borderRadius: 4,
+                  transition: 'width 0.3s ease',
+                }}
+              />
+            </Box>
+          </Box>
+          <Button size="small" variant="outlined" color="error" onClick={handleCancelStream}>
+            取消
+          </Button>
+        </Box>
+      )}
 
       {/* ── 信号概览卡片 ── */}
       <Grid container spacing={2} sx={{ mb: 3 }}>

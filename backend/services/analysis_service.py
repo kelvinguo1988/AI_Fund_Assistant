@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import date, datetime
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,9 @@ from backend.models.system_config import SystemConfig
 from backend.schemas.analysis import AnalysisResultOut, FactorScore
 
 logger = logging.getLogger(__name__)
+
+# 流式处理块大小：每批处理 5 只基金后推送一次结果
+_STREAM_CHUNK_SIZE = 5
 
 
 class AnalysisService:
@@ -130,6 +133,125 @@ class AnalysisService:
                 results.append(result_out)
 
         return results
+
+    async def run_analysis_streaming(
+        self,
+        fund_ids: Optional[list[int]] = None,
+    ) -> AsyncGenerator[str, None]:
+        """流式分析 — 分块处理基金，通过 SSE 逐批推送结果
+
+        Yield 格式 (SSE)：
+        - {"type":"progress","current":5,"total":50,"fund_code":"007491"}
+        - {"type":"chunk","results":[...],"progress":"10/50"}
+        - {"type":"complete","total":50,"succeeded":48}
+        """
+        # 1. 获取基金池
+        stmt = select(Fund).where(Fund.status == "active")
+        if fund_ids:
+            stmt = stmt.where(Fund.id.in_(fund_ids))
+        result = await self.db.execute(stmt)
+        funds = result.scalars().all()
+
+        if not funds:
+            yield "data: " + json.dumps({"type": "complete", "total": 0, "succeeded": 0}) + "\n\n"
+            return
+
+        total = len(funds)
+
+        # 2. 获取活跃因子配置
+        from backend.services.factor_service import FactorService
+        factor_svc = FactorService(self.db)
+        active_factors = await factor_svc.get_active_factors_as_dicts()
+
+        if not active_factors:
+            yield "data: " + json.dumps({"type": "complete", "total": total, "succeeded": 0, "error": "没有启用的因子"}) + "\n\n"
+            return
+
+        # 3. 获取评分阈值
+        config_map = await self._get_config_map()
+        buy_threshold = float(config_map.get("buy_threshold", "3.5"))
+        sell_threshold = float(config_map.get("sell_threshold", "2.0"))
+        thresholds_json = config_map.get("scoring_thresholds", "")
+
+        # 4. 获取报告配置
+        report_result = await self.db.execute(
+            select(ReportConfig).where(ReportConfig.enabled == True).order_by(ReportConfig.sort_order)
+        )
+        enabled_report_items = [r.item_key for r in report_result.scalars().all()]
+
+        # ── Phase 1: 逐只获取数据 + 计算因子（仅推进度，不推结果） ──
+        fund_data_map: dict[str, FundData] = {}
+        all_factor_results: dict[str, list[FactorScoreResult]] = {}
+        failed_codes: list[str] = []
+
+        for i, fund in enumerate(funds):
+            try:
+                fund_data = await self.data_source.get_fund_data(fund.code)
+                fund_data_map[fund.code] = fund_data
+
+                factor_scores = factor_engine.calculate_all(fund_data, active_factors)
+                all_factor_results[fund.code] = factor_scores
+            except Exception as e:
+                logger.error(f"获取/计算基金 {fund.code} 失败: {e}")
+                failed_codes.append(fund.code)
+            # 每只基金都推送进度
+            progress_data = {"type": "progress", "current": i + 1, "total": total, "fund_code": fund.code}
+            yield "data: " + json.dumps(progress_data) + "\n\n"
+
+        # 5. 跨基金截面标准化
+        all_factor_results = factor_engine.normalize_cross_sectional(all_factor_results, active_factors)
+
+        # ── Phase 2: 分块评分 + 存储 + 推送结果 ──
+        results: list[AnalysisResultOut] = []
+        weights = [f.get("weight", 1.0) for f in active_factors]
+
+        for chunk_start in range(0, len(funds), _STREAM_CHUNK_SIZE):
+            chunk = funds[chunk_start:chunk_start + _STREAM_CHUNK_SIZE]
+            chunk_results: list[AnalysisResultOut] = []
+
+            for fund in chunk:
+                if fund.code not in all_factor_results:
+                    continue
+
+                factor_scores = all_factor_results[fund.code]
+                signal = scoring_engine.compute(
+                    factor_scores=factor_scores,
+                    factor_weights=weights,
+                    buy_threshold=buy_threshold,
+                    sell_threshold=sell_threshold,
+                    thresholds_json=thresholds_json,
+                )
+
+                report_md = report_engine.generate_markdown(
+                    fund_code=fund.code,
+                    fund_name=fund.name,
+                    analysis_date=date.today().isoformat(),
+                    signal=signal,
+                    factor_scores=factor_scores,
+                    enabled_items=enabled_report_items,
+                )
+
+                result_out = await self._save_result(fund, signal, factor_scores)
+                if result_out:
+                    chunk_results.append(result_out)
+                    results.append(result_out)
+
+            if chunk_results:
+                chunk_data = {
+                    "type": "chunk",
+                    "results": [r.model_dump(mode="json") for r in chunk_results],
+                    "progress": f"{len(results)}/{total}",
+                }
+                yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+
+        # 完成事件
+        complete_data = {
+            "type": "complete",
+            "total": total,
+            "succeeded": len(results),
+            "failed": failed_codes,
+        }
+        yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
     async def _save_result(
         self,
