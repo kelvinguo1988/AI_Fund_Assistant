@@ -57,9 +57,15 @@ class AKShareAdapter(BaseDataSource):
 
         AKShare 的 HTTP 连接可能因网络波动、限流等原因断开。
         通过 UA 轮换、随机抖动和重试机制降低被封概率。
+
+        支持 _max_attempts 参数覆盖最大重试次数：
+        - 有降级接口的调用（如 ETF→OTC）设 1，失败立即切接口
+        - 无降级的独立调用保持默认 3 次
         """
         import functools
         import time
+
+        max_attempts = kwargs.pop('_max_attempts', self.MAX_RETRIES)
 
         # 限流：确保两次调用间隔不少于 _min_call_interval
         now = time.time()
@@ -77,7 +83,6 @@ class AKShareAdapter(BaseDataSource):
         except Exception:
             pass
 
-        # 调用后随机抖动（2~5s），将请求时间戳分散
         async def _call_and_jitter():
             partial = functools.partial(func, *args, **kwargs)
             result = await asyncio.wait_for(
@@ -87,7 +92,7 @@ class AKShareAdapter(BaseDataSource):
             return result
 
         last_exc = None
-        for attempt in range(1, self.MAX_RETRIES + 1):
+        for attempt in range(1, max_attempts + 1):
             try:
                 result = await _call_and_jitter()
                 # 成功后随机抖动，避免固定频率
@@ -96,18 +101,18 @@ class AKShareAdapter(BaseDataSource):
                 return result
             except (asyncio.TimeoutError, ConnectionError, ConnectionResetError, Exception) as e:
                 last_exc = e
-                if attempt < self.MAX_RETRIES:
+                if attempt < max_attempts:
                     delay = self.BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 1)
                     reason = type(e).__name__
                     msg = str(e) or "(no error message)"
                     logger.warning(
-                        f"{func.__name__} 失败 (attempt {attempt}/{self.MAX_RETRIES}): "
+                        f"{func.__name__} 失败 (attempt {attempt}/{max_attempts}): "
                         f"[{reason}] {msg}, {delay:.1f}s 后重试..."
                     )
                     await asyncio.sleep(delay)
         reason = type(last_exc).__name__
         msg = str(last_exc) or "(no error message)"
-        logger.error(f"{func.__name__} 重试 {self.MAX_RETRIES} 次后仍然失败: [{reason}] {msg}")
+        logger.error(f"{func.__name__} 重试 {max_attempts} 次后仍然失败: [{reason}] {msg}")
         raise last_exc
 
     async def get_fund_data(self, code: str, period: int = 250) -> FundData:
@@ -157,8 +162,8 @@ class AKShareAdapter(BaseDataSource):
         """获取 ETF 场内交易数据"""
         fund_data = FundData(code=code)
 
-        # 尝试获取 ETF 行情数据（带重试）
-        df = await self._call(ak.fund_etf_hist_em, symbol=code, period="daily", adjust="qfq")
+        # 尝试获取 ETF 行情数据（1 次失败立即切场外基金接口，不重试）
+        df = await self._call(ak.fund_etf_hist_em, symbol=code, period="daily", adjust="qfq", _max_attempts=1)
         if df is None or df.empty:
             raise ValueError(f"ETF 行情数据为空 code={code}")
 
@@ -192,30 +197,97 @@ class AKShareAdapter(BaseDataSource):
 
         return fund_data
 
-    async def _get_otc_fund_data(self, code: str, period: int) -> FundData:
-        """获取场外基金净值数据"""
-        fund_data = FundData(code=code)
+    async def _get_otc_fund_nav_raw(self, code: str, period: int) -> Optional[pd.DataFrame]:
+        """直接调用天天基金原始 API 获取场外基金净值（备用）
+
+        当 akshare 的 fund_open_fund_info_em 失败时使用此接口。
+        这是天天基金前端页面真实调用的 API，稳定性远高于 akshare 的页面解析。
+        """
+        import requests
+
+        end_date = date.today().isoformat()
+        start_date = (date.today() - timedelta(days=period * 2)).isoformat()
+
+        url = "http://api.fund.eastmoney.com/f10/lsjz"
+        headers = {
+            "Referer": f"http://fund.eastmoney.com/f10/jjjz_{code}.html",
+            "User-Agent": random.choice(self._ua_pool),
+        }
+        params = {
+            "fundCode": code,
+            "pageIndex": 1,
+            "pageSize": max(period * 2, 90),
+            "startDate": start_date,
+            "endDate": end_date,
+        }
+
+        def _fetch():
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
 
         try:
-            df = await self._call(ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势")
-            if df is not None and not df.empty:
-                df = df.tail(period)
-                df = df.sort_values("净值日期")
-
-                fund_data.close_history = df["单位净值"].astype(float).tolist()
-                fund_data.date_history = df["净值日期"].astype(str).tolist()
-
-                last_row = df.iloc[-1]
-                fund_data.close = float(last_row["单位净值"])
-                fund_data.date = str(last_row["净值日期"])
+            data = await asyncio.wait_for(
+                asyncio.to_thread(_fetch),
+                timeout=15.0,
+            )
         except Exception as e:
-            logger.warning(f"场外基金净值获取失败 code={code}: {e}")
+            logger.debug(f"天天基金原始 API 获取失败 code={code}: {e}")
+            return None
+
+        if data.get("Data") and data["Data"].get("LSJZList"):
+            df = pd.DataFrame(data["Data"]["LSJZList"])
+            df = df.rename(columns={
+                "FSRQ": "净值日期",
+                "DWJZ": "单位净值",
+                "LJJZ": "累计净值",
+                "JZZZL": "日增长率",
+            })
+            df["净值日期"] = pd.to_datetime(df["净值日期"])
+            df = df.sort_values("净值日期")
+            df["单位净值"] = df["单位净值"].astype(float)
+            return df.tail(period)
+
+        logger.debug(f"天天基金原始 API 返回空数据 code={code}")
+        return None
+
+    async def _get_otc_fund_data(self, code: str, period: int) -> FundData:
+        """获取场外基金净值数据
+
+        策略 1: akshare fund_open_fund_info_em
+        策略 2: 天天基金原始 API（akshare 对场外基金支持不好时降级）
+        """
+        fund_data = FundData(code=code)
+        df = None
+
+        # 策略 1: akshare
+        try:
+            df = await self._call(ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势", _max_attempts=1)
+            if df is not None and df.empty:
+                df = None
+        except Exception as e:
+            logger.warning(f"场外基金净值获取失败 code={code} (akshare): {e}")
+
+        # 策略 2: 天天基金原始 API（akshare 失败时降级）
+        if df is None:
+            logger.info(f"尝试天天基金原始 API 获取 code={code}")
+            df = await self._get_otc_fund_nav_raw(code, period)
+
+        if df is not None and not df.empty:
+            df = df.tail(period)
+            df = df.sort_values("净值日期")
+
+            fund_data.close_history = df["单位净值"].astype(float).tolist()
+            fund_data.date_history = df["净值日期"].astype(str).tolist()
+
+            last_row = df.iloc[-1]
+            fund_data.close = float(last_row["单位净值"])
+            fund_data.date = str(last_row["净值日期"])
 
         # 尝试获取基金名称（多策略，带缓存）
         name = await self._get_cached_fund_name(code)
         if name:
             fund_data.name = name
-            return fund_data
 
         return fund_data
 
