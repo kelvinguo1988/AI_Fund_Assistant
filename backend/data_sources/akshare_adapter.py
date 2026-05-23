@@ -19,7 +19,7 @@ class AKShareAdapter(BaseDataSource):
 
     支持获取：
     - ETF/场外基金净值历史
-    - 指数 PE/PB（通过 index_value_name_funddb 接口）
+    - 指数 PE/PB（通过 stock_zh_index_value_csindex 接口）
     - 成交量（ETF 场内交易数据）
     - 市场主要指数
     - 10 年期国债收益率
@@ -167,22 +167,33 @@ class AKShareAdapter(BaseDataSource):
         except Exception as e:
             logger.warning(f"场外基金净值获取失败 code={code}: {e}")
 
-        # 尝试获取基金名称
+        # 尝试获取基金名称（多策略）
         try:
             info_df = await self._call(ak.fund_name_em)
             if info_df is not None and not info_df.empty:
                 match = info_df[info_df["基金代码"] == code]
                 if not match.empty:
                     fund_data.name = str(match.iloc[0]["基金简称"])
+                    return
         except Exception as e:
-            logger.warning(f"场外基金名称获取失败 code={code}: {e}")
+            logger.debug(f"场外基金名称获取失败 code={code} (name_em): {e}")
+
+        # 备用策略：使用 fund_open_fund_rank_em（aktest.py 验证有效）
+        try:
+            rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
+            if rank_df is not None and not rank_df.empty:
+                match = rank_df[rank_df["基金代码"] == code]
+                if not match.empty:
+                    fund_data.name = str(match.iloc[0]["基金简称"])
+        except Exception as e:
+            logger.debug(f"场外基金名称获取失败 code={code} (rank_em): {e}")
 
         return fund_data
 
     async def _fill_pe_pb_for_etf(self, code: str, fund_data: FundData) -> None:
         """根据 ETF 代码尝试填充 PE/PB 数据
 
-        通过 index_value_name_funddb 接口获取关联指数的估值数据
+        通过 stock_zh_index_value_csindex 接口获取关联指数的估值数据
         """
         # ETF 代码到指数代码的映射
         etf_index_map = {
@@ -190,7 +201,7 @@ class AKShareAdapter(BaseDataSource):
             "510500": "000905",  # 中证500ETF → 中证500
             "510050": "000016",  # 上证50ETF → 上证50
             "159915": "399006",  # 创业板ETF → 创业板指
-            "512100": "000016",  # 中证1000ETF
+            "512100": "000852",  # 中证1000ETF
             "588000": "000688",  # 科创50ETF
         }
 
@@ -200,17 +211,15 @@ class AKShareAdapter(BaseDataSource):
             return
 
         try:
-            df = await self._call(ak.index_value_name_funddb)
+            df = await self._call(ak.stock_zh_index_value_csindex, symbol=index_code)
             if df is not None and not df.empty:
-                match = df[df["指数代码"] == index_code]
-                if not match.empty:
-                    row = match.iloc[0]
-                    pe_str = str(row.get("市盈率", ""))
-                    pb_str = str(row.get("市净率", ""))
-                    if pe_str and pe_str not in ("", "None", "nan"):
-                        fund_data.pe = float(pe_str)
-                    if pb_str and pb_str not in ("", "None", "nan"):
-                        fund_data.pb = float(pb_str)
+                row = df.iloc[-1]  # 取最新一条
+                pe_str = str(row.get("市盈率1", ""))
+                pb_str = str(row.get("市盈率2", ""))
+                if pe_str and pe_str not in ("", "None", "nan"):
+                    fund_data.pe = float(pe_str)
+                if pb_str and pb_str not in ("", "None", "nan"):
+                    fund_data.pb = float(pb_str)
         except Exception as e:
             logger.warning(f"PE/PB 数据获取失败 index={index_code}: {e}")
 
@@ -224,11 +233,16 @@ class AKShareAdapter(BaseDataSource):
             logger.info(f"基准指数数据填充完成: {len(fund_data.benchmark_history)} 行")
 
     async def _fill_fund_size(self, code: str, fund_data: FundData) -> None:
-        """填充基金季度规模数据用于规模稳定性计算"""
+        """填充基金季度规模数据用于规模稳定性计算
+
+        多策略获取:
+        1. fund_scale_open_sina（原接口，部分基金可能可用）
+        2. fund_scale_daily_szse（深交所 ETF 日频份额数据）
+        """
+        # 策略 1: fund_scale_open_sina（原接口）
         try:
             df = await self._call(ak.fund_scale_open_sina, symbol=code)
             if df is not None and not df.empty:
-                # 寻找规模相关字段
                 size_col = None
                 for col in ["总募集规模", "总资产", "净资产", "最新规模", "基金规模"]:
                     if col in df.columns:
@@ -238,10 +252,27 @@ class AKShareAdapter(BaseDataSource):
                     sizes = df[size_col].dropna().astype(float).tail(4).tolist()
                     if sizes:
                         fund_data.fund_size_history = sizes
-                        logger.info(f"基金规模数据填充完成: {len(sizes)} 期")
+                        logger.info(f"基金规模数据填充完成: {len(sizes)} 期 (open_sina)")
+                        return
         except Exception as e:
-            logger.debug(f"基金规模获取失败 code={code}: {e}")
-            # fund_scale_open_sina 可能对部分基金不返回数据，静默忽略
+            logger.debug(f"基金规模获取失败 code={code} (open_sina): {e}")
+
+        # 策略 2: fund_scale_daily_szse（深交所 ETF 份额数据）
+        if code.startswith("159"):
+            try:
+                end = date.today().isoformat()
+                start = (date.today() - timedelta(days=720)).isoformat()
+                df = await self._call(ak.fund_scale_daily_szse, start_date=start, end_date=end, symbol="ETF")
+                if df is not None and not df.empty:
+                    match = df[df["基金代码"] == code]
+                    if not match.empty:
+                        fund_data.fund_size_history = match["基金份额"].astype(float).tail(4).tolist()
+                        logger.info(f"基金规模数据填充完成: {len(fund_data.fund_size_history)} 期 (daily_szse)")
+                        return
+            except Exception as e:
+                logger.debug(f"基金规模获取失败 code={code} (daily_szse): {e}")
+
+        logger.debug(f"基金规模无可用数据源 code={code}，规模稳定性因子将使用中性值")
 
     async def get_market_indices(self) -> MarketIndices:
         """获取市场主要指数数据"""
@@ -272,21 +303,37 @@ class AKShareAdapter(BaseDataSource):
         return indices
 
     async def get_bond_yield(self) -> Optional[float]:
-        """获取 10 年期国债收益率"""
+        """获取 10 年期国债收益率
+
+        注：bond_china_yield 数据源自 2021 年起未更新，新日期范围返回空。
+        当前优先尝试实时替代接口，仍不可得时使用回退值。
+        """
+        # 策略 1: 尝试全局指数估值表获取无风险利率参考
         try:
-            # 尝试从 bond_china_yield 接口获取
-            df = await self._call(ak.bond_china_yield, start_date="20240101")
+            df = await self._call(ak.stock_zh_index_value_csindex, symbol="000300")
             if df is not None and not df.empty:
-                # 筛选 10 年期国债
-                bond_10y = df[df["债券类型"] == "国债"]
+                last_row = df.iloc[-1]
+                div_yield = last_row.get("股息率1", None)
+                if div_yield and str(div_yield) not in ("", "None", "nan"):
+                    # 股息率 ≈ 无风险利率替代，保守加 1.5% 风险溢价作为 10Y 国债近似
+                    logger.info(f"基于股息率估算无风险利率: {float(div_yield):.2f}%")
+                    return round(float(div_yield) + 1.5, 2)
+        except Exception as e:
+            logger.debug(f"国债收益率估值替代获取失败: {e}")
+
+        # 策略 2: 尝试 bond_china_yield 历史接口（仅 2021 年前数据有效）
+        try:
+            df = await self._call(ak.bond_china_yield, start_date="20200101")
+            if df is not None and not df.empty:
+                bond_10y = df[df["曲线名称"] == "中债国债收益率曲线"]
                 if not bond_10y.empty:
                     latest = bond_10y.sort_values("日期").iloc[-1]
-                    yield_val = latest.get("收益率", None)
+                    yield_val = latest.get("10年", None)
                     if yield_val is not None and str(yield_val) not in ("", "None", "nan"):
                         return float(yield_val)
         except Exception as e:
-            logger.warning(f"国债收益率获取失败: {e}")
+            logger.debug(f"国债收益率历史接口获取失败: {e}")
 
-        # 回退：使用常见值 2.7%
-        logger.info("国债收益率获取失败，使用回退值 2.7%")
+        # 回退：使用常见值 2.7%（近年 10Y 国债收益率中枢）
+        logger.info("国债收益率实时接口不可用，使用回退值 2.7%")
         return 2.7

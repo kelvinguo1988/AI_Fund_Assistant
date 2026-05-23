@@ -1,6 +1,6 @@
 因子名称	代码	方向	权重	所需数据	AkShare 接口
-PE百分位	pe_percentile	负向	1.2	指数历史 PE	index_value_hist_funddb
-股债性价比FED	fed_model	正向	1.2	指数 PE + 10 年国债收益率	同上 + bond_china_yield
+PE百分位	pe_percentile	负向	1.2	指数历史 PE	stock_zh_index_value_csindex
+股债性价比FED	fed_model	正向	1.2	指数 PE + 10 年国债收益率	同上 + 股息率估算/bond_china_yield
 动量因子	momentum_6m	正向	1.0	基金净值	fund_em_open_fund_info
 波动率倒数	inv_volatility	正向	0.8	基金净值	同上
 信息比率	info_ratio	正向	0.8	基金净值 + 基准指数行情	同上 + stock_zh_index_daily
@@ -265,10 +265,11 @@ json
 ]
 四、AkShare 数据接口实现要点
 因子	关键接口	备注
-pe_percentile	ak.index_value_hist_funddb(symbol="000300")	字段用 pe 或 市盈率，取最近 1250 行
-fed_model	同上 + ak.bond_china_yield(start_date="2021-01-01")	国债收益率取 10年期
-动量/波动率/最大回撤/MACD	ak.fund_em_open_fund_info(fund="003305", indicator="单位净值走势")	返回日净值表
-info_ratio	上述基金净值 + ak.stock_zh_index_daily(symbol="sh000300")	基准用沪深300收盘价
-size_stability	ak.fund_scale_open_sina(symbol="003305")	返回中取“总募集规模”或“最近总份额”字段，需连续季度数据
+pe_percentile	ak.stock_zh_index_value_csindex(symbol=”000300”)	取市盈率1/股息率1字段
+fed_model	同上 + 股息率估算无风险利率	默认 2.7% 回退值
+动量/波动率/最大回撤/MACD	ak.fund_open_fund_info_em(symbol=”003305”, indicator=”单位净值走势”)	返回日净值表（参数名 symbol，非 fund）
+info_ratio	上述基金净值 + ak.stock_zh_index_daily(symbol=”sh000300”)	基准用沪深300收盘价
+size_stability	ak.fund_scale_open_sina / fund_scale_daily_szse	原接口部分不可用，深交所 ETF 走 daily_szse
+基金名称映射	ak.fund_open_fund_rank_em(symbol=”全部”)	返回基金代码→简称映射，比 fund_name_em 更稳定
 所有接口均免费且无认证门槛，符合 AkShare 全覆盖要求。
 
