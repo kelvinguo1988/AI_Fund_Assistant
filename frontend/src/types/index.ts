@@ -261,3 +261,75 @@ export type SignalStrength =
   | 'moderate_sell'
   | 'heavy_sell'
   | 'hold';
+
+/* ── 市场概况 ────────────────────────────────────────────────────── */
+export interface CapitalFlow {
+  net_amount: number;
+  net_ratio: number;
+  super_large_net: number;
+  large_net: number;
+  medium_net: number;
+  small_net: number;
+}
+
+export interface MarketCapitalFlow {
+  date: string;
+  sh_index: number | null;
+  sh_change: number | null;
+  sz_index: number | null;
+  sz_change: number | null;
+  main_flow: CapitalFlow;
+}
+
+export interface SectorFlowItem {
+  sector_name: string;
+  change_pct: number;
+  main_net_inflow: number;
+  main_net_ratio: number;
+  top_stock: string;
+}
+
+export interface SectorFlowRanking {
+  timeframe: string;
+  by_inflow: SectorFlowItem[];
+  by_outflow: SectorFlowItem[];
+}
+
+export interface HSGTFlow {
+  north_net_buy: number;
+  south_net_buy: number;
+  date: string;
+}
+
+export interface SignalSummary {
+  total: number;
+  buy_count: number;
+  sell_count: number;
+  hold_count: number;
+  top_buy: AnalysisResultOut[];
+  top_sell: AnalysisResultOut[];
+}
+
+export interface MarketAdvDecline {
+  up_count: number;
+  down_count: number;
+  total_count: number;
+}
+
+export interface MarketTurnover {
+  sse_amount: number;
+  szse_amount: number;
+  total_amount: number;
+  prev_total_amount: number;
+  change_pct: number;
+}
+
+export interface MarketSummaryOut {
+  date: string;
+  signals: SignalSummary;
+  market_flow: MarketCapitalFlow | null;
+  sector_flow: SectorFlowRanking[];
+  hsgt_flow: HSGTFlow | null;
+  adv_decline: MarketAdvDecline | null;
+  turnover: MarketTurnover | null;
+}

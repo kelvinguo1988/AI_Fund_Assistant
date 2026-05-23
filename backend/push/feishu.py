@@ -45,6 +45,48 @@ class FeishuPush(BasePush):
             title="推送测试",
         )
 
+    async def send_market_overview(self, report_markdown: str) -> bool:
+        """发送市场概况卡片
+
+        Args:
+            report_markdown: 市场概况 Markdown
+
+        Returns:
+            是否发送成功
+        """
+        card = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {
+                        "tag": "plain_text",
+                        "content": "📊 市场全景概览",
+                    },
+                    "template": "blue",
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": self._simplify_markdown(report_markdown),
+                        },
+                    },
+                    {"tag": "hr"},
+                    {
+                        "tag": "note",
+                        "elements": [
+                            {
+                                "tag": "plain_text",
+                                "content": "基金量化交易系统自动推送，仅供参考",
+                            }
+                        ],
+                    },
+                ],
+            },
+        }
+        return await self._post(card)
+
     async def send_analysis_report(
         self,
         fund_name: str,

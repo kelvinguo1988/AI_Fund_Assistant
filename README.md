@@ -42,11 +42,13 @@ AI_Fund_Assistant/
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
 - **多数据源链**：AKShare → TuShare → BaoStock → TickFlow，自动降级恢复
-- **Web 管理界面**：仪表盘、基金池、因子管理、报告配置、调度计划、历史报告
+- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、因子管理、报告配置、调度计划
 - **一键批量导入**：自动识别 ETF/场外类型
 - **定时分析**：交易日自动执行 + 手动触发
-- **多渠道推送**：飞书机器人富文本卡片推送
+- **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析）
 - **AI 分析**：集成 DeepSeek / ChatGPT，生成自然语言建议
+- **东方财富反爬虫补丁**：NID 授权令牌 + User-Agent 轮换 + 请求频率控制
+- **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
 
 ---
 
@@ -132,10 +134,12 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/funds/{id}` | PUT/DELETE | 更新 / 删除 |
 | `/api/funds/batch` | PATCH | 批量启用/停用 |
 | `/api/analysis` | GET | 查询分析结果 |
-| `/api/analysis/latest` | GET | 最新结果 |
+| `/api/analysis/latest` | GET | 最新分析结果 |
+| `/api/analysis/summary` | GET | 市场概况汇总（信号TOP5 + 资金流 + 板块排行 + 涨跌分布 + 成交额） |
 | `/api/analysis/trigger` | POST | 手动触发分析 |
 | `/api/factors` | GET/POST | 因子 CRUD |
 | `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
+| `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
 | `/api/ai/chat` | POST | AI 对话 |
 | `/api/push-channels` | GET/POST | 推送渠道 |
 | `/api/schedules` | GET/POST | 调度计划 |

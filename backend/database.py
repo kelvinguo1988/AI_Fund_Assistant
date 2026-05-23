@@ -128,46 +128,113 @@ async def init_db() -> None:
                     old_factor.updated_at = now
                     logger.info(f"已禁用旧因子: {old_code}")
 
-            # 2. 更新 macd_signal 权重 0.6 → 0.5
-            result = await session.execute(select(Factor).where(Factor.code == "macd_signal"))
-            macd = result.scalars().first()
-            if macd and abs(macd.weight - 0.6) < 0.01:
-                macd.weight = 0.5
-                macd.updated_at = now
-                logger.info("已更新 MACD 信号权重: 0.6 → 0.5")
+            # 2. 禁用引擎内置因子（如尚存在），已由用户自定义 7 因子替代
+            engine_old_codes = [
+                "pe_percentile", "fed_model", "momentum_6m",
+                "info_ratio", "macd_signal", "max_drawdown", "size_stability",
+            ]
+            for old_code in engine_old_codes:
+                result = await session.execute(
+                    select(Factor).where(Factor.code == old_code, Factor.status == "active")
+                )
+                old_factor = result.scalars().first()
+                if old_factor:
+                    old_factor.status = "disabled"
+                    old_factor.updated_at = now
+                    logger.info(f"已禁用引擎旧因子: {old_code}")
 
-            # 3. 添加新因子（如尚不存在）
+            # 3. 添加用户自定义 7 因子（如尚不存在）
             new_factors_config = [
                 {
-                    "name": "信息比率", "code": "info_ratio", "data_field": "info_ratio",
-                    "data_fields": json.dumps(["nav", "benchmark_nav"]),
-                    "weight": 0.8, "direction": "positive",
-                    "params": json.dumps({"window": 252}),
-                    "formula": "annualize(excess_returns_mean, 252) / (std(excess_returns, 252) * sqrt(252))",
-                    "window": 252, "window_unit": "day", "sort_order": 5,
+                    "name": "短期动量", "code": "short_momentum", "direction": "positive",
+                    "weight": 1.2, "sort_order": 1,
+                    "params": json.dumps({"window": 20}),
+                    "formula": "nav / shift(nav, 20) - 1",
+                    "window": 20, "window_unit": "day",
+                    "signal_rules": json.dumps([
+                        {"condition": "> 0.01", "score": 1.0},
+                        {"condition": "< -0.01", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
+                    "normalization": "cross_sectional_zscore",
+                    "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                },
+                {
+                    "name": "中期动量", "code": "mid_momentum", "direction": "positive",
+                    "weight": 1.2, "sort_order": 2,
+                    "params": json.dumps({"window": 60}),
+                    "formula": "nav / shift(nav, 60) - 1",
+                    "window": 60, "window_unit": "day",
+                    "signal_rules": json.dumps([
+                        {"condition": "> 0", "score": 1.0},
+                        {"condition": "< 0", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
+                    "normalization": "cross_sectional_zscore",
+                    "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                },
+                {
+                    "name": "波动率倒数", "code": "inv_volatility", "direction": "positive",
+                    "weight": 1.0, "sort_order": 3,
+                    "params": json.dumps({"window": 60}),
+                    "formula": "1 / (std(returns, 60) * sqrt(252))",
+                    "window": 60, "window_unit": "day",
                     "signal_rules": json.dumps([]),
                     "normalization": "cross_sectional_zscore",
                     "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
                 },
                 {
-                    "name": "最大回撤", "code": "max_drawdown", "data_field": "max_drawdown",
-                    "data_fields": json.dumps(["nav"]),
-                    "weight": 0.5, "direction": "positive",
+                    "name": "回撤修复度", "code": "drawdown_recovery", "direction": "positive",
+                    "weight": 0.8, "sort_order": 4,
                     "params": json.dumps({"window": 252}),
-                    "formula": "max_drawdown(nav, 252)",
-                    "window": 252, "window_unit": "day", "sort_order": 7,
-                    "signal_rules": json.dumps([]),
+                    "formula": "nav / rolling_max(nav, 252)",
+                    "window": 252, "window_unit": "day",
+                    "signal_rules": json.dumps([
+                        {"condition": "> 0.95", "score": 1.0},
+                        {"condition": ">= 0.85", "score": 0.0},
+                        {"condition": "< 0.85", "score": -1.0},
+                    ]),
+                    "normalization": "none",
+                },
+                {
+                    "name": "收益风险比", "code": "return_risk_ratio", "direction": "positive",
+                    "weight": 0.8, "sort_order": 5,
+                    "params": json.dumps({"window": 60, "epsilon": 0.0001}),
+                    "formula": "mean(returns, 60) / (std(returns, 60) + 0.0001)",
+                    "window": 60, "window_unit": "day",
+                    "signal_rules": json.dumps([
+                        {"condition": "> 0.5", "score": 1.0},
+                        {"condition": "< -0.5", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
                     "normalization": "cross_sectional_zscore",
                     "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
                 },
                 {
-                    "name": "规模稳定性", "code": "size_stability", "data_field": "fund_size",
-                    "data_fields": json.dumps(["fund_size_quarterly"]),
-                    "weight": 0.4, "direction": "positive",
-                    "params": json.dumps({"window": 4}),
-                    "formula": "1 / (std(size, 4) / mean(size, 4)) + size_bonus(size)",
-                    "window": 4, "window_unit": "quarter", "sort_order": 8,
-                    "signal_rules": json.dumps([]),
+                    "name": "动量加速度", "code": "momentum_accel", "direction": "positive",
+                    "weight": 0.5, "sort_order": 6,
+                    "params": json.dumps({"short_window": 20, "mid_window": 60}),
+                    "formula": "mom20 - mom60",
+                    "window": 60, "window_unit": "day",
+                    "signal_rules": json.dumps([
+                        {"condition": "> 0", "score": 1.0},
+                        {"condition": "< 0", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
+                    "normalization": "cross_sectional_zscore",
+                    "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                },
+                {
+                    "name": "趋势一致性", "code": "trend_consistency", "direction": "positive",
+                    "weight": 0.5, "sort_order": 7,
+                    "params": json.dumps({"short_window": 20, "mid_window": 60}),
+                    "formula": "mean([sign(mom20), sign(mom60)])",
+                    "window": 60, "window_unit": "day",
+                    "signal_rules": json.dumps([
+                        {"condition": "> 0", "score": 1.0},
+                        {"condition": "< 0", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
                     "normalization": "cross_sectional_zscore",
                     "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
                 },
@@ -178,7 +245,7 @@ async def init_db() -> None:
                 if not existing:
                     session.add(Factor(
                         name=cfg["name"], code=cfg["code"],
-                        data_field=cfg["data_field"], data_fields=cfg["data_fields"],
+                        data_field=cfg.get("data_field"), data_fields=cfg.get("data_fields"),
                         weight=cfg["weight"], direction=cfg["direction"],
                         params=cfg["params"], formula=cfg["formula"],
                         window=cfg["window"], window_unit=cfg["window_unit"],
@@ -230,183 +297,118 @@ async def init_db() -> None:
             now = datetime.now()
             factors = [
                 Factor(
-                    name="PE百分位",
-                    code="pe_percentile",
-                    data_field="pe",
-                    data_fields=json.dumps(["pe_ttm"]),
-                    weight=1.2,
-                    direction="negative",
-                    params=json.dumps({"window": 1250}),
-                    formula="percentile_rank(pe_ttm, 1250)",
-                    window=1250,
-                    window_unit="day",
-                    signal_rules=json.dumps([
-                        {"condition": "<= 0.2", "score": 1.0},
-                        {"condition": "<= 0.4", "score": 0.5},
-                        {"condition": "<= 0.6", "score": 0.0},
-                        {"condition": "<= 0.8", "score": -0.5},
-                        {"condition": "> 0.8", "score": -1.0},
-                    ]),
-                    normalization="none",
-                    status="active",
-                    sort_order=1,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                Factor(
-                    name="股债性价比FED",
-                    code="fed_model",
-                    data_field="fed",
-                    data_fields=json.dumps(["index_pe", "bond_yield_10y"]),
-                    weight=1.2,
-                    direction="positive",
-                    params=json.dumps({"window": 756}),
-                    formula="(1 / index_pe) - bond_yield_10y",
-                    window=756,
-                    window_unit="day",
-                    signal_rules=json.dumps([
-                        {"condition": "> percentile(756, 0.8)", "score": 1.0},
-                        {"condition": "> percentile(756, 0.6)", "score": 0.5},
-                        {"condition": "< percentile(756, 0.4)", "score": -0.5},
-                        {"condition": "< percentile(756, 0.2)", "score": -1.0},
-                    ]),
-                    normalization="rolling_percentile",
-                    status="active",
-                    sort_order=2,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                Factor(
-                    name="动量因子",
-                    code="momentum_6m",
-                    data_field="nav",
+                    name="短期动量", code="short_momentum", direction="positive",
                     data_fields=json.dumps(["nav"]),
-                    weight=1.0,
-                    direction="positive",
-                    params=json.dumps({"window": 126}),
-                    formula="(nav / shift(nav, 126) - 1) / (std(returns, 126) * sqrt(126))",
-                    window=126,
-                    window_unit="day",
+                    weight=1.2, sort_order=1,
+                    params=json.dumps({"window": 20}),
+                    formula="nav / shift(nav, 20) - 1",
+                    window=20, window_unit="day",
                     signal_rules=json.dumps([
-                        {"condition": "> 1.0", "score": 1.0},
-                        {"condition": "> 0.5", "score": 0.5},
-                        {"condition": ">= -0.5 and <= 0.5", "score": 0.0},
-                        {"condition": ">= -1.0 and < -0.5", "score": -0.5},
-                        {"condition": "< -1.0", "score": -1.0},
-                    ]),
-                    normalization="none",
-                    status="active",
-                    sort_order=3,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                Factor(
-                    name="波动率倒数",
-                    code="inv_volatility",
-                    data_field="nav",
-                    data_fields=json.dumps(["nav"]),
-                    weight=0.8,
-                    direction="positive",
-                    params=json.dumps({"window": 60}),
-                    formula="1 / std(returns, 60)",
-                    window=60,
-                    window_unit="day",
-                    signal_rules=json.dumps([]),
-                    normalization="cross_sectional_zscore",
-                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
-                    status="active",
-                    sort_order=4,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                Factor(
-                    name="信息比率",
-                    code="info_ratio",
-                    data_field="info_ratio",
-                    data_fields=json.dumps(["nav", "benchmark_nav"]),
-                    weight=0.8,
-                    direction="positive",
-                    params=json.dumps({"window": 252}),
-                    formula="annualize(excess_returns_mean, 252) / (std(excess_returns, 252) * sqrt(252))",
-                    window=252,
-                    window_unit="day",
-                    signal_rules=json.dumps([]),
-                    normalization="cross_sectional_zscore",
-                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
-                    status="active",
-                    sort_order=5,
-                    created_at=now,
-                    updated_at=now,
-                ),
-                Factor(
-                    name="MACD信号",
-                    code="macd_signal",
-                    data_field="macd",
-                    data_fields=json.dumps(["nav"]),
-                    weight=0.5,
-                    direction="positive",
-                    params=json.dumps({"fast": 12, "slow": 26, "signal": 9}),
-                    formula="ema(12) - ema(26)",
-                    window=26,
-                    window_unit="day",
-                    signal_rules=json.dumps([
-                        {"condition": "dif > dea and macd_hist_delta > 0", "score": 1.0},
-                        {"condition": "dif > dea and macd_hist_delta <= 0", "score": 0.5},
-                        {"condition": "dif < dea and macd_hist_delta < 0", "score": -1.0},
+                        {"condition": "> 0.01", "score": 1.0},
+                        {"condition": "< -0.01", "score": -1.0},
                         {"condition": "else", "score": 0.0},
                     ]),
-                    normalization="none",
-                    status="active",
-                    sort_order=6,
-                    created_at=now,
-                    updated_at=now,
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                    status="active", created_at=now, updated_at=now,
                 ),
                 Factor(
-                    name="最大回撤",
-                    code="max_drawdown",
-                    data_field="max_drawdown",
+                    name="中期动量", code="mid_momentum", direction="positive",
                     data_fields=json.dumps(["nav"]),
-                    weight=0.5,
-                    direction="positive",
-                    params=json.dumps({"window": 252}),
-                    formula="max_drawdown(nav, 252)",
-                    window=252,
-                    window_unit="day",
-                    signal_rules=json.dumps([]),
+                    weight=1.2, sort_order=2,
+                    params=json.dumps({"window": 60}),
+                    formula="nav / shift(nav, 60) - 1",
+                    window=60, window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> 0", "score": 1.0},
+                        {"condition": "< 0", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
                     normalization="cross_sectional_zscore",
                     normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
-                    status="active",
-                    sort_order=7,
-                    created_at=now,
-                    updated_at=now,
+                    status="active", created_at=now, updated_at=now,
                 ),
                 Factor(
-                    name="规模稳定性",
-                    code="size_stability",
-                    data_field="fund_size",
-                    data_fields=json.dumps(["fund_size_quarterly"]),
-                    weight=0.4,
-                    direction="positive",
-                    params=json.dumps({"window": 4}),
-                    formula="1 / (std(size, 4) / mean(size, 4)) + size_bonus(size)",
-                    window=4,
-                    window_unit="quarter",
+                    name="波动率倒数", code="inv_volatility", direction="positive",
+                    data_fields=json.dumps(["nav"]),
+                    weight=1.0, sort_order=3,
+                    params=json.dumps({"window": 60}),
+                    formula="1 / (std(returns, 60) * sqrt(252))",
+                    window=60, window_unit="day",
                     signal_rules=json.dumps([]),
                     normalization="cross_sectional_zscore",
                     normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
-                    status="active",
-                    sort_order=8,
-                    created_at=now,
-                    updated_at=now,
+                    status="active", created_at=now, updated_at=now,
+                ),
+                Factor(
+                    name="回撤修复度", code="drawdown_recovery", direction="positive",
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.8, sort_order=4,
+                    params=json.dumps({"window": 252}),
+                    formula="nav / rolling_max(nav, 252)",
+                    window=252, window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> 0.95", "score": 1.0},
+                        {"condition": ">= 0.85", "score": 0.0},
+                        {"condition": "< 0.85", "score": -1.0},
+                    ]),
+                    normalization="none",
+                    status="active", created_at=now, updated_at=now,
+                ),
+                Factor(
+                    name="收益风险比", code="return_risk_ratio", direction="positive",
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.8, sort_order=5,
+                    params=json.dumps({"window": 60, "epsilon": 0.0001}),
+                    formula="mean(returns, 60) / (std(returns, 60) + 0.0001)",
+                    window=60, window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> 0.5", "score": 1.0},
+                        {"condition": "< -0.5", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                    status="active", created_at=now, updated_at=now,
+                ),
+                Factor(
+                    name="动量加速度", code="momentum_accel", direction="positive",
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.5, sort_order=6,
+                    params=json.dumps({"short_window": 20, "mid_window": 60}),
+                    formula="mom20 - mom60",
+                    window=60, window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> 0", "score": 1.0},
+                        {"condition": "< 0", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                    status="active", created_at=now, updated_at=now,
+                ),
+                Factor(
+                    name="趋势一致性", code="trend_consistency", direction="positive",
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.5, sort_order=7,
+                    params=json.dumps({"short_window": 20, "mid_window": 60}),
+                    formula="mean([sign(mom20), sign(mom60)])",
+                    window=60, window_unit="day",
+                    signal_rules=json.dumps([
+                        {"condition": "> 0", "score": 1.0},
+                        {"condition": "< 0", "score": -1.0},
+                        {"condition": "else", "score": 0.0},
+                    ]),
+                    normalization="cross_sectional_zscore",
+                    normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                    status="active", created_at=now, updated_at=now,
                 ),
             ]
             session.add_all(factors)
 
-        # ── 检查是否已有报告配置 ──
-        result = await session.execute(select(ReportConfig).limit(1))
-        if result.scalars().first() is None:
-            now = datetime.now()
-            report_configs = [
+        # ── 检查并补充报告配置 ──
+        now = datetime.now()
+        default_report_configs = [
                 ReportConfig(
                     name="因子详情",
                     item_key="factor_detail",
@@ -442,8 +444,78 @@ async def init_db() -> None:
                     sort_order=5,
                     created_at=now,
                 ),
-            ]
-            session.add_all(report_configs)
+                # 市场概况项
+                ReportConfig(
+                    name="信号概览",
+                    item_key="signal_summary",
+                    enabled=True,
+                    sort_order=6,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="TOP5 买卖信号",
+                    item_key="top_buy_sell",
+                    enabled=True,
+                    sort_order=7,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="涨跌分布",
+                    item_key="adv_decline",
+                    enabled=True,
+                    sort_order=8,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="两市成交额",
+                    item_key="turnover",
+                    enabled=True,
+                    sort_order=9,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="大盘资金流",
+                    item_key="market_flow",
+                    enabled=True,
+                    sort_order=10,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="沪深港通资金流",
+                    item_key="hsgt_flow",
+                    enabled=True,
+                    sort_order=11,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="板块资金流(当日)",
+                    item_key="sector_flow_day",
+                    enabled=True,
+                    sort_order=12,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="板块资金流(周)",
+                    item_key="sector_flow_week",
+                    enabled=True,
+                    sort_order=13,
+                    created_at=now,
+                ),
+                ReportConfig(
+                    name="板块资金流(月)",
+                    item_key="sector_flow_month",
+                    enabled=True,
+                    sort_order=14,
+                    created_at=now,
+                ),
+        ]
+        # 逐条检查缺失的配置项，避免覆盖已有数据
+        for cfg in default_report_configs:
+            exists = await session.execute(
+                select(ReportConfig).where(ReportConfig.item_key == cfg.item_key)
+            )
+            if exists.scalars().first() is None:
+                session.add(cfg)
 
         # ── 检查是否已有系统配置 ──
         result = await session.execute(select(SystemConfig).limit(1))

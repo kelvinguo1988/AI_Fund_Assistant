@@ -15,6 +15,7 @@ from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.schemas.common import ApiResponse
 from backend.schemas.analysis import FactorScore, AnalysisResultOut
+from backend.schemas.market import MarketSummaryOut, SignalSummary
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -109,6 +110,67 @@ async def get_latest_analysis(db: AsyncSession = Depends(get_db)):
         out_list.append(_result_to_out(r, fund))
 
     return ApiResponse(data=out_list)
+
+
+@router.get("/summary", response_model=ApiResponse[MarketSummaryOut])
+async def get_market_summary(db: AsyncSession = Depends(get_db)):
+    """获取市场概况汇总 — 信号TOP5 + 资金流 + 板块排行"""
+    from sqlalchemy import func
+
+    # 1. 获取最新分析日期
+    result = await db.execute(select(func.max(AnalysisResult.analysis_date)))
+    latest_date = result.scalar()
+
+    today_str = date.today().isoformat()
+    summary_date = latest_date.isoformat() if latest_date else today_str
+
+    # 2. 获取当日分析结果
+    stmt = select(AnalysisResult).where(AnalysisResult.analysis_date == latest_date)
+    result = await db.execute(stmt)
+    analysis_list = result.scalars().all()
+
+    signal_summary = SignalSummary(total=len(analysis_list))
+    out_list: list[AnalysisResultOut] = []
+
+    for r in analysis_list:
+        fund_result = await db.execute(select(Fund).where(Fund.id == r.fund_id))
+        fund = fund_result.scalars().first()
+        out = _result_to_out(r, fund)
+        out_list.append(out)
+        if out.signal_direction == "buy":
+            signal_summary.buy_count += 1
+        elif out.signal_direction == "sell":
+            signal_summary.sell_count += 1
+        else:
+            signal_summary.hold_count += 1
+
+    # 按评分排序取 TOP5
+    out_list.sort(key=lambda x: x.weighted_score, reverse=True)
+    signal_summary.top_buy = [o for o in out_list if o.signal_direction == "buy"][:5]
+    signal_summary.top_sell = [o for o in out_list if o.signal_direction == "sell"][-5:]
+
+    # 3. 获取市场资金流数据
+    from backend.services.market_service import MarketService
+    svc = MarketService()
+    market_flow = await svc.get_market_capital_flow()
+    sector_flow_raw = await svc.get_sector_flow_rankings()
+    hsgt_flow = await svc.get_hsgt_flow()
+    adv_decline = await svc.get_market_adv_decline()
+    turnover = await svc.get_market_turnover()
+
+    sector_flow_list = list(sector_flow_raw.values())
+
+    summary = MarketSummaryOut(
+        date=summary_date,
+        signals=signal_summary,
+        market_flow=market_flow,
+        sector_flow=sector_flow_list,
+        hsgt_flow=hsgt_flow,
+        adv_decline=adv_decline,
+        turnover=turnover,
+    )
+
+    return ApiResponse(data=summary)
 
 
 @router.post("/trigger", response_model=ApiResponse[list[AnalysisResultOut]])

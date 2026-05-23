@@ -1,12 +1,23 @@
 from __future__ import annotations
 """报告生成引擎 — 根据配置项组合输出报告内容
 
-报告配置项：
-1. factor_detail   — 因子详情
-2. weighted_score  — 加权评分
-3. operation_advice — 操作建议
-4. signal_strength — 信号强度
-5. risk_warning    — 风险提示
+报告配置项（基金维度）：
+1. factor_detail      — 因子详情
+2. weighted_score     — 加权评分
+3. operation_advice   — 操作建议
+4. signal_strength    — 信号强度
+5. risk_warning       — 风险提示
+
+报告配置项（市场维度）：
+6. signal_summary     — 信号概览
+7. top_buy_sell       — TOP5 买卖信号
+8. adv_decline        — 涨跌分布
+9. turnover           — 两市成交额
+10. market_flow       — 大盘资金流
+11. hsgt_flow         — 沪深港通
+12. sector_flow_day   — 板块资金流(当日)
+13. sector_flow_week  — 板块资金流(周)
+14. sector_flow_month — 板块资金流(月)
 """
 
 import logging
@@ -15,6 +26,7 @@ from typing import Optional
 
 from backend.engines.factor_engine import FactorScoreResult
 from backend.engines.scoring_engine import SignalResult
+from backend.schemas.market import MarketSummaryOut
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +215,131 @@ class ReportEngine:
             warnings.append("当前无明显风险信号，但仍需关注市场变化")
 
         return "\n".join(f"- {w}" for w in warnings)
+
+
+    def generate_market_summary_markdown(
+        self,
+        market_summary: MarketSummaryOut,
+        enabled_items: list[str] | None = None,
+    ) -> str:
+        """生成市场概况 Markdown
+
+        Args:
+            market_summary: 市场概况数据
+            enabled_items: 启用的报告项列表
+
+        Returns:
+            Markdown 文本
+        """
+        if enabled_items is None:
+            enabled_items = [
+                "signal_summary", "top_buy_sell", "adv_decline", "turnover",
+                "market_flow", "hsgt_flow",
+                "sector_flow_day", "sector_flow_week", "sector_flow_month",
+            ]
+
+        lines: list[str] = []
+        ms = market_summary
+
+        # ── 信号概览 ──
+        if "signal_summary" in enabled_items:
+            sig = ms.signals
+            lines.append("## 📊 信号概览")
+            lines.append("")
+            lines.append(f"**买入**: {sig.buy_count} 只 | **持有**: {sig.hold_count} 只 | **卖出**: {sig.sell_count} 只")
+            lines.append(f"**总计**: {sig.total} 只基金")
+            lines.append("")
+
+        # ── TOP5 买卖信号 ──
+        if "top_buy_sell" in enabled_items:
+            lines.append("## 🔴 TOP5 买入信号")
+            lines.append("")
+            lines.append("| 基金 | 代码 | 评分 | 强度 |")
+            lines.append("|------|------|------|------|")
+            for r in ms.signals.top_buy:
+                lines.append(f"| {r.fund_name} | {r.fund_code} | {r.weighted_score} | {r.signal_strength} |")
+            lines.append("")
+            lines.append("## 🟢 TOP5 卖出信号")
+            lines.append("")
+            lines.append("| 基金 | 代码 | 评分 | 强度 |")
+            lines.append("|------|------|------|------|")
+            for r in ms.signals.top_sell:
+                lines.append(f"| {r.fund_name} | {r.fund_code} | {r.weighted_score} | {r.signal_strength} |")
+            lines.append("")
+
+        # ── 涨跌分布 ──
+        if "adv_decline" in enabled_items and ms.adv_decline:
+            ad = ms.adv_decline
+            up_pct = ad.up_count / ad.total_count * 100 if ad.total_count > 0 else 0
+            lines.append("## 📈 涨跌分布")
+            lines.append("")
+            lines.append(f"**上涨**: {ad.up_count} 只 ({up_pct:.1f}%) | **下跌**: {ad.down_count} 只 | **总计**: {ad.total_count} 只")
+            lines.append("")
+
+        # ── 两市成交额 ──
+        if "turnover" in enabled_items and ms.turnover:
+            t = ms.turnover
+            change_sign = "+" if t.change_pct >= 0 else ""
+            lines.append("## 💰 两市成交额")
+            lines.append("")
+            lines.append(f"**沪市**: {t.sse_amount:,.0f} 亿")
+            lines.append(f"**深市**: {t.szse_amount:,.0f} 亿")
+            lines.append(f"**合计**: {t.total_amount:,.0f} 亿")
+            lines.append(f"**较上日**: {change_sign}{t.change_pct}%")
+            lines.append("")
+
+        # ── 大盘资金流 ──
+        if "market_flow" in enabled_items and ms.market_flow:
+            mf = ms.market_flow
+            flow = mf.main_flow
+            lines.append("## 🏦 大盘资金流")
+            lines.append("")
+            lines.append(f"日期：{mf.date}")
+            lines.append(f"上证：{mf.sh_index}（{mf.sh_change}%） | 深证：{mf.sz_index}（{mf.sz_change}%）")
+            lines.append(f"**主力净流入**: {flow.net_amount:,.2f} 亿（占比 {flow.net_ratio}%）")
+            lines.append(f"超大单：{flow.super_large_net:,.2f} 亿 | 大单：{flow.large_net:,.2f} 亿")
+            lines.append(f"中单：{flow.medium_net:,.2f} 亿 | 小单：{flow.small_net:,.2f} 亿")
+            lines.append("")
+
+        # ── 沪深港通 ──
+        if "hsgt_flow" in enabled_items and ms.hsgt_flow:
+            h = ms.hsgt_flow
+            lines.append("## 🌐 沪深港通")
+            lines.append("")
+            lines.append(f"**北向资金**: {h.north_net_buy:,.2f} 亿")
+            lines.append(f"**南向资金**: {h.south_net_buy:,.2f} 亿")
+            lines.append(f"日期：{h.date}")
+            lines.append("")
+
+        # ── 板块资金流 ──
+        sector_map = {"sector_flow_day": "当日", "sector_flow_week": "周", "sector_flow_month": "月"}
+        for item_key, tf_label in sector_map.items():
+            if item_key not in enabled_items:
+                continue
+            # 找到对应时间维度
+            sr = next((s for s in ms.sector_flow if s.timeframe == tf_label), None)
+            if not sr:
+                continue
+
+            lines.append(f"## 🏭 板块资金流（{tf_label}）")
+            lines.append("")
+            lines.append("**主力流入 TOP5**")
+            lines.append("")
+            lines.append("| 板块 | 净流入(亿) | 涨跌幅 | 领涨股 |")
+            lines.append("|------|-----------|--------|--------|")
+            for i in sr.by_inflow[:5]:
+                top_stock = i.top_stock if i.top_stock else "-"
+                lines.append(f"| {i.sector_name} | {i.main_net_inflow:+,.2f} | {i.change_pct:+.2f}% | {top_stock} |")
+            lines.append("")
+            lines.append("**主力流出 TOP5**")
+            lines.append("")
+            lines.append("| 板块 | 净流入(亿) | 涨跌幅 |")
+            lines.append("|------|-----------|--------|")
+            for i in sr.by_outflow[:5]:
+                lines.append(f"| {i.sector_name} | {i.main_net_inflow:+,.2f} | {i.change_pct:+.2f}% |")
+            lines.append("")
+
+        return "\n".join(lines)
 
 
 # 全局引擎实例

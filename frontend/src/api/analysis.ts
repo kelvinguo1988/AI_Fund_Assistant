@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import type { ApiResponse, AnalysisResultOut } from '../types';
+import type { ApiResponse, AnalysisResultOut, MarketSummaryOut } from '../types';
 
 const BASE = '/api/analysis';
 
@@ -18,4 +18,7 @@ export const analysisApi = {
 
   latest: () =>
     apiClient.get<ApiResponse<AnalysisResultOut[]>>(`${BASE}/latest`).then((r) => r.data),
+
+  summary: () =>
+    apiClient.get<ApiResponse<MarketSummaryOut>>(`${BASE}/summary`).then((r) => r.data),
 };

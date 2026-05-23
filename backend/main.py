@@ -1,7 +1,11 @@
 """FastAPI 应用入口 — 生命周期管理、路由挂载"""
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,11 +15,41 @@ from backend.config import settings
 from backend.database import init_db
 
 
+async def _prewarm_market_cache():
+    """后台预热市场数据缓存，避免用户首次请求等待"""
+    try:
+        from backend.services.market_service import MarketService
+        svc = MarketService()
+        import asyncio
+        # 并行预热所有数据源
+        await asyncio.gather(
+            svc.get_market_capital_flow(),
+            svc.get_sector_flow_rankings(),
+            svc.get_hsgt_flow(),
+            svc.get_market_adv_decline(),
+            svc.get_market_turnover(),
+            return_exceptions=True,
+        )
+        logger.info("市场数据缓存预热完成")
+    except Exception as e:
+        logger.warning(f"市场数据缓存预热失败: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时初始化数据库 + 加载调度器"""
+    """应用生命周期：启动时初始化数据库 + 加载调度器 + 应用反爬补丁"""
     # ── Startup ──
+    # 应用东方财富反爬虫补丁
+    try:
+        from backend.patch.eastmoney_patch import apply_patch
+        apply_patch()
+    except Exception as e:
+        logger.warning(f"EastMoney 反爬虫补丁加载失败: {e}")
+
     await init_db()
+
+    # 后台预热市场数据缓存（不阻塞启动）
+    asyncio.ensure_future(_prewarm_market_cache())
 
     # 启动调度器
     from backend.scheduler.task_scheduler import task_scheduler

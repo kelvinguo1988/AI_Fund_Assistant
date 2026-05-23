@@ -1,14 +1,16 @@
 from __future__ import annotations
-from typing import Optional
 """推送编排服务 — 遍历渠道→格式化→发送"""
 
 import json
 import logging
+from datetime import date
+from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.push_channel import PushChannel
+from backend.models.report_config import ReportConfig
 from backend.push.feishu import FeishuPush
 from backend.schemas.analysis import AnalysisResultOut
 
@@ -50,10 +52,61 @@ class PushService:
             logger.warning("无启用的推送渠道")
             return {}
 
+        # 获取启用的报告配置项
+        report_result = await self.db.execute(
+            select(ReportConfig).order_by(ReportConfig.sort_order)
+        )
+        all_configs = report_result.scalars().all()
+        enabled_items = [c.item_key for c in all_configs if c.enabled]
+
+        # 市场概况相关项（非基金维度）
+        market_items = {
+            "signal_summary", "top_buy_sell", "adv_decline", "turnover",
+            "market_flow", "hsgt_flow",
+            "sector_flow_day", "sector_flow_week", "sector_flow_month",
+        }
+        # 基金维度项（原 5 项）
+        fund_items = {
+            "factor_detail", "weighted_score", "operation_advice",
+            "signal_strength", "risk_warning",
+        }
+
+        enabled_market = [i for i in enabled_items if i in market_items]
+        enabled_fund = [i for i in enabled_items if i in fund_items]
+
         # 生成报告文本
         from backend.engines.report_engine import report_engine
         from backend.engines.scoring_engine import SignalResult
-        from backend.engines.factor_engine import FactorScoreResult
+
+        # 获取市场概况数据
+        market_summary_md = None
+        if enabled_market:
+            try:
+                from backend.services.market_service import MarketService
+                svc = MarketService()
+                from backend.schemas.market import MarketSummaryOut, SignalSummary
+
+                today_str = date.today().isoformat()
+                market_flow = await svc.get_market_capital_flow()
+                sector_flow_raw = await svc.get_sector_flow_rankings()
+                hsgt_flow = await svc.get_hsgt_flow()
+                adv_decline = await svc.get_market_adv_decline()
+                turnover = await svc.get_market_turnover()
+
+                market_summary = MarketSummaryOut(
+                    date=today_str,
+                    signals=SignalSummary(total=len(results)),
+                    market_flow=market_flow,
+                    sector_flow=list(sector_flow_raw.values()),
+                    hsgt_flow=hsgt_flow,
+                    adv_decline=adv_decline,
+                    turnover=turnover,
+                )
+                market_summary_md = report_engine.generate_market_summary_markdown(
+                    market_summary, enabled_items=enabled_market
+                )
+            except Exception as e:
+                logger.warning(f"市场概况生成失败: {e}")
 
         push_results: dict[str, bool] = {}
 
@@ -64,6 +117,10 @@ class PushService:
                         webhook_url=channel.webhook_url or "",
                         secret=channel.token,
                     )
+
+                    # 先推送市场全景概览
+                    if market_summary_md:
+                        await pusher.send_market_overview(market_summary_md)
 
                     # 逐只基金推送
                     for r in results:
@@ -94,6 +151,7 @@ class PushService:
                             analysis_date=str(r.analysis_date),
                             signal=signal,
                             factor_scores=factor_scores,
+                            enabled_items=enabled_fund if enabled_fund else None,
                         )
 
                         success = await pusher.send_analysis_report(

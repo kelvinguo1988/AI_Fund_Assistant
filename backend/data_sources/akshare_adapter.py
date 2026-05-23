@@ -1,6 +1,7 @@
 """AKShare 数据适配器 — 获取基金净值、PE、PB、成交量、指数数据"""
 
 import logging
+import random
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -12,6 +13,18 @@ import pandas as pd
 from backend.data_sources.base import BaseDataSource, FundData, MarketIndices
 
 logger = logging.getLogger(__name__)
+
+# User-Agent 池用于反爬虫
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
+]
 
 
 class AKShareAdapter(BaseDataSource):
@@ -25,16 +38,17 @@ class AKShareAdapter(BaseDataSource):
     - 10 年期国债收益率
     """
 
-    MAX_RETRIES = 2       # 最大重试次数（含首次）
-    BASE_DELAY = 1.0      # 初始退避延迟（秒）
+    MAX_RETRIES = 3       # 最大重试次数（含首次）
+    BASE_DELAY = 2.0      # 初始退避延迟（秒）
     _last_call_time: float = 0.0  # 上次 API 调用时间
-    _min_call_interval: float = 1.0  # 最小调用间隔（秒），防止触发限流
+    _min_call_interval: float = 3.0  # 最小调用间隔（秒），防止触发限流
+    _ua_pool = _USER_AGENTS
 
     async def _call(self, func, *args, **kwargs):
-        """带限流 + 指数退避重试的异步 API 调用
+        """带限流 + User-Agent 轮换 + 指数退避重试的异步 API 调用
 
         AKShare 的 HTTP 连接可能因网络波动、限流等原因断开。
-        限制调用频率避免触发反爬。
+        通过 UA 轮换、随机抖动和重试机制降低被封概率。
         """
         import functools
         import time
@@ -46,24 +60,46 @@ class AKShareAdapter(BaseDataSource):
             await asyncio.sleep(self._min_call_interval - since_last)
         self._last_call_time = time.time()
 
+        # 随机 User-Agent（通过 akshare 底层的 session headers）
+        try:
+            import akshare as ak
+            session = getattr(ak, "_session", None) or getattr(ak, "session", None)
+            if session is not None:
+                session.headers.update({"User-Agent": random.choice(self._ua_pool)})
+        except Exception:
+            pass
+
+        # 调用后随机抖动（2~5s），将请求时间戳分散
+        async def _call_and_jitter():
+            partial = functools.partial(func, *args, **kwargs)
+            result = await asyncio.wait_for(
+                asyncio.to_thread(partial),
+                timeout=30.0,
+            )
+            return result
+
         last_exc = None
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
-                partial = functools.partial(func, *args, **kwargs)
-                return await asyncio.wait_for(
-                    asyncio.to_thread(partial),
-                    timeout=15.0,
-                )
-            except (asyncio.TimeoutError, Exception) as e:
+                result = await _call_and_jitter()
+                # 成功后随机抖动，避免固定频率
+                jitter = random.uniform(2.0, 5.0)
+                await asyncio.sleep(jitter)
+                return result
+            except (asyncio.TimeoutError, ConnectionError, ConnectionResetError, Exception) as e:
                 last_exc = e
                 if attempt < self.MAX_RETRIES:
-                    delay = self.BASE_DELAY * (2 ** (attempt - 1))
+                    delay = self.BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 1)
+                    reason = type(e).__name__
+                    msg = str(e) or "(no error message)"
                     logger.warning(
-                        f"{func.__name__} 失败 (attempt {attempt}/{self.MAX_RETRIES}): {e}, "
-                        f"{delay:.1f}s 后重试..."
+                        f"{func.__name__} 失败 (attempt {attempt}/{self.MAX_RETRIES}): "
+                        f"[{reason}] {msg}, {delay:.1f}s 后重试..."
                     )
                     await asyncio.sleep(delay)
-        logger.error(f"{func.__name__} 重试 {self.MAX_RETRIES} 次后仍然失败: {last_exc}")
+        reason = type(last_exc).__name__
+        msg = str(last_exc) or "(no error message)"
+        logger.error(f"{func.__name__} 重试 {self.MAX_RETRIES} 次后仍然失败: [{reason}] {msg}")
         raise last_exc
 
     async def get_fund_data(self, code: str, period: int = 250) -> FundData:
@@ -174,7 +210,7 @@ class AKShareAdapter(BaseDataSource):
                 match = info_df[info_df["基金代码"] == code]
                 if not match.empty:
                     fund_data.name = str(match.iloc[0]["基金简称"])
-                    return
+                    return fund_data
         except Exception as e:
             logger.debug(f"场外基金名称获取失败 code={code} (name_em): {e}")
 
@@ -235,29 +271,10 @@ class AKShareAdapter(BaseDataSource):
     async def _fill_fund_size(self, code: str, fund_data: FundData) -> None:
         """填充基金季度规模数据用于规模稳定性计算
 
-        多策略获取:
-        1. fund_scale_open_sina（原接口，部分基金可能可用）
-        2. fund_scale_daily_szse（深交所 ETF 日频份额数据）
+        fund_scale_open_sina 接口对多数基金不可靠（KeyError），直接跳过以节省时间。
+        策略: fund_scale_daily_szse（深交所 ETF 日频份额数据，仅 159 开头代码可用）。
         """
-        # 策略 1: fund_scale_open_sina（原接口）
-        try:
-            df = await self._call(ak.fund_scale_open_sina, symbol=code)
-            if df is not None and not df.empty:
-                size_col = None
-                for col in ["总募集规模", "总资产", "净资产", "最新规模", "基金规模"]:
-                    if col in df.columns:
-                        size_col = col
-                        break
-                if size_col:
-                    sizes = df[size_col].dropna().astype(float).tail(4).tolist()
-                    if sizes:
-                        fund_data.fund_size_history = sizes
-                        logger.info(f"基金规模数据填充完成: {len(sizes)} 期 (open_sina)")
-                        return
-        except Exception as e:
-            logger.debug(f"基金规模获取失败 code={code} (open_sina): {e}")
-
-        # 策略 2: fund_scale_daily_szse（深交所 ETF 份额数据）
+        # 仅尝试深交所 ETF 份额数据（159xxx）
         if code.startswith("159"):
             try:
                 end = date.today().isoformat()

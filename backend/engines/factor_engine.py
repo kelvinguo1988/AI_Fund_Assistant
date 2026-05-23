@@ -281,9 +281,10 @@ def calculate_momentum_6m(fund_data: FundData, params: Optional[dict] = None) ->
 
 
 def calculate_inv_volatility(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """波动率倒数 — 正向（低波动加分）
+    """波动率倒数 — 正向（低波动加分）, Z-score 标准化
 
-    公式: 1 / std(returns, 60)
+    公式: 1 / (std(returns, 60) * sqrt(252))
+    将日波动率年化后取倒数，低波动 → 高分
     返回值作为 pre-norm score，后续做截面 Z-score
     """
     window = (params or {}).get("window", 60)
@@ -296,10 +297,10 @@ def calculate_inv_volatility(fund_data: FundData, params: Optional[dict] = None)
     returns = np.diff(prices) / prices[:-1]
     recent = returns[-window:]
     vol = float(np.std(recent))
-    inv_vol = 1.0 / vol if vol > 0 else 0.0
+    inv_vol = 1.0 / (vol * np.sqrt(252)) if vol > 0 else 0.0
 
     # 返回 raw 的 inv_vol 作为评分（标准化阶段会做 Z-score 映射）
-    return FactorScoreResult("inv_volatility", "波动率倒数", round(inv_vol, 4), round(inv_vol, 4), "positive")
+    return FactorScoreResult("inv_volatility", "波动率倒数", round(inv_vol, 6), round(inv_vol, 6), "positive")
 
 
 def calculate_info_ratio(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
@@ -445,10 +446,155 @@ def calculate_size_stability(fund_data: FundData, params: Optional[dict] = None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 7 因子计算函数（用户自定义系统）
+# 标准化方式: Z-score 因子返回 raw_value，无标准化因子内嵌信号规则
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def calculate_short_momentum(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """短期动量（20 日）— 正向, Z-score 标准化
+
+    公式: nav / shift(nav, 20) - 1
+    窗口: 20 日
+    信号(标准化后): >0.01 买入, <-0.01 卖出, 其余观望
+    """
+    window = (params or {}).get("window", 20)
+    if not fund_data.close_history or len(fund_data.close_history) < window + 2:
+        return FactorScoreResult("short_momentum", "短期动量", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history)
+    mom = prices[-1] / prices[-window] - 1
+
+    # Z-score 因子返回 raw_value 作为 score，供截面标准化使用
+    return FactorScoreResult("short_momentum", "短期动量", round(mom, 6), round(mom, 6), "positive")
+
+
+def calculate_mid_momentum(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """中期动量（60 日）— 正向, Z-score 标准化
+
+    公式: nav / shift(nav, 60) - 1
+    窗口: 60 日
+    信号(标准化后): >0 买入, <0 卖出, 其余观望
+    """
+    window = (params or {}).get("window", 60)
+    if not fund_data.close_history or len(fund_data.close_history) < window + 2:
+        return FactorScoreResult("mid_momentum", "中期动量", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history)
+    mom = prices[-1] / prices[-window] - 1
+
+    return FactorScoreResult("mid_momentum", "中期动量", round(mom, 6), round(mom, 6), "positive")
+
+
+def calculate_drawdown_recovery(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """回撤修复度 — 正向, 无标准化（内嵌信号规则）
+
+    公式: nav / rolling_max(nav, 252)
+    当前净值占 252 日最高净值的比例，越接近 1 回撤修复越好。
+    信号: >0.95 → 1.0 (买入), 0.85~0.95 → 0.0 (观望), <0.85 → -1.0 (卖出)
+    """
+    window = (params or {}).get("window", 252)
+    if not fund_data.close_history or len(fund_data.close_history) < 60:
+        return FactorScoreResult("drawdown_recovery", "回撤修复度", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history[-window:])
+    rolling_max = float(np.maximum.accumulate(prices)[-1])
+    current = float(prices[-1])
+
+    if rolling_max <= 0:
+        return FactorScoreResult("drawdown_recovery", "回撤修复度", 1.0, 1.0, "positive")
+
+    ratio = current / rolling_max
+
+    # 内嵌信号规则（无标准化）
+    rules = [
+        {"condition": "> 0.95", "score": 1.0},
+        {"condition": ">= 0.85", "score": 0.0},
+        {"condition": "< 0.85", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(ratio, rules)
+    return FactorScoreResult("drawdown_recovery", "回撤修复度", round(ratio, 4), score, "positive")
+
+
+def calculate_return_risk_ratio(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """收益风险比 — 正向, Z-score 标准化
+
+    公式: mean(returns, 60) / (std(returns, 60) + 0.0001)
+    加极小值 0.0001 防除零。正值表示正期望收益。
+    信号(标准化后): >0.5σ 买入, <-0.5σ 卖出, 其余观望
+    """
+    window = (params or {}).get("window", 60)
+    epsilon = (params or {}).get("epsilon", 0.0001)
+    if not fund_data.close_history or len(fund_data.close_history) < window + 2:
+        return FactorScoreResult("return_risk_ratio", "收益风险比", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history[-window - 1:])
+    returns = np.diff(prices) / prices[:-1]
+
+    if len(returns) < 2:
+        return FactorScoreResult("return_risk_ratio", "收益风险比", 0.0, 0.0, "positive")
+
+    ratio = float(np.mean(returns)) / (float(np.std(returns)) + epsilon)
+    return FactorScoreResult("return_risk_ratio", "收益风险比", round(ratio, 6), round(ratio, 6), "positive")
+
+
+def calculate_momentum_accel(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """动量加速度 — 正向, Z-score 标准化
+
+    公式: mom20 - mom60
+    窗口: 60 日（短期 20 日, 中期 60 日）
+    正值表示短期动量强于中期（加速上涨），负值表示减速。
+    信号(标准化后): >0 加速买入, <0 减速卖出, ≈0 观望
+    """
+    short_w = (params or {}).get("short_window", 20)
+    mid_w = (params or {}).get("mid_window", 60)
+    lookback = max(short_w, mid_w)
+
+    if not fund_data.close_history or len(fund_data.close_history) < lookback + 2:
+        return FactorScoreResult("momentum_accel", "动量加速度", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history)
+    mom20 = prices[-1] / prices[-short_w] - 1
+    mom60 = prices[-1] / prices[-mid_w] - 1
+    accel = mom20 - mom60
+
+    return FactorScoreResult("momentum_accel", "动量加速度", round(accel, 6), round(accel, 6), "positive")
+
+
+def calculate_trend_consistency(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """趋势一致性 — 正向, Z-score 标准化
+
+    公式: mean([sign(mom20), sign(mom60)])
+    计算 20 日和 60 日动量方向的符号平均值：
+      +1 → 两周期同向上涨，趋势强
+       0 → 一正一负，趋势分歧
+      -1 → 两周期同向下跌，趋势弱
+    信号(标准化后): 同向买入, 反向卖出, 其余观望
+    """
+    short_w = (params or {}).get("short_window", 20)
+    mid_w = (params or {}).get("mid_window", 60)
+    lookback = max(short_w, mid_w)
+
+    if not fund_data.close_history or len(fund_data.close_history) < lookback + 2:
+        return FactorScoreResult("trend_consistency", "趋势一致性", 0.0, 0.0, "positive")
+
+    prices = np.array(fund_data.close_history)
+    mom20 = prices[-1] / prices[-short_w] - 1
+    mom60 = prices[-1] / prices[-mid_w] - 1
+
+    sign20 = 1.0 if mom20 > 0 else -1.0 if mom20 < 0 else 0.0
+    sign60 = 1.0 if mom60 > 0 else -1.0 if mom60 < 0 else 0.0
+    consistency = (sign20 + sign60) / 2.0
+
+    return FactorScoreResult("trend_consistency", "趋势一致性", round(consistency, 4), round(consistency, 4), "positive")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 因子注册表
 # ═══════════════════════════════════════════════════════════════════════
 
 FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreResult]] = {
+    # 核心 8 因子（兼容）
     "pe_percentile": calculate_pe_percentile,
     "fed_model": calculate_fed_model,
     "momentum_6m": calculate_momentum_6m,
@@ -457,6 +603,13 @@ FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreRe
     "macd_signal": calculate_macd_signal,
     "max_drawdown": calculate_max_drawdown,
     "size_stability": calculate_size_stability,
+    # 用户自定义 7 因子系统
+    "short_momentum": calculate_short_momentum,
+    "mid_momentum": calculate_mid_momentum,
+    "drawdown_recovery": calculate_drawdown_recovery,
+    "return_risk_ratio": calculate_return_risk_ratio,
+    "momentum_accel": calculate_momentum_accel,
+    "trend_consistency": calculate_trend_consistency,
 }
 
 
