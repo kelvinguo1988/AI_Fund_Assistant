@@ -37,7 +37,7 @@ import ScoreGauge from '../components/ScoreGauge';
 import FactorRadarChart from '../components/FactorRadarChart';
 import { analysisApi } from '../api/analysis';
 import { fundApi } from '../api/fund';
-import type { AnalysisResultOut, FundOut, MarketSummaryOut, MarketAdvDecline, MarketTurnover, SectorFlowItem } from '../types';
+import type { AnalysisResultOut, FundOut, MarketSummaryOut, SectorFlowItem } from '../types';
 
 const STRENGTH_COLOR_MAP: Record<string, 'error' | 'success' | 'default'> = {
   heavy_buy: 'error',
