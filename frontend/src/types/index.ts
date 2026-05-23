@@ -333,3 +333,17 @@ export interface MarketSummaryOut {
   adv_decline: MarketAdvDecline | null;
   turnover: MarketTurnover | null;
 }
+
+/* ── 连通性 ────────────────────────────────────────────────────────── */
+export interface ConnectivityItem {
+  name: string;
+  reachable: boolean;
+  latency_ms: number | null;
+  error: string | null;
+}
+
+export interface ConnectivityResult {
+  status: 'ok' | 'partial' | 'fail';
+  results: ConnectivityItem[];
+  summary: { total: number; reachable: number; unreachable: number };
+}

@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import type { ApiResponse, AIConfigUpdate, AIConfigOut, ScoringConfigOut, ScoringConfigUpdate } from '../types';
+import type { ApiResponse, AIConfigUpdate, AIConfigOut, ScoringConfigOut, ScoringConfigUpdate, ConnectivityResult } from '../types';
 
 const BASE = '/api/system';
 
@@ -19,4 +19,7 @@ export const systemApi = {
 
   updateScoringConfig: (data: ScoringConfigUpdate) =>
     apiClient.put<ApiResponse<ScoringConfigOut>>(`${BASE}/scoring-config`, data).then((r) => r.data),
+
+  testConnectivity: () =>
+    apiClient.get<ApiResponse<ConnectivityResult>>(`${BASE}/connectivity`).then((r) => r.data),
 };

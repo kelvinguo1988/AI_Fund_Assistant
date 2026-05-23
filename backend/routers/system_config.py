@@ -13,10 +13,12 @@ from backend.schemas.common import ApiResponse
 from backend.schemas.system_config import (
     AIConfigUpdate,
     AIConfigOut,
+    ConnectivityResult,
     ScoringConfigOut,
     ScoringConfigUpdate,
     ScoringTier,
 )
+from backend.services.connectivity_service import test_all_connectivity
 from backend.engines.scoring_engine import DEFAULT_THRESHOLDS
 
 logger = logging.getLogger(__name__)
@@ -174,3 +176,22 @@ async def update_scoring_config(
     await db.commit()
 
     return ApiResponse(data=ScoringConfigOut(thresholds=tiers))
+
+
+@router.get("/connectivity", response_model=ApiResponse[ConnectivityResult])
+async def test_connectivity(
+    db: AsyncSession = Depends(get_db),
+):
+    """测试所有数据源的连通性（东方财富系列域名 + AI API）"""
+    config_map = await _get_config_map(db)
+    ai_enabled = config_map.get("ai_enabled", "true").lower() == "true"
+    ai_base_url = config_map.get("ai_base_url", "")
+
+    try:
+        result = await test_all_connectivity(
+            ai_base_url=ai_base_url if ai_enabled else "",
+            ai_enabled=ai_enabled,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"AI API 配置无效: {e}")
+    return ApiResponse(data=result)

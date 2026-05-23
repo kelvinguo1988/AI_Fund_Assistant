@@ -61,7 +61,10 @@ const FundPool: React.FC = () => {
     setLoading(true);
     try {
       const res = await fundApi.list();
-      if (res.data) setFunds(res.data);
+      if (res.data) {
+        setFunds(res.data);
+        setSelected((prev) => prev.filter((id) => res.data!.some((f) => f.id === id)));
+      }
     } catch {
       setSnackbar({ open: true, message: '加载基金列表失败', severity: 'error' });
     } finally {
@@ -135,6 +138,17 @@ const FundPool: React.FC = () => {
     setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   };
 
+  const allSelected = funds.length > 0 && funds.every((f) => selected.includes(f.id));
+  const someSelected = selected.length > 0 && !allSelected;
+
+  const toggleSelectAll = () => {
+    if (allSelected) {
+      setSelected([]);
+    } else {
+      setSelected(funds.map((f) => f.id));
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -155,7 +169,14 @@ const FundPool: React.FC = () => {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell padding="checkbox"></TableCell>
+              <TableCell padding="checkbox">
+                <Checkbox
+                  checked={allSelected}
+                  indeterminate={someSelected}
+                  onChange={toggleSelectAll}
+                  size="small"
+                />
+              </TableCell>
               <TableCell>代码</TableCell>
               <TableCell>名称</TableCell>
               <TableCell>类型</TableCell>

@@ -1,6 +1,6 @@
 """系统配置 Pydantic Schema"""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -40,3 +40,18 @@ class ScoringConfigOut(BaseModel):
 class ScoringConfigUpdate(BaseModel):
     """评分配置更新请求体"""
     thresholds: list[ScoringTier] = Field(..., min_length=3, max_length=10, description="阈值配置列表")
+
+
+class ConnectivityItem(BaseModel):
+    """单个连通性测试结果"""
+    name: str = Field(..., description="测试目标名称/域名")
+    reachable: bool = Field(..., description="是否可达")
+    latency_ms: Optional[float] = Field(None, description="延迟(毫秒)")
+    error: Optional[str] = Field(None, description="错误信息")
+
+
+class ConnectivityResult(BaseModel):
+    """连通性测试汇总结果"""
+    status: Literal["ok", "partial", "fail"] = Field(..., description="整体状态: ok / partial / fail")
+    results: list[ConnectivityItem] = Field(default_factory=list)
+    summary: dict[str, int] = Field(default_factory=dict, description="{total, reachable, unreachable}")
