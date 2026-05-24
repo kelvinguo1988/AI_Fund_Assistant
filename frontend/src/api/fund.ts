@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import type { ApiResponse, FundCreate, FundUpdate, FundOut } from '../types';
+import type { ApiResponse, FundCreate, FundUpdate, FundOut, FundPeriodReturn, FundHoldingOut, FundManagerOut, FundChangeSummary } from '../types';
 
 const BASE = '/api/funds';
 
@@ -25,4 +25,22 @@ export const fundApi = {
 
   batchImport: (items: { code: string; name: string; tags?: string }[]) =>
     apiClient.post<ApiResponse<{ total: number; created: number; skipped: string[]; errors: string[] }>>(`${BASE}/import`, { items }).then((r) => r.data),
+
+  detail: () =>
+    apiClient.get<ApiResponse<FundPeriodReturn[]>>(`${BASE}/detail`).then((r) => r.data),
+
+  getHoldings: (id: number) =>
+    apiClient.get<ApiResponse<FundHoldingOut[]>>(`${BASE}/${id}/holdings`).then((r) => r.data),
+
+  getManager: (id: number) =>
+    apiClient.get<ApiResponse<FundManagerOut[]>>(`${BASE}/${id}/manager`).then((r) => r.data),
+
+  refreshDetails: () =>
+    apiClient.post<ApiResponse<{ total: number; results: any[] }>>(`${BASE}/refresh-details`).then((r) => r.data),
+
+  refreshThemes: (id: number) =>
+    apiClient.post<ApiResponse<FundOut>>(`${BASE}/${id}/refresh-themes`).then((r) => r.data),
+
+  getChangeSummary: () =>
+    apiClient.get<ApiResponse<FundChangeSummary[]>>(`${BASE}/change-summary`).then((r) => r.data),
 };

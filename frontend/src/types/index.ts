@@ -334,6 +334,72 @@ export interface MarketSummaryOut {
   turnover: MarketTurnover | null;
 }
 
+/* ── 基金阶段涨幅 ──────────────────────────────────────────────────── */
+export interface FundPeriodReturn {
+  code: string;
+  name: string;
+  return_1m: string | null;
+  return_3m: string | null;
+  return_6m: string | null;
+  return_1y: string | null;
+}
+
+/* ── 基金持仓 ──────────────────────────────────────────────────────── */
+export interface FundHoldingOut {
+  stock_code: string;
+  stock_name: string;
+  ratio: number | null;
+  shares: number | null;
+  market_value: number | null;
+  quarter_label: string;
+}
+
+/* ── 基金经理 ──────────────────────────────────────────────────────── */
+export interface FundManagerOut {
+  manager_name: string;
+  company: string | null;
+  tenure_days: number | null;
+  asset_scale: number | null;
+  best_return: number | null;
+}
+
+/* ── 基金变更摘要 ─────────────────────────────────────────────────── */
+export interface HoldingChangeItem {
+  stock_code: string;
+  stock_name: string;
+  ratio: number | null;
+}
+
+export interface HoldingChanges {
+  latest_quarter: string;
+  previous_quarter: string;
+  added: HoldingChangeItem[];
+  removed: HoldingChangeItem[];
+}
+
+export interface ManagerChangeInfo {
+  manager_name: string;
+  company: string | null;
+  tenure_days: number | null;
+  asset_scale: number | null;
+  best_return: number | null;
+}
+
+export interface ManagerChanges {
+  current: ManagerChangeInfo[];
+  history: ManagerChangeInfo[];
+  changed: boolean;
+}
+
+export interface FundChangeSummary {
+  fund_id: number;
+  fund_code: string;
+  fund_name: string;
+  holding_changes: HoldingChanges | null;
+  manager_changes: ManagerChanges | null;
+  tags: string[];
+}
+
 /* ── 连通性 ────────────────────────────────────────────────────────── */
 export interface ConnectivityItem {
   name: string;

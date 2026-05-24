@@ -26,10 +26,26 @@ import {
   Snackbar,
   Alert,
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Upload as UploadIcon } from '@mui/icons-material';
+import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Upload as UploadIcon, Refresh as RefreshIcon } from '@mui/icons-material';
 import { fundApi } from '../api/fund';
 import type { FundOut, FundCreate, FundUpdate } from '../types';
 import ConfirmDialog from '../components/ConfirmDialog';
+
+/** 主题标签颜色调色板：高区分度色值，同主题始终映射到同色 */
+const THEME_COLORS = [
+  '#1976D2', '#388E3C', '#F57C00', '#7B1FA2',
+  '#C2185B', '#0097A7', '#E64A19', '#512DA8',
+  '#00796B', '#D32F2F', '#FBC02D', '#5D4037',
+];
+
+const getThemeColor = (tag: string): string => {
+  let hash = 0;
+  for (let i = 0; i < tag.length; i++) {
+    hash = hash * 31 + tag.charCodeAt(i);
+    hash |= 0;
+  }
+  return THEME_COLORS[Math.abs(hash) % THEME_COLORS.length];
+};
 
 const FUND_TYPES = [
   { value: 'etf', label: 'ETF（场内）' },
@@ -50,6 +66,7 @@ const FundPool: React.FC = () => {
   const [importText, setImportText] = useState('');
   const [_importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ total: number; created: number; skipped: string[]; errors: string[] } | null>(null);
+  const [refreshingId, setRefreshingId] = useState<number | null>(null);
 
   // 表单状态
   const [formCode, setFormCode] = useState('');
@@ -151,7 +168,7 @@ const FundPool: React.FC = () => {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5">基金池管理</Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
           {selected.length > 0 && (
@@ -196,7 +213,8 @@ const FundPool: React.FC = () => {
                 <TableCell>{fund.fund_type === 'etf' ? 'ETF' : '场外'}</TableCell>
                 <TableCell>
                   {(fund.tags || '').split(',').filter(Boolean).map((tag) => (
-                    <Chip key={tag} label={tag} size="small" sx={{ mr: 0.5 }} />
+                    <Chip key={tag} label={tag} size="small"
+                      sx={{ backgroundColor: getThemeColor(tag), color: '#fff', mr: 0.5, mb: 0.3 }} />
                   ))}
                 </TableCell>
                 <TableCell>
@@ -204,6 +222,18 @@ const FundPool: React.FC = () => {
                     color={fund.status === 'active' ? 'success' : 'default'} />
                 </TableCell>
                 <TableCell>
+                  <IconButton size="small" title="刷新主题" disabled={refreshingId === fund.id}
+                    onClick={async () => {
+                      setRefreshingId(fund.id);
+                      try {
+                        await fundApi.refreshThemes(fund.id);
+                        setSnackbar({ open: true, message: '主题刷新成功', severity: 'success' });
+                        loadFunds();
+                      } catch { setSnackbar({ open: true, message: '主题刷新失败', severity: 'error' }); }
+                      finally { setRefreshingId(null); }
+                    }}>
+                    <RefreshIcon fontSize="small" />
+                  </IconButton>
                   <IconButton size="small" onClick={() => handleOpenEdit(fund)}><EditIcon fontSize="small" /></IconButton>
                   <IconButton size="small" color="error" onClick={() => setDeleteTarget(fund)}><DeleteIcon fontSize="small" /></IconButton>
                 </TableCell>
@@ -226,7 +256,8 @@ const FundPool: React.FC = () => {
           <TextField label="基金类型" value={formType} onChange={(e) => setFormType(e.target.value as any)} select>
             {FUND_TYPES.map((t) => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}
           </TextField>
-          <TextField label="标签(逗号分隔)" value={formTags} onChange={(e) => setFormTags(e.target.value)} placeholder="宽基,大盘" />
+          <TextField label="标签(逗号分隔)" value={formTags} onChange={(e) => setFormTags(e.target.value)} placeholder="宽基,大盘"
+            helperText="不填时系统将自动从天天基金抓取相关主题作为标签" />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>取消</Button>
@@ -242,7 +273,7 @@ const FundPool: React.FC = () => {
             每行一个基金，格式：<code>代码 名称 标签(可选)</code>。例如：<br />
             <code>510300 沪深300ETF 宽基,大盘</code><br />
             <code>018495 融通产业趋势臻选股票C</code><br />
-            已有代码会被自动跳过。
+            已有代码会被自动跳过。不填标签时系统将自动从天天基金抓取相关主题作为标签。
           </Typography>
           <TextField
             label="基金列表"

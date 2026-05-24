@@ -24,6 +24,7 @@ import {
 import {
   Dashboard as DashboardIcon,
   AccountBalanceWallet as FundIcon,
+  Assessment as DetailIcon,
   Tune as FactorIcon,
   Send as PushIcon,
   Description as ReportIcon,
@@ -47,6 +48,7 @@ import SchedulePlan from './pages/SchedulePlan';
 import HistoryReports from './pages/HistoryReports';
 import ScoringConfig from './pages/ScoringConfig';
 import SystemPage from './pages/System';
+import FundDetailPage from './pages/FundDetailPage';
 
 /* ── MUI 主题（红涨绿跌） ─────────────────────────────────────────── */
 const theme = createTheme({
@@ -67,6 +69,7 @@ const theme = createTheme({
 const NAV_ITEMS = [
   { key: 'dashboard', label: '仪表盘', icon: <DashboardIcon />, path: '/dashboard' },
   { key: 'funds', label: '基金池', icon: <FundIcon />, path: '/funds' },
+  { key: 'fund-detail', label: '基金详情', icon: <DetailIcon />, path: '/fund-details' },
   { key: 'factors', label: '因子管理', icon: <FactorIcon />, path: '/factors' },
   { key: 'push', label: '推送配置', icon: <PushIcon />, path: '/push' },
   { key: 'report', label: '报告配置', icon: <ReportIcon />, path: '/report' },
@@ -178,6 +181,7 @@ const AppLayout: React.FC = () => {
         <Routes>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/funds" element={<FundPool />} />
+          <Route path="/fund-details" element={<FundDetailPage />} />
           <Route path="/factors" element={<FactorManagement />} />
           <Route path="/push" element={<PushConfig />} />
           <Route path="/report" element={<ReportConfig />} />

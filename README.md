@@ -25,7 +25,7 @@ AI_Fund_Assistant/
 │   ├── push/                   # 推送机器人（飞书等）
 │   └── scheduler/              # 定时任务调度
 ├── frontend/                   # React + TypeScript + MUI
-│   ├── src/pages/              # 8 个管理页面
+│   ├── src/pages/              # 9 个管理页面
 │   ├── src/components/         # 图表组件（ECharts）
 │   ├── src/api/                # API 客户端
 │   └── nginx.conf              # Nginx（API 反向代理 + SPA）
@@ -42,8 +42,9 @@ AI_Fund_Assistant/
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
 - **多数据源链**：AKShare → TuShare → BaoStock → TickFlow，自动降级恢复
-- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、因子管理、报告配置、调度计划
-- **一键批量导入**：自动识别 ETF/场外类型
+- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、报告配置、调度计划
+- **基金详情模块**：阶段涨幅排序展示、季度持仓明细（可展开）、基金经理信息，含调仓 diff 和经理变更标注
+- **一键批量导入**：自动识别 ETF/场外类型，自动从天天基金抓取相关主题标签
 - **定时分析**：交易日自动执行 + 手动触发
 - **流式分析**：手动触发时分块处理基金数据，SSE 逐块推送结果至仪表盘，实时展示进度与中间结果
 - **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析）
@@ -134,6 +135,12 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/funds/import` | POST | 批量导入 |
 | `/api/funds/{id}` | PUT/DELETE | 更新 / 删除 |
 | `/api/funds/batch` | PATCH | 批量启用/停用 |
+| `/api/funds/detail` | GET | 基金阶段涨幅列表 |
+| `/api/funds/{id}/holdings` | GET | 基金最新季度持仓 |
+| `/api/funds/{id}/manager` | GET | 基金经理信息 |
+| `/api/funds/change-summary` | GET | 持仓调仓 + 经理变更摘要 |
+| `/api/funds/refresh-details` | POST | 刷新所有基金持仓 + 经理数据 |
+| `/api/funds/{id}/refresh-themes` | POST | 重新抓取天天基金主题标签 |
 | `/api/analysis` | GET | 查询分析结果 |
 | `/api/analysis/latest` | GET | 最新分析结果 |
 | `/api/analysis/summary` | GET | 市场概况汇总（信号TOP5 + 资金流 + 板块排行 + 涨跌分布 + 成交额） |

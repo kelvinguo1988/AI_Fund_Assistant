@@ -8,6 +8,8 @@ from backend.models.report_config import ReportConfig
 from backend.models.analysis_result import AnalysisResult
 from backend.models.ai_conversation import AIConversation
 from backend.models.system_config import SystemConfig
+from backend.models.fund_holding import FundHolding
+from backend.models.fund_manager_record import FundManagerRecord
 
 __all__ = [
     "Fund",
@@ -18,4 +20,6 @@ __all__ = [
     "AnalysisResult",
     "AIConversation",
     "SystemConfig",
+    "FundHolding",
+    "FundManagerRecord",
 ]

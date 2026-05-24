@@ -34,3 +34,77 @@ class FundOut(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class FundHoldingOut(BaseModel):
+    """基金持仓输出"""
+    stock_code: str
+    stock_name: str
+    ratio: Optional[float] = None
+    shares: Optional[float] = None
+    market_value: Optional[float] = None
+    quarter_label: str
+
+    model_config = {"from_attributes": True}
+
+
+class FundManagerOut(BaseModel):
+    """基金经理输出"""
+    manager_name: str
+    company: Optional[str] = None
+    tenure_days: Optional[int] = None
+    asset_scale: Optional[float] = None
+    best_return: Optional[float] = None
+
+    model_config = {"from_attributes": True}
+
+
+class FundPeriodReturn(BaseModel):
+    """基金阶段涨幅"""
+    code: str
+    name: str
+    return_1m: Optional[str] = None
+    return_3m: Optional[str] = None
+    return_6m: Optional[str] = None
+    return_1y: Optional[str] = None
+
+
+class HoldingChangeItem(BaseModel):
+    """调仓明细项"""
+    stock_code: str
+    stock_name: str
+    ratio: Optional[float] = None
+
+
+class HoldingChanges(BaseModel):
+    """持仓变更"""
+    latest_quarter: str
+    previous_quarter: str
+    added: list[HoldingChangeItem] = []
+    removed: list[HoldingChangeItem] = []
+
+
+class ManagerChangeInfo(BaseModel):
+    """经理变更信息"""
+    manager_name: str
+    company: Optional[str] = None
+    tenure_days: Optional[int] = None
+    asset_scale: Optional[float] = None
+    best_return: Optional[float] = None
+
+
+class ManagerChanges(BaseModel):
+    """经理变更"""
+    current: list[ManagerChangeInfo] = []
+    history: list[ManagerChangeInfo] = []
+    changed: bool = False
+
+
+class FundChangeSummary(BaseModel):
+    """基金变更摘要"""
+    fund_id: int
+    fund_code: str
+    fund_name: str
+    holding_changes: Optional[HoldingChanges] = None
+    manager_changes: Optional[ManagerChanges] = None
+    tags: list[str] = []
