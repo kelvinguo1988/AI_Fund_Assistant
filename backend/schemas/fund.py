@@ -69,6 +69,19 @@ class FundPeriodReturn(BaseModel):
     return_1y: Optional[str] = None
 
 
+class FundDetailResponse(BaseModel):
+    """基金详情响应（含缓存时间）"""
+    funds: list[FundPeriodReturn] = []
+    updated_at: Optional[str] = None
+
+
+class FundDetailStatus(BaseModel):
+    """基金详情缓存状态"""
+    has_cache: bool = False
+    updated_at: Optional[str] = None
+    refreshing: bool = False
+
+
 class HoldingChangeItem(BaseModel):
     """调仓明细项"""
     stock_code: str

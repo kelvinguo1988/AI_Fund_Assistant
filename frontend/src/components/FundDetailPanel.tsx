@@ -322,28 +322,35 @@ interface FundItem {
   name: string;
 }
 
-const FundDetailPanel: React.FC = () => {
+interface Props {
+  returns?: FundPeriodReturn[];
+  loading?: boolean;
+  updatedAt?: string | null;
+}
+
+const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: externalLoading }) => {
   const [tabIdx, setTabIdx] = useState(0);
-  const [returns, setReturns] = useState<FundPeriodReturn[]>([]);
   const [funds, setFunds] = useState<FundItem[]>([]);
   const [changesMap, setChangesMap] = useState<Record<number, any>>({});
-  const [loading, setLoading] = useState(true);
+  const [returns, setReturns] = useState<FundPeriodReturn[]>(externalReturns || []);
+  const [loading, setLoading] = useState(externalLoading ?? true);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = async () => {
-    setLoading(true);
-    setError(null);
+    if (externalReturns && externalReturns.length > 0) {
+      // 外部已提供阶段涨幅数据
+      setReturns(externalReturns);
+    }
+
+    // 基金列表 + 变更摘要始终并行加载（不依赖外部缓存）
     try {
-      const [listRes, detailRes, changeRes] = await Promise.all([
+      const [listRes, changeRes] = await Promise.all([
         fundApi.list('active'),
-        fundApi.detail(),
         fundApi.getChangeSummary(),
       ]);
       const fundList: FundItem[] = (listRes.data || []).map((f: any) => ({ id: f.id, code: f.code, name: f.name }));
       setFunds(fundList);
-      setReturns(detailRes.data || []);
 
-      // 构建变更索引
       const cm: Record<number, any> = {};
       (changeRes.data || []).forEach((c: any) => {
         cm[c.fund_id] = {
@@ -360,6 +367,18 @@ const FundDetailPanel: React.FC = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (externalReturns) {
+      setReturns(externalReturns);
+    }
+  }, [externalReturns]);
+
+  useEffect(() => {
+    if (externalLoading !== undefined) {
+      setLoading(externalLoading);
+    }
+  }, [externalLoading]);
 
   useEffect(() => { loadData(); }, []);
 

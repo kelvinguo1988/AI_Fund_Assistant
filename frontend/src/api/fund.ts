@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import type { ApiResponse, FundCreate, FundUpdate, FundOut, FundPeriodReturn, FundHoldingOut, FundManagerOut, FundChangeSummary } from '../types';
+import type { ApiResponse, FundCreate, FundUpdate, FundOut, FundHoldingOut, FundManagerOut, FundChangeSummary, FundDetailResponse, FundDetailStatus } from '../types';
 
 const BASE = '/api/funds';
 
@@ -27,7 +27,10 @@ export const fundApi = {
     apiClient.post<ApiResponse<{ total: number; created: number; skipped: string[]; errors: string[] }>>(`${BASE}/import`, { items }).then((r) => r.data),
 
   detail: () =>
-    apiClient.get<ApiResponse<FundPeriodReturn[]>>(`${BASE}/detail`).then((r) => r.data),
+    apiClient.get<ApiResponse<FundDetailResponse>>(`${BASE}/detail`).then((r) => r.data),
+
+  detailStatus: () =>
+    apiClient.get<ApiResponse<FundDetailStatus>>(`${BASE}/detail/status`).then((r) => r.data),
 
   getHoldings: (id: number) =>
     apiClient.get<ApiResponse<FundHoldingOut[]>>(`${BASE}/${id}/holdings`).then((r) => r.data),

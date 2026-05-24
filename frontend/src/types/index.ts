@@ -391,6 +391,18 @@ export interface ManagerChanges {
   changed: boolean;
 }
 
+/* ── 基金详情缓存 ───────────────────────────────────────────────── */
+export interface FundDetailResponse {
+  funds: FundPeriodReturn[];
+  updated_at: string | null;
+}
+
+export interface FundDetailStatus {
+  has_cache: boolean;
+  updated_at: string | null;
+  refreshing: boolean;
+}
+
 export interface FundChangeSummary {
   fund_id: number;
   fund_code: string;

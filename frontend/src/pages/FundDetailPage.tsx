@@ -1,58 +1,142 @@
 /**
- * 基金详情页面 — 阶段涨幅 / 持仓明细 / 调仓变更 / 基金经理
- * 独立页面，与基金池管理分离
+ * 基金详情页面 — 先展示缓存数据，后台刷新后更新
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
   Button,
   Alert,
+  Chip,
+  CircularProgress,
 } from '@mui/material';
 import { Refresh as RefreshIcon } from '@mui/icons-material';
 import { fundApi } from '../api/fund';
 import FundDetailPanel from '../components/FundDetailPanel';
+import type { FundPeriodReturn } from '../types';
 
 const FundDetailPage: React.FC = () => {
-  const [error, setError] = useState<string | null>(null);
+  const [returns, setReturns] = useState<FundPeriodReturn[]>([]);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [refreshResult, setRefreshResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshStatus, setRefreshStatus] = useState<string>('');
+  const refreshed = useRef(false);
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    setError(null);
-    setRefreshResult(null);
+  /** 加载缓存数据 */
+  const loadCached = async () => {
     try {
+      const res = await fundApi.detail();
+      if (res.data) {
+        setReturns(res.data.funds || []);
+        setUpdatedAt(res.data.updated_at || null);
+      }
+    } catch (err) {
+      console.error('加载基金详情失败', err);
+      setError('加载基金详情失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** 后台刷新数据 */
+  const refreshInBackground = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshStatus('正在刷新阶段涨幅...');
+    setError(null);
+    try {
+      // 先刷新阶段涨幅（较快），然后刷新持仓+经理（较慢）
       const res = await fundApi.refreshDetails();
-      const total = res.data?.total ?? 0;
-      const errors = (res.data?.results ?? []).filter((r: any) => r.error).length;
-      setRefreshResult(`刷新完成: ${total} 只基金, ${errors > 0 ? `${errors} 只失败` : '全部成功'}`);
-    } catch {
-      setError('刷新详情失败');
+      const r = res.data as any;
+      const total = r?.total ?? 0;
+      const errors = (r?.results ?? []).filter((x: any) => x.error).length;
+      if (r?.updated_at) {
+        setUpdatedAt(r.updated_at);
+      }
+      setRefreshStatus(`刷新完成: ${total} 只基金${errors > 0 ? `, ${errors} 只失败` : ''}`);
+
+      // 重载最新数据
+      const updated = await fundApi.detail();
+      if (updated.data) {
+        setReturns(updated.data.funds || []);
+        if (updated.data.updated_at) {
+          setUpdatedAt(updated.data.updated_at);
+        }
+      }
+    } catch (err: any) {
+      console.error('刷新详情失败', err);
+      setError('刷新详情失败: ' + (err.message || ''));
     } finally {
       setRefreshing(false);
     }
   };
 
+  // 首次加载：先展示缓存，再后台刷新
+  useEffect(() => {
+    loadCached().then(() => {
+      if (!refreshed.current) {
+        refreshed.current = true;
+        refreshInBackground();
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const formatTime = (iso: string | null) => {
+    if (!iso) return '暂无';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString('zh-CN', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch {
+      return iso;
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h5">基金详情</Typography>
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-          {refreshResult && (
-            <Typography variant="body2" color="success.main">{refreshResult}</Typography>
+      {/* 顶栏 */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Typography variant="h5">基金详情</Typography>
+          <Chip size="small" label={`数据更新: ${formatTime(updatedAt)}`}
+            variant="outlined" sx={{ fontSize: '0.75rem' }} />
+          {refreshing && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <CircularProgress size={14} />
+              <Typography variant="caption" color="text.secondary">{refreshStatus}</Typography>
+            </Box>
           )}
-          <Button size="small" variant="outlined" startIcon={<RefreshIcon />}
-            disabled={refreshing} onClick={handleRefresh}>
-            {refreshing ? '刷新中...' : '刷新详情'}
-          </Button>
         </Box>
+        <Button size="small" variant="outlined" startIcon={<RefreshIcon />}
+          disabled={refreshing} onClick={refreshInBackground}>
+          {refreshing ? '刷新中...' : '刷新数据'}
+        </Button>
       </Box>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {/* 刷新结果提示 */}
+      {refreshStatus && !refreshing && (
+        <Alert severity="success" sx={{ mb: 1.5, py: 0, '& .MuiAlert-message': { py: 0.8 } }}>
+          {refreshStatus}
+        </Alert>
+      )}
+      {error && (
+        <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
 
-      <FundDetailPanel />
+      {/* 主面板 */}
+      <FundDetailPanel
+        returns={returns}
+        loading={loading}
+        updatedAt={updatedAt}
+      />
     </Box>
   );
 };

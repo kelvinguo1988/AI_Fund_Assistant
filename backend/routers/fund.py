@@ -15,6 +15,12 @@ from backend.schemas.common import ApiResponse
 from backend.schemas.fund import (
     FundCreate, FundUpdate, FundOut, FundPeriodReturn,
     FundHoldingOut, FundManagerOut, FundChangeSummary,
+    FundDetailResponse, FundDetailStatus,
+)
+from backend.services.fund_cache_service import (
+    get_cached_period_returns,
+    get_last_refreshed_time,
+    update_period_returns_cache,
 )
 from backend.services.fund_detail_service import fetch_period_returns
 from backend.services.fund_holding_service import get_latest_holdings, refresh_holdings
@@ -124,9 +130,23 @@ async def get_fund_manager(
 async def refresh_all_details(
     db: AsyncSession = Depends(get_db),
 ):
-    """刷新所有活跃基金的持仓+经理数据（不带标签写入）"""
+    """刷新所有活跃基金的持仓+经理+阶段涨幅数据（先展示缓存，后台刷新）"""
     svc = FundService(db)
     funds = await svc.list_funds(status="active")
+    if not funds:
+        return ApiResponse(data={"total": 0, "results": []})
+
+    codes = [f.code for f in funds]
+    name_map = {f.code: f.name for f in funds}
+
+    # 1. 先刷新阶段涨幅缓存（最快，批量 pingzhongdata 请求）
+    try:
+        await update_period_returns_cache(db, codes, name_map)
+        logger.info("阶段涨幅缓存已更新 (%d 只)", len(codes))
+    except Exception as e:
+        logger.warning("阶段涨幅刷新异常: %s", e)
+
+    # 2. 逐只刷新持仓+经理（慢，需反爬间隔）
     results: list[dict] = []
     for i, f in enumerate(funds):
         try:
@@ -141,7 +161,13 @@ async def refresh_all_details(
         if i < len(funds) - 1:
             await asyncio.sleep(random.uniform(3, 6))
     await db.commit()
-    return ApiResponse(data={"total": len(funds), "results": results})
+
+    new_updated = await get_last_refreshed_time(db)
+    return ApiResponse(data={
+        "total": len(funds),
+        "results": results,
+        "updated_at": new_updated,
+    })
 
 
 @router.get("/change-summary", response_model=ApiResponse[list[FundChangeSummary]])
@@ -166,16 +192,29 @@ async def get_funds_change_summary(
     return ApiResponse(data=data)
 
 
-@router.get("/detail", response_model=ApiResponse[list[FundPeriodReturn]])
+@router.get("/detail", response_model=ApiResponse[FundDetailResponse])
 async def get_funds_detail(
     db: AsyncSession = Depends(get_db),
 ):
-    """获取基金池内所有活跃基金的阶段涨幅"""
+    """获取基金池内所有活跃基金的阶段涨幅（优先返回缓存数据）
+
+    返回 cached=true 时表示是缓存数据，updated_at 为缓存时间。
+    前端应显示缓存数据，再在后台调用 POST refresh-details 刷新。
+    """
     svc = FundService(db)
     funds = await svc.list_funds(status="active")
     if not funds:
-        return ApiResponse(data=[])
+        return ApiResponse(data=FundDetailResponse())
 
+    # 尝试从缓存读取
+    cached_data, updated_at = await get_cached_period_returns(db)
+    if cached_data:
+        return ApiResponse(data=FundDetailResponse(
+            funds=[FundPeriodReturn(**item) for item in cached_data],
+            updated_at=updated_at,
+        ))
+
+    # 无缓存时直接抓取
     codes = [f.code for f in funds]
     name_map = {f.code: f.name for f in funds}
     returns = await fetch_period_returns(codes)
@@ -188,7 +227,27 @@ async def get_funds_detail(
         )
         for code in codes
     ]
-    return ApiResponse(data=data)
+
+    # 写入缓存
+    await update_period_returns_cache(db, codes, name_map)
+    new_updated = await get_last_refreshed_time(db)
+
+    return ApiResponse(data=FundDetailResponse(
+        funds=data,
+        updated_at=new_updated,
+    ))
+
+
+@router.get("/detail/status", response_model=ApiResponse[FundDetailStatus])
+async def get_funds_detail_status(
+    db: AsyncSession = Depends(get_db),
+):
+    """获取基金详情缓存状态 — 前端用于判断是否需要刷新"""
+    cached_data, updated_at = await get_cached_period_returns(db)
+    return ApiResponse(data=FundDetailStatus(
+        has_cache=bool(cached_data),
+        updated_at=updated_at,
+    ))
 
 
 @router.post("/{fund_id}/refresh-themes", response_model=ApiResponse[FundOut])
