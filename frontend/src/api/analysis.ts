@@ -22,6 +22,9 @@ export const analysisApi = {
   summary: () =>
     apiClient.get<ApiResponse<MarketSummaryOut>>(`${BASE}/summary`).then((r) => r.data),
 
+  refreshSummary: () =>
+    apiClient.post<ApiResponse<{ updated_at: string }>>(`${BASE}/refresh-summary`, {}, { timeout: 180000 }).then((r) => r.data),
+
   /** 流式触发分析 — 使用 fetch ReadableStream 消费 SSE，逐块更新回调 */
   triggerStream: (
     fundIds: number[] | undefined,

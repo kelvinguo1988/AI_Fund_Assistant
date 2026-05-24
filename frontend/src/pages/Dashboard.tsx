@@ -18,6 +18,7 @@ import {
   Paper,
   Button,
   Chip,
+  CircularProgress,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -62,6 +63,7 @@ const Dashboard: React.FC = () => {
   const [results, setResults] = useState<AnalysisResultOut[]>([]);
   const [summary, setSummary] = useState<MarketSummaryOut | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'info' });
   const [selectedFund, setSelectedFund] = useState<AnalysisResultOut | null>(null);
 
@@ -76,8 +78,10 @@ const Dashboard: React.FC = () => {
 
   const [sectorTab, setSectorTab] = useState(0);
   const [refreshTime, setRefreshTime] = useState<string | null>(null);
+  const refreshed = React.useRef(false);
 
-  const loadLatest = async () => {
+  /** 加载缓存数据（快速） */
+  const loadCached = async () => {
     setLoading(true);
     try {
       const [res, sumRes] = await Promise.all([
@@ -90,8 +94,10 @@ const Dashboard: React.FC = () => {
           setSelectedFund(res.data[0]);
         }
       }
-      if (sumRes?.data) setSummary(sumRes.data);
-      setRefreshTime(new Date().toLocaleString('zh-CN'));
+      if (sumRes?.data) {
+        setSummary(sumRes.data);
+        setRefreshTime(sumRes.data.updated_at || null);
+      }
     } catch (err: any) {
       setSnackbar({ open: true, message: '加载数据失败', severity: 'error' });
     } finally {
@@ -99,8 +105,40 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  /** 后台刷新行情数据 */
+  const refreshInBackground = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await analysisApi.refreshSummary();
+      // 重载最新数据
+      const [res, sumRes] = await Promise.all([
+        analysisApi.latest(),
+        analysisApi.summary(),
+      ]);
+      if (res.data) {
+        setResults(res.data);
+      }
+      if (sumRes?.data) {
+        setSummary(sumRes.data);
+        setRefreshTime(sumRes.data.updated_at || new Date().toLocaleString('zh-CN'));
+      }
+    } catch (err: any) {
+      console.error('刷新行情失败', err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // 首次加载：先展示缓存，再后台刷新
   useEffect(() => {
-    loadLatest();
+    loadCached().then(() => {
+      if (!refreshed.current) {
+        refreshed.current = true;
+        refreshInBackground();
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 组件卸载时中断流式请求
@@ -197,20 +235,25 @@ const Dashboard: React.FC = () => {
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Typography variant="h5">仪表盘</Typography>
-          {refreshTime && (
-            <Typography variant="caption" color="text.secondary">数据时间: {refreshTime}</Typography>
+          <Chip size="small" label={`数据更新: ${refreshTime || '暂无'}`}
+            variant="outlined" sx={{ fontSize: '0.75rem' }} />
+          {refreshing && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <CircularProgress size={14} />
+              <Typography variant="caption" color="text.secondary">正在刷新行情...</Typography>
+            </Box>
           )}
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
             variant="outlined"
             startIcon={<RefreshIcon />}
-            onClick={loadLatest}
-            disabled={loading || !!streaming?.active}
+            onClick={refreshInBackground}
+            disabled={refreshing || !!streaming?.active}
           >
-            刷新
+            {refreshing ? '刷新中...' : '刷新'}
           </Button>
           <Button
             variant="contained"

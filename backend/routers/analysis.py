@@ -16,7 +16,9 @@ from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.schemas.common import ApiResponse
 from backend.schemas.analysis import FactorScore, AnalysisResultOut
-from backend.schemas.market import MarketSummaryOut, SignalSummary
+from backend.schemas.market import MarketSummaryOut, SignalSummary, MarketCapitalFlow, SectorFlowRanking, HSGTFlow, MarketAdvDecline, MarketTurnover
+
+CACHE_KEY_MARKET = "market_summary"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -115,7 +117,7 @@ async def get_latest_analysis(db: AsyncSession = Depends(get_db)):
 
 @router.get("/summary", response_model=ApiResponse[MarketSummaryOut])
 async def get_market_summary(db: AsyncSession = Depends(get_db)):
-    """获取市场概况汇总 — 信号TOP5 + 资金流 + 板块排行"""
+    """获取市场概况汇总 — 先展示缓存，后台刷新"""
     from sqlalchemy import func
 
     # 1. 获取最新分析日期
@@ -125,7 +127,7 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
     today_str = date.today().isoformat()
     summary_date = latest_date.isoformat() if latest_date else today_str
 
-    # 2. 获取当日分析结果
+    # 2. 获取当日分析结果（始终实时查询，DB 查询很快）
     stmt = select(AnalysisResult).where(AnalysisResult.analysis_date == latest_date)
     result = await db.execute(stmt)
     analysis_list = result.scalars().all()
@@ -145,12 +147,28 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
         else:
             signal_summary.hold_count += 1
 
-    # 按评分排序取 TOP5
     out_list.sort(key=lambda x: x.weighted_score, reverse=True)
     signal_summary.top_buy = [o for o in out_list if o.signal_direction == "buy"][:5]
     signal_summary.top_sell = [o for o in out_list if o.signal_direction == "sell"][-5:]
 
-    # 3. 获取市场资金流数据
+    # 3. 尝试返回缓存的行情数据
+    from backend.services.fund_cache_service import get_cached_json
+    market_cache, updated_at = await get_cached_json(db, CACHE_KEY_MARKET)
+
+    if market_cache and updated_at:
+        summary = MarketSummaryOut(
+            date=summary_date,
+            signals=signal_summary,
+            market_flow=MarketCapitalFlow(**market_cache["market_flow"]) if market_cache.get("market_flow") else None,
+            sector_flow=[SectorFlowRanking(**s) for s in market_cache.get("sector_flow", [])],
+            hsgt_flow=HSGTFlow(**market_cache["hsgt_flow"]) if market_cache.get("hsgt_flow") else None,
+            adv_decline=MarketAdvDecline(**market_cache["adv_decline"]) if market_cache.get("adv_decline") else None,
+            turnover=MarketTurnover(**market_cache["turnover"]) if market_cache.get("turnover") else None,
+            updated_at=updated_at,
+        )
+        return ApiResponse(data=summary)
+
+    # 4. 无缓存 — 全量拉取行情数据
     from backend.services.market_service import MarketService
     svc = MarketService()
     market_flow = await svc.get_market_capital_flow()
@@ -161,6 +179,17 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
 
     sector_flow_list = list(sector_flow_raw.values())
 
+    # 5. 写入缓存
+    from backend.services.fund_cache_service import set_cached_json
+    cache_data = {
+        "market_flow": market_flow.model_dump() if market_flow else None,
+        "sector_flow": [s.model_dump() for s in sector_flow_list],
+        "hsgt_flow": hsgt_flow.model_dump() if hsgt_flow else None,
+        "adv_decline": adv_decline.model_dump() if adv_decline else None,
+        "turnover": turnover.model_dump() if turnover else None,
+    }
+    updated_at = await set_cached_json(db, CACHE_KEY_MARKET, cache_data)
+
     summary = MarketSummaryOut(
         date=summary_date,
         signals=signal_summary,
@@ -169,9 +198,36 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
         hsgt_flow=hsgt_flow,
         adv_decline=adv_decline,
         turnover=turnover,
+        updated_at=updated_at,
     )
-
     return ApiResponse(data=summary)
+
+
+@router.post("/refresh-summary", response_model=ApiResponse[dict])
+async def refresh_market_summary(db: AsyncSession = Depends(get_db)):
+    """后台刷新行情数据并更新缓存"""
+    from backend.services.market_service import MarketService
+    from backend.services.fund_cache_service import set_cached_json
+
+    svc = MarketService()
+    market_flow = await svc.get_market_capital_flow()
+    sector_flow_raw = await svc.get_sector_flow_rankings()
+    hsgt_flow = await svc.get_hsgt_flow()
+    adv_decline = await svc.get_market_adv_decline()
+    turnover = await svc.get_market_turnover()
+
+    sector_flow_list = list(sector_flow_raw.values())
+
+    cache_data = {
+        "market_flow": market_flow.model_dump() if market_flow else None,
+        "sector_flow": [s.model_dump() for s in sector_flow_list],
+        "hsgt_flow": hsgt_flow.model_dump() if hsgt_flow else None,
+        "adv_decline": adv_decline.model_dump() if adv_decline else None,
+        "turnover": turnover.model_dump() if turnover else None,
+    }
+    updated_at = await set_cached_json(db, CACHE_KEY_MARKET, cache_data)
+
+    return ApiResponse(data={"updated_at": updated_at})
 
 
 @router.post("/trigger", response_model=ApiResponse[list[AnalysisResultOut]])

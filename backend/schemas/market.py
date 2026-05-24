@@ -84,3 +84,4 @@ class MarketSummaryOut(BaseModel):
     hsgt_flow: Optional[HSGTFlow] = None
     adv_decline: Optional[MarketAdvDecline] = None
     turnover: Optional[MarketTurnover] = None
+    updated_at: Optional[str] = None  # 缓存数据时间

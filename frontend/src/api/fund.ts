@@ -39,7 +39,7 @@ export const fundApi = {
     apiClient.get<ApiResponse<FundManagerOut[]>>(`${BASE}/${id}/manager`).then((r) => r.data),
 
   refreshDetails: () =>
-    apiClient.post<ApiResponse<{ total: number; results: any[] }>>(`${BASE}/refresh-details`).then((r) => r.data),
+    apiClient.post<ApiResponse<{ total: number; results: any[] }>>(`${BASE}/refresh-details`, {}, { timeout: 300000 }).then((r) => r.data),
 
   refreshThemes: (id: number) =>
     apiClient.post<ApiResponse<FundOut>>(`${BASE}/${id}/refresh-themes`).then((r) => r.data),

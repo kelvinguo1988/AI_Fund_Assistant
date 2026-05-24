@@ -1,4 +1,8 @@
-"""基金季度持仓服务 — 从 AKShare 获取并存入数据库"""
+"""基金季度持仓服务 — 从 AKShare fund_portfolio_hold_em 获取并存入数据库
+
+数据来源：AKShare 封装的天天基金季度持仓数据。
+每只基金每季度约 10-20 条持仓记录。
+"""
 
 import asyncio
 import logging
@@ -38,7 +42,6 @@ async def refresh_holdings(db: AsyncSession, fund_id: int, fund_code: str) -> li
             if not quarter:
                 continue
 
-            # 检查是否已存在
             stmt = select(FundHolding).where(
                 FundHolding.fund_id == fund_id,
                 FundHolding.stock_code == str(row.get("股票代码", "")),
@@ -62,7 +65,6 @@ async def refresh_holdings(db: AsyncSession, fund_id: int, fund_code: str) -> li
 
     await db.commit()
 
-    # 返回该基金所有持仓
     stmt = (
         select(FundHolding)
         .where(FundHolding.fund_id == fund_id)
@@ -74,7 +76,6 @@ async def refresh_holdings(db: AsyncSession, fund_id: int, fund_code: str) -> li
 
 async def get_latest_holdings(db: AsyncSession, fund_id: int, limit: int = 10) -> list[FundHolding]:
     """获取基金最新季度 top N 持仓"""
-    # 先找最新季度标签
     stmt = (
         select(FundHolding.quarter_label)
         .where(FundHolding.fund_id == fund_id)
@@ -99,17 +100,7 @@ async def get_latest_holdings(db: AsyncSession, fund_id: int, limit: int = 10) -
 async def compute_holding_changes(
     db: AsyncSession, fund_id: int
 ) -> Optional[dict]:
-    """计算基金最新两个季度的持仓变更
-
-    Returns:
-        {
-            "latest_quarter": "2026年1季度股票投资明细",
-            "previous_quarter": "2025年4季度股票投资明细",
-            "added": [{"code": "...", "name": "..."}],
-            "removed": [{"code": "...", "name": "..."}],
-        }
-        如果不足两个季度数据则返回 None
-    """
+    """计算基金最新两个季度的持仓变更"""
     stmt = (
         select(FundHolding.quarter_label)
         .where(FundHolding.fund_id == fund_id)

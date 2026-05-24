@@ -130,7 +130,13 @@ async def get_fund_manager(
 async def refresh_all_details(
     db: AsyncSession = Depends(get_db),
 ):
-    """刷新所有活跃基金的持仓+经理+阶段涨幅数据（先展示缓存，后台刷新）"""
+    """刷新所有活跃基金的持仓+经理+阶段涨幅数据
+
+    数据来源：
+    - 阶段涨幅: pingzhongdata/{code}.js（批量并发）
+    - 股票持仓: AKShare fund_portfolio_hold_em（逐只，3-6s 反爬间隔）
+    - 基金经理: AKShare fund_manager_em（全量缓存，逐只匹配）
+    """
     svc = FundService(db)
     funds = await svc.list_funds(status="active")
     if not funds:
@@ -139,14 +145,14 @@ async def refresh_all_details(
     codes = [f.code for f in funds]
     name_map = {f.code: f.name for f in funds}
 
-    # 1. 先刷新阶段涨幅缓存（最快，批量 pingzhongdata 请求）
+    # 1. 先刷新阶段涨幅缓存（批量并发，已含反爬延迟）
     try:
         await update_period_returns_cache(db, codes, name_map)
         logger.info("阶段涨幅缓存已更新 (%d 只)", len(codes))
     except Exception as e:
         logger.warning("阶段涨幅刷新异常: %s", e)
 
-    # 2. 逐只刷新持仓+经理（慢，需反爬间隔）
+    # 2. 逐只刷新持仓+经理（AKShare，需反爬间隔）
     results: list[dict] = []
     for i, f in enumerate(funds):
         try:

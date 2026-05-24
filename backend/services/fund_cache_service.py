@@ -110,3 +110,34 @@ async def update_period_returns_cache(
 
     await db.commit()
     return data
+
+
+async def get_cached_json(db: AsyncSession, cache_key: str) -> tuple[Any, Optional[str]]:
+    """通用缓存读取 — 返回 (data, updated_at_iso) 或 (None, None)"""
+    stmt = select(FundDataCache).where(FundDataCache.cache_key == cache_key)
+    result = await db.execute(stmt)
+    cached = result.scalars().first()
+    if cached is None:
+        return None, None
+    try:
+        data = json.loads(cached.data_json)
+        updated_at = cached.updated_at.isoformat() if cached.updated_at else None
+        return data, updated_at
+    except (json.JSONDecodeError, TypeError):
+        return None, None
+
+
+async def set_cached_json(db: AsyncSession, cache_key: str, data: Any) -> str:
+    """通用缓存写入 — 返回 updated_at ISO 字符串"""
+    now = datetime.now()
+    json_str = json.dumps(data, ensure_ascii=False, default=str)
+    stmt = select(FundDataCache).where(FundDataCache.cache_key == cache_key)
+    result = await db.execute(stmt)
+    cached = result.scalars().first()
+    if cached:
+        cached.data_json = json_str
+        cached.updated_at = now
+    else:
+        db.add(FundDataCache(cache_key=cache_key, data_json=json_str, updated_at=now))
+    await db.commit()
+    return now.isoformat()

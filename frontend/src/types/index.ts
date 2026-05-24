@@ -332,6 +332,7 @@ export interface MarketSummaryOut {
   hsgt_flow: HSGTFlow | null;
   adv_decline: MarketAdvDecline | null;
   turnover: MarketTurnover | null;
+  updated_at?: string | null;
 }
 
 /* ── 基金阶段涨幅 ──────────────────────────────────────────────────── */

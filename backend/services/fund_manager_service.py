@@ -1,4 +1,8 @@
-"""基金经理服务 — 从 AKShare 获取并存入数据库"""
+"""基金经理服务 — 从 AKShare fund_manager_em 获取并存入数据库
+
+数据来源：AKShare 封装的东方财富全量基金经理数据。
+全量查询较慢（~10s），使用服务级全局缓存避免重复查询。
+"""
 
 import asyncio
 import logging
@@ -39,7 +43,7 @@ async def _get_all_managers() -> list[dict]:
 
 
 async def refresh_managers(db: AsyncSession, fund_id: int, fund_code: str) -> list[FundManagerRecord]:
-    """刷新指定基金的经理信息"""
+    """刷新指定基金的经理信息（从全量缓存中匹配）"""
     all_managers = await _get_all_managers()
     if not all_managers:
         return []
@@ -96,8 +100,8 @@ async def compute_manager_changes(
 
     Returns:
         {
-            "current": [{"manager_name": "...", "company": "...", ...}],
-            "history": [{"manager_name": "...", ...}],  # 全部历史
+            "current": [{"manager_name": "...", ...}],
+            "history": [{"manager_name": "...", ...}],
             "changed": True/False,
         }
     """
@@ -111,8 +115,8 @@ async def compute_manager_changes(
         return None
 
     unique_names = list(dict.fromkeys(r.manager_name for r in all_records))
-    current_names = unique_names[-1:]  # 最新的经理
-    prev_names = unique_names[:-1]     # 历史上的经理（已离职）
+    current_names = unique_names[-1:]
+    prev_names = unique_names[:-1]
 
     current = [r for r in all_records if r.manager_name in current_names]
     history = [r for r in all_records if r.manager_name not in current_names]
