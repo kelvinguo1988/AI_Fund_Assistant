@@ -78,11 +78,12 @@ class PushService:
         from backend.engines.report_engine import report_engine
         from backend.engines.scoring_engine import SignalResult
 
-        # 获取市场概况数据
+        # 获取市场概况数据（先清缓存，确保推送使用最新行情）
         market_summary_md = None
         if enabled_market:
             try:
                 from backend.services.market_service import MarketService
+                MarketService.clear_cache()
                 svc = MarketService()
                 from backend.schemas.market import MarketSummaryOut, SignalSummary
 
@@ -92,6 +93,21 @@ class PushService:
                 hsgt_flow = await svc.get_hsgt_flow()
                 adv_decline = await svc.get_market_adv_decline()
                 turnover = await svc.get_market_turnover()
+
+                # 数据新鲜度校验日志
+                stale_fields = []
+                if market_flow is None:
+                    stale_fields.append("market_capital_flow")
+                if hsgt_flow is None:
+                    stale_fields.append("hsgt_flow")
+                if adv_decline is None:
+                    stale_fields.append("adv_decline")
+                if turnover is None:
+                    stale_fields.append("turnover")
+                if stale_fields:
+                    logger.warning(f"推送前行情数据缺失: {', '.join(stale_fields)}，推送内容可能不完整")
+                else:
+                    logger.info("推送前行情数据校验通过（5 项均正常获取）")
 
                 market_summary = MarketSummaryOut(
                     date=today_str,
@@ -105,6 +121,21 @@ class PushService:
                 market_summary_md = report_engine.generate_market_summary_markdown(
                     market_summary, enabled_items=enabled_market
                 )
+
+                # 同步更新仪表盘行情缓存，确保推送后仪表盘看到的是最新数据
+                try:
+                    from backend.services.fund_cache_service import set_cached_json
+                    cache_data = {
+                        "market_flow": market_flow.model_dump() if market_flow else None,
+                        "sector_flow": [s.model_dump() for s in sector_flow_raw.values()],
+                        "hsgt_flow": hsgt_flow.model_dump() if hsgt_flow else None,
+                        "adv_decline": adv_decline.model_dump() if adv_decline else None,
+                        "turnover": turnover.model_dump() if turnover else None,
+                    }
+                    await set_cached_json(self.db, "market_summary", cache_data)
+                    logger.info("推送同时已更新仪表盘行情缓存")
+                except Exception as ce:
+                    logger.warning(f"仪表盘行情缓存更新失败: {ce}")
             except Exception as e:
                 logger.warning(f"市场概况生成失败: {e}")
 

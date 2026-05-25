@@ -103,6 +103,12 @@ class MarketService:
     _CACHE_TTL = 300  # 5 分钟
 
     @staticmethod
+    def clear_cache() -> None:
+        """清空所有缓存，强制下次请求重新获取"""
+        MarketService._cache.clear()
+        logger.debug("MarketService 缓存已清空")
+
+    @staticmethod
     def _cache_get(key: str) -> object:
         entry = MarketService._cache.get(key)
         if entry is None:

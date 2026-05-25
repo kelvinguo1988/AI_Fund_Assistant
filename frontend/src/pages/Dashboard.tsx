@@ -78,7 +78,20 @@ const Dashboard: React.FC = () => {
 
   const [sectorTab, setSectorTab] = useState(0);
   const [refreshTime, setRefreshTime] = useState<string | null>(null);
-  const refreshed = React.useRef(false);
+
+  /** 格式化缓存更新时间为北京时间显示 */
+  const formatRefreshTime = (isoStr: string | null): string => {
+    if (!isoStr) return '暂无';
+    try {
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return isoStr;
+      const bj = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${bj.getUTCFullYear()}-${pad(bj.getUTCMonth() + 1)}-${pad(bj.getUTCDate())} ${pad(bj.getUTCHours())}:${pad(bj.getUTCMinutes())} (北京时间)`;
+    } catch {
+      return isoStr;
+    }
+  };
 
   /** 加载缓存数据（快速） */
   const loadCached = async () => {
@@ -130,14 +143,9 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  // 首次加载：先展示缓存，再后台刷新
+  // 首次加载：只展示缓存，不自动刷新
   useEffect(() => {
-    loadCached().then(() => {
-      if (!refreshed.current) {
-        refreshed.current = true;
-        refreshInBackground();
-      }
-    });
+    loadCached();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -237,7 +245,7 @@ const Dashboard: React.FC = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Typography variant="h5">仪表盘</Typography>
-          <Chip size="small" label={`数据更新: ${refreshTime || '暂无'}`}
+          <Chip size="small" label={`数据更新: ${formatRefreshTime(refreshTime)}`}
             variant="outlined" sx={{ fontSize: '0.75rem' }} />
           {refreshing && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

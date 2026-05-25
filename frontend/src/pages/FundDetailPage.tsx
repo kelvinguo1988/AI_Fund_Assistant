@@ -2,7 +2,7 @@
  * 基金详情页面 — 先展示缓存数据，后台刷新后更新
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -23,7 +23,6 @@ const FundDetailPage: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshStatus, setRefreshStatus] = useState<string>('');
-  const refreshed = useRef(false);
 
   /** 加载缓存数据 */
   const loadCached = async () => {
@@ -74,14 +73,9 @@ const FundDetailPage: React.FC = () => {
     }
   };
 
-  // 首次加载：先展示缓存，再后台刷新
+  // 首次加载：只展示缓存，不自动刷新
   useEffect(() => {
-    loadCached().then(() => {
-      if (!refreshed.current) {
-        refreshed.current = true;
-        refreshInBackground();
-      }
-    });
+    loadCached();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -89,10 +83,10 @@ const FundDetailPage: React.FC = () => {
     if (!iso) return '暂无';
     try {
       const d = new Date(iso);
-      return d.toLocaleString('zh-CN', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-      });
+      if (isNaN(d.getTime())) return iso;
+      const bj = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${bj.getUTCFullYear()}-${pad(bj.getUTCMonth() + 1)}-${pad(bj.getUTCDate())} ${pad(bj.getUTCHours())}:${pad(bj.getUTCMinutes())} (北京时间)`;
     } catch {
       return iso;
     }

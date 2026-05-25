@@ -39,7 +39,7 @@ class TickFlowAdapter(BaseDataSource):
     def available(self) -> bool:
         return self._available
 
-    async def get_fund_data(self, code: str, period: int = 250) -> FundData:
+    async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
         if not self._available:
             raise RuntimeError("tickflow 不可用")
 

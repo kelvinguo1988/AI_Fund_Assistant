@@ -83,7 +83,7 @@ class AnalysisService:
 
         for fund in funds:
             try:
-                fund_data = await self.data_source.get_fund_data(fund.code)
+                fund_data = await self.data_source.get_fund_data(fund.code, fund_type=getattr(fund, "fund_type", None))
                 fund_data_map[fund.code] = fund_data
 
                 factor_scores = factor_engine.calculate_all(fund_data, active_factors)
@@ -186,7 +186,7 @@ class AnalysisService:
 
         for i, fund in enumerate(funds):
             try:
-                fund_data = await self.data_source.get_fund_data(fund.code)
+                fund_data = await self.data_source.get_fund_data(fund.code, fund_type=getattr(fund, "fund_type", None))
                 fund_data_map[fund.code] = fund_data
 
                 factor_scores = factor_engine.calculate_all(fund_data, active_factors)

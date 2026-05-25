@@ -45,7 +45,7 @@ class TuShareAdapter(BaseDataSource):
             return f"{code}.SH"
         return f"{code}.SZ"
 
-    async def get_fund_data(self, code: str, period: int = 250) -> FundData:
+    async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
         if not self._available:
             raise RuntimeError("TuShare 未初始化（缺少 token）")
 

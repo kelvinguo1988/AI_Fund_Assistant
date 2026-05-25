@@ -10,7 +10,7 @@ import asyncio
 import akshare as ak  # type: ignore
 import pandas as pd
 
-from backend.data_sources.base import BaseDataSource, FundData, MarketIndices
+from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, guess_fund_type
 
 logger = logging.getLogger(__name__)
 
@@ -115,26 +115,46 @@ class AKShareAdapter(BaseDataSource):
         logger.error(f"{func.__name__} 重试 {max_attempts} 次后仍然失败: [{reason}] {msg}")
         raise last_exc
 
-    async def get_fund_data(self, code: str, period: int = 250) -> FundData:
+    async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
         """获取基金完整数据
+
+        根据 fund_type（或代码前缀推测）直接路由到对应接口，
+        避免对所有 OTC 基金先试 ETF 接口再降级的无效轮询。
 
         Args:
             code: 基金代码 如 "510300"
             period: 回看天数
+            fund_type: "etf" / "otc"，None 时由代码前缀自动推测
 
         Returns:
             FundData 对象
         """
         fund_data = FundData(code=code)
 
+        # 确定主路径：优先使用传入的 fund_type，无则按代码前缀推测
+        primary_type = (fund_type or guess_fund_type(code))
+        is_primary_etf = (primary_type == "etf")
+
+        if is_primary_etf:
+            primary = self._get_etf_data
+            fallback = self._get_otc_fund_data
+            primary_name = "ETF"
+            fallback_name = "场外基金"
+        else:
+            primary = self._get_otc_fund_data
+            fallback = self._get_etf_data
+            primary_name = "场外基金"
+            fallback_name = "ETF"
+
         try:
-            fund_data = await self._get_etf_data(code, period)
+            fund_data = await primary(code, period)
+            logger.debug(f"{primary_name} 数据获取成功 code={code}")
         except Exception as e:
-            logger.warning(f"ETF 数据获取失败 code={code}: {e}, 尝试场外基金接口")
+            logger.warning(f"{primary_name} 数据获取失败 code={code}: {e}, 尝试{fallback_name}接口")
             try:
-                fund_data = await self._get_otc_fund_data(code, period)
+                fund_data = await fallback(code, period)
             except Exception as e2:
-                logger.error(f"场外基金数据获取也失败 code={code}: {e2}")
+                logger.error(f"{fallback_name}数据获取也失败 code={code}: {e2}")
 
         # 补充债券收益率
         try:

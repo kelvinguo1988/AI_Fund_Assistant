@@ -134,8 +134,14 @@ class DataSourceManager(BaseDataSource):
                 except Exception:
                     src.mark_degraded()
 
-    async def get_fund_data(self, code: str, period: int = 250) -> FundData:
-        """按优先级链获取基金数据，自动降级"""
+    async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
+        """按优先级链获取基金数据，自动降级
+
+        Args:
+            code: 基金代码
+            period: 回看天数
+            fund_type: "etf"/"otc"，传递给数据源适配器用于接口路由
+        """
         self._try_recovery()
 
         last_error: Optional[Exception] = None
@@ -151,7 +157,7 @@ class DataSourceManager(BaseDataSource):
                 continue
 
             try:
-                data = await src.adapter.get_fund_data(code, period)
+                data = await src.adapter.get_fund_data(code, period, fund_type=fund_type)
                 # 成功获取 → 如果之前降级过，标记恢复
                 if not src.active:
                     src.mark_recovered()

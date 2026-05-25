@@ -209,6 +209,8 @@ async def refresh_market_summary(db: AsyncSession = Depends(get_db)):
     from backend.services.market_service import MarketService
     from backend.services.fund_cache_service import set_cached_json
 
+    # 清除 MarketService 内存缓存，确保获取最新行情
+    MarketService.clear_cache()
     svc = MarketService()
     market_flow = await svc.get_market_capital_flow()
     sector_flow_raw = await svc.get_sector_flow_rankings()

@@ -3,12 +3,12 @@
 import asyncio
 import json
 import logging
-import re
 from typing import Optional
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.data_sources.base import guess_fund_type as _guess_fund_type
 from backend.models.fund import Fund
 from backend.schemas.fund import FundCreate, FundUpdate
 from backend.services.fund_theme_service import fetch_related_themes
@@ -28,13 +28,7 @@ def _merge_tags(existing_tags: Optional[str], new_themes: list[str]) -> Optional
     return ",".join(sorted(existing)) if existing else None
 
 
-# ETF 代码前缀规则
-_ETF_CODE_PATTERN = re.compile(r"^(51|15|58|159|588|512|513|515|516|517|518|560|561|562|563|588)")
-
-
-def _guess_fund_type(code: str) -> str:
-    """根据基金代码前缀推测类型"""
-    return "etf" if _ETF_CODE_PATTERN.match(code) else "otc"
+# guess_fund_type 从 backend.data_sources.base 导入，与数据源层共享同一份路由规则
 
 
 class FundService:

@@ -1,8 +1,18 @@
 """抽象数据源接口"""
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
+
+
+# ETF 代码前缀规则（与 fund_service._guess_fund_type 保持一致，共享此常量）
+ETF_CODE_PREFIX = re.compile(r"^(51|15|58|159|588|512|513|515|516|517|518|560|561|562|563|588)")
+
+
+def guess_fund_type(code: str) -> str:
+    """根据基金代码前缀推测类型（场内 ETF / 场外 OTC）"""
+    return "etf" if ETF_CODE_PREFIX.match(code) else "otc"
 
 
 @dataclass
@@ -50,12 +60,14 @@ class BaseDataSource(ABC):
         return True
 
     @abstractmethod
-    async def get_fund_data(self, code: str, period: int = 250) -> FundData:
+    async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
         """获取基金数据
 
         Args:
             code: 基金代码 如 "510300"
             period: 回看天数，默认 250 个交易日（约 1 年）
+            fund_type: 基金类型 "etf" / "otc"，用于直接路由到正确数据接口。
+                       None 时由适配器根据代码前缀自动判断。
 
         Returns:
             FundData 基金数据对象
