@@ -39,6 +39,14 @@ async def create_schedule(
     db.add(sched)
     await db.commit()
     await db.refresh(sched)
+
+    # 热更新调度器，使新调度立即生效
+    try:
+        from backend.scheduler.task_scheduler import task_scheduler
+        await task_scheduler.reload_jobs()
+    except ImportError:
+        pass
+
     return ApiResponse(data=ScheduleOut.model_validate(sched))
 
 
@@ -61,11 +69,11 @@ async def update_schedule(
     await db.commit()
     await db.refresh(sched)
 
-    # 热更新调度器（T03 中实现）
+    # 热更新调度器
     try:
         from backend.scheduler.task_scheduler import task_scheduler
         await task_scheduler.reload_jobs()
-    except ImportError:
+    except Exception:
         pass
 
     return ApiResponse(data=ScheduleOut.model_validate(sched))
@@ -89,7 +97,7 @@ async def delete_schedule(
     try:
         from backend.scheduler.task_scheduler import task_scheduler
         await task_scheduler.reload_jobs()
-    except ImportError:
+    except Exception:
         pass
 
     return ApiResponse()
