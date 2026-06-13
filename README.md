@@ -1,6 +1,6 @@
 # AI Fund Assistant — 基金量化交易系统
 
-> FastAPI + React 基金量化分析平台。8 因子配置体系、双层评分、Web 管理、自动化信号推送。
+> FastAPI + React 基金量化分析平台。8 因子配置体系、双层评分、Web 管理、流式 SSE 推送、自动化信号推送、数据源连通性检测。
 
 ---
 
@@ -9,27 +9,30 @@
 ```
 AI_Fund_Assistant/
 ├── backend/                    # FastAPI 异步后端
-│   ├── main.py                 # 应用入口 + 路由挂载
-│   ├── server.py               # 独立服务启动
+│   ├── main.py                 # 应用入口 + 生命周期管理 + 路由挂载
 │   ├── config.py               # .env → Settings
 │   ├── database.py             # SQLAlchemy 异步引擎 + 迁移
 │   ├── models/                 # ORM 模型
 │   ├── schemas/                # Pydantic Schema
-│   ├── routers/                # API 路由
-│   ├── services/               # 业务逻辑层
+│   ├── routers/                # API 路由（8 个模块）
+│   ├── services/               # 业务逻辑层（含连通性检测、缓存、变更检测）
 │   ├── engines/                # 因子引擎 + 评分引擎 + 报告引擎
 │   │   ├── factor_engine.py    # 8 因子计算 + 信号规则 + 截面标准化
 │   │   ├── scoring_engine.py   # 加权评分 + 信号判定
 │   │   └── report_engine.py    # 报告生成（Markdown / HTML）
-│   ├── data_sources/           # 多数据源适配器
+│   ├── data_sources/           # 多数据源适配器（AKShare/TuShare/BaoStock/TickFlow）
+│   ├── llm/                    # AI 大模型接入（DeepSeek/OpenAI/通义千问）
+│   ├── patch/                  # 东方财富反爬虫补丁
 │   ├── push/                   # 推送机器人（飞书等）
-│   └── scheduler/              # 定时任务调度
-├── frontend/                   # React + TypeScript + MUI
-│   ├── src/pages/              # 9 个管理页面
-│   ├── src/components/         # 图表组件（ECharts）
+│   └── scheduler/              # 定时任务调度（APScheduler）
+├── frontend/                   # React + TypeScript + MUI + Tailwind
+│   ├── src/pages/              # 10 个管理页面
+│   ├── src/components/         # 图表组件（ECharts）、AI 对话、信号指示器等
 │   ├── src/api/                # API 客户端
+│   ├── src/hooks/              # 自定义 Hooks（AI 对话、分析）
 │   └── nginx.conf              # Nginx（API 反向代理 + SPA）
-├── docker-compose.yml          # 一键部署
+├── config/                     # 全局配置
+├── docker-compose.yml          # 一键部署（生产 + 开发模式）
 ├── .env.example
 └── requirements.txt
 ```
@@ -42,7 +45,7 @@ AI_Fund_Assistant/
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
 - **多数据源链**：AKShare → TuShare → BaoStock → TickFlow，自动降级恢复
-- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、报告配置、调度计划
+- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、历史报告、系统设置（共 10 个页面）
 - **基金详情模块**：阶段涨幅排序展示、季度持仓明细（可展开）、基金经理信息，含调仓 diff 和经理变更标注
 - **一键批量导入**：自动识别 ETF/场外类型，自动从天天基金抓取相关主题标签
 - **"先展示缓存，手动/定时触发刷新"模式**：仪表盘行情数据、基金阶段涨幅均持久化缓存到数据库，页面加载直接展示缓存数据 + 时间戳；数据仅在手动手动刷新或定时推送任务触发时更新，推送后自动同步仪表盘缓存
@@ -52,6 +55,8 @@ AI_Fund_Assistant/
 - **AI 分析**：集成 DeepSeek / ChatGPT，生成自然语言建议
 - **东方财富反爬虫补丁**：NID 授权令牌 + User-Agent 轮换 + 请求频率控制
 - **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
+- **数据源连通性检测**：一键测试东方财富系列域名 + AI API 可达性，SSRF 防护，结果含延迟与状态汇总
+- **AI 开关可控**：顶栏 AI 开关一键启停，配置持久化至数据库
 
 ---
 
@@ -136,7 +141,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/funds/import` | POST | 批量导入 |
 | `/api/funds/{id}` | PUT/DELETE | 更新 / 删除 |
 | `/api/funds/batch` | PATCH | 批量启用/停用 |
-| `/api/funds/detail` | GET | 基金阶段涨幅列表 |
+| `/api/funds/detail` | GET | 基金阶段涨幅列表（优先缓存） |
+| `/api/funds/detail/status` | GET | 基金详情缓存状态 |
 | `/api/funds/{id}/holdings` | GET | 基金最新季度持仓 |
 | `/api/funds/{id}/manager` | GET | 基金经理信息 |
 | `/api/funds/change-summary` | GET | 持仓调仓 + 经理变更摘要 |
@@ -149,11 +155,13 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/analysis/trigger-stream` | POST | 手动触发分析（SSE 流式推送，逐块返回结果） |
 | `/api/analysis/refresh-summary` | POST | 后台刷新行情缓存数据（资金流 + 板块排行 + 涨跌分布 + 成交额） |
 | `/api/factors` | GET/POST | 因子 CRUD |
-| `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
 | `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
 | `/api/ai/chat` | POST | AI 对话 |
 | `/api/push-channels` | GET/POST | 推送渠道 |
 | `/api/schedules` | GET/POST | 调度计划 |
+| `/api/system` | GET/PUT | 系统配置（AI 开关、模型、API Key） |
+| `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
+| `/api/system/connectivity` | GET | 数据源连通性测试 |
 | `/health` | GET | 健康检查 |
 
 ---
@@ -175,14 +183,35 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 ## 配置说明
 
-| 环境变量 | 必填 | 说明 |
-|---------|------|------|
-| `DEFAULT_AI_API_KEY` | 是 | AI 模型 API Key |
-| `FEISHU_WEBHOOK_URL` | 否 | 飞书推送 |
-| `TUSHARE_TOKEN` | 否 | TuShare Pro Token |
-| `FUND_QUANT_CORS_ORIGINS` | 否 | CORS 源 |
+### 环境变量
+
+| 环境变量 | 必填 | 默认值 | 说明 |
+|---------|------|--------|------|
+| `DEFAULT_AI_API_KEY` | 是 | — | AI 模型 API Key |
+| `DEFAULT_AI_MODEL` | 否 | `deepseek` | AI 模型名称 |
+| `DEFAULT_AI_BASE_URL` | 否 | `https://api.deepseek.com/v1` | AI API 基础 URL |
+| `FEISHU_WEBHOOK_URL` | 否 | — | 飞书机器人 Webhook URL |
+| `FEISHU_WEBHOOK_SECRET` | 否 | — | 飞书签名密钥 |
+| `TUSHARE_TOKEN` | 否 | — | TuShare Pro Token |
+| `FUND_QUANT_DATABASE_DIR` | 否 | `data/` | 数据库目录 |
+| `FUND_QUANT_DATABASE_NAME` | 否 | `fund_quant.db` | 数据库文件名 |
+| `FUND_QUANT_HOST` | 否 | `0.0.0.0` | 服务监听地址 |
+| `FUND_QUANT_PORT` | 否 | `8000` | 服务监听端口 |
+| `FUND_QUANT_DEBUG` | 否 | `false` | 调试模式 |
+| `FUND_QUANT_CORS_ORIGINS` | 否 | `http://localhost:5173,...` | CORS 允许的来源 |
+| `TZ` | 否 | `Asia/Shanghai` | 时区 |
 
 完整项见 `.env.example`。
+
+### 运行时配置（数据库存储）
+
+以下配置存储在 `system_config` 表中，可通过前端「系统设置」页面动态调整：
+
+- AI 开关（`ai_enabled`）
+- AI 模型名称（`ai_model`）
+- AI API Key（`ai_api_key`）
+- AI API 基础 URL（`ai_base_url`）
+- 评分阈值（`scoring_thresholds`，五档对称阈值 JSON）
 
 ---
 
@@ -192,6 +221,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 2. **可配置**：所有因子参数、信号阈值、权重在 UI 中可调
 3. **数据容错**：多源链自动降级
 4. **前后端解耦**：因子配置 → 因子引擎 → 评分引擎 → 报告引擎，各层独立
-5. **异步非阻塞**：FastAPI + 异步 SQLAlchemy
+5. **异步非阻塞**：FastAPI + 异步 SQLAlchemy + aiosqlite
 6. **API 调用缓存**：高频数据源 API 自动缓存（全量基金列表 1h TTL），避免重复请求触发限流
-7. **配置不写死**：敏感信息通过 `.env`，阈值通过数据库存储
+7. **配置不写死**：敏感信息通过 `.env`，运行时配置通过数据库存储
+8. **缓存优先展示**：仪表盘行情数据、基金阶段涨幅均持久化缓存，页面加载直接展示 + 时间戳，手动/定时触发刷新
+9. **安全加固**：连通性测试含 SSRF 防护（内网地址校验），反爬虫补丁自动加载

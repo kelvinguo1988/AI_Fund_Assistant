@@ -3,7 +3,7 @@
  * T04: 7 个页面组件全部实现
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   ThemeProvider,
@@ -109,6 +109,11 @@ const SidebarNav: React.FC = () => {
 /* ── 主布局组件 ───────────────────────────────────────────────────── */
 const AppLayout: React.FC = () => {
   const { sidebarOpen, aiEnabled, toggleSidebar, setAiEnabled } = useAppStore();
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -128,6 +133,9 @@ const AppLayout: React.FC = () => {
           </IconButton>
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
             基金量化交易系统
+            <Typography component="span" variant="body2" sx={{ ml: 2, opacity: 0.75 }}>
+              {now.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+            </Typography>
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <AIIcon fontSize="small" />

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 报告配置项（市场维度）：
 6. signal_summary     — 信号概览
-7. top_buy_sell       — TOP5 买卖信号
+7. top_buy_sell       — TOP10 买卖信号
 8. adv_decline        — 涨跌分布
 9. turnover           — 两市成交额
 10. market_flow       — 大盘资金流
@@ -250,16 +250,16 @@ class ReportEngine:
             lines.append(f"**总计**: {sig.total} 只基金")
             lines.append("")
 
-        # ── TOP5 买卖信号 ──
+        # ── TOP10 买卖信号 ──
         if "top_buy_sell" in enabled_items:
-            lines.append("## 🔴 TOP5 买入信号")
+            lines.append("## 🔴 TOP10 买入信号")
             lines.append("")
             lines.append("| 基金 | 代码 | 评分 | 强度 |")
             lines.append("|------|------|------|------|")
             for r in ms.signals.top_buy:
                 lines.append(f"| {r.fund_name} | {r.fund_code} | {r.weighted_score} | {r.signal_strength} |")
             lines.append("")
-            lines.append("## 🟢 TOP5 卖出信号")
+            lines.append("## 🟢 TOP10 卖出信号")
             lines.append("")
             lines.append("| 基金 | 代码 | 评分 | 强度 |")
             lines.append("|------|------|------|------|")

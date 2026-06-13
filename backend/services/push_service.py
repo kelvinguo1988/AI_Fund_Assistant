@@ -109,9 +109,23 @@ class PushService:
                 else:
                     logger.info("推送前行情数据校验通过（5 项均正常获取）")
 
+                # 统计信号方向计数 & 构建 TOP10 买卖信号
+                buy_results = [r for r in results if r.signal_direction == "buy"]
+                sell_results = [r for r in results if r.signal_direction == "sell"]
+                hold_results = [r for r in results if r.signal_direction == "hold"]
+                top_buy = sorted(buy_results, key=lambda r: r.weighted_score, reverse=True)[:10]
+                top_sell = sorted(sell_results, key=lambda r: r.weighted_score)[:10]
+
                 market_summary = MarketSummaryOut(
                     date=today_str,
-                    signals=SignalSummary(total=len(results)),
+                    signals=SignalSummary(
+                        total=len(results),
+                        buy_count=len(buy_results),
+                        sell_count=len(sell_results),
+                        hold_count=len(hold_results),
+                        top_buy=top_buy,
+                        top_sell=top_sell,
+                    ),
                     market_flow=market_flow,
                     sector_flow=list(sector_flow_raw.values()),
                     hsgt_flow=hsgt_flow,

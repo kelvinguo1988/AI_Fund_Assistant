@@ -131,7 +131,7 @@ class MarketService:
         try:
             df = await _rate_limited_call(ak.stock_market_fund_flow)
             if df is None or df.empty:
-                return None
+                raise ValueError("empty dataframe")
 
             latest = df.iloc[-1]
             result = MarketCapitalFlow(
@@ -151,8 +151,84 @@ class MarketService:
             )
             self._cache_set("market_capital_flow", result)
             return result
+        except Exception as orig_e:
+            logger.warning(f"大盘资金流(akshare)获取失败: {orig_e}，尝试东方财富直接API")
+
+        # 备选: 东方财富 datacenter-web API 获取大盘资金流
+        try:
+            import requests as _req
+
+            def _fetch_index_flow(index_code: str) -> dict:
+                r = _req.get(
+                    "https://datacenter-web.eastmoney.com/api/data/v1/get",
+                    params={
+                        "reportName": "RPT_MARKET_CAPITALFLOW",
+                        "columns": "ALL",
+                        "filter": f'(INDEX_CODE="{index_code}")(BONDTYPE="AB\u80a1")',
+                        "pageSize": 1,
+                        "sortColumns": "TRADE_DATE",
+                        "sortTypes": -1,
+                    },
+                    headers={
+                        "User-Agent": random.choice(_USER_AGENTS),
+                        "Referer": "https://data.eastmoney.com/",
+                    },
+                    timeout=15,
+                )
+                r.raise_for_status()
+                items = r.json().get("result", {}).get("data", [])
+                return items[0] if items else {}
+
+            sh_data = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_index_flow, "000001.SH"), timeout=20.0
+            )
+            sz_data = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_index_flow, "399001.SZ"), timeout=20.0
+            )
+            if not sh_data:
+                return None
+
+            YI = 10_000  # 万元→亿 (1亿 = 10000万元)
+
+            sh_main = (sh_data.get("MAIN_INFLOW") or 0) - (sh_data.get("MAIN_OUTFLOW") or 0)
+            sz_main = (sz_data.get("MAIN_INFLOW") or 0) - (sz_data.get("MAIN_OUTFLOW") or 0) if sz_data else 0
+            main_net = round((sh_main + sz_main) / YI, 2)
+
+            super_net = round(
+                ((sh_data.get("SUPERDEAL_NET") or 0) + ((sz_data.get("SUPERDEAL_NET") or 0) if sz_data else 0)) / YI, 2
+            )
+            large_net = round(
+                ((sh_data.get("BIGDEAL_NET") or 0) + ((sz_data.get("BIGDEAL_NET") or 0) if sz_data else 0)) / YI, 2
+            )
+            medium_net = round(
+                ((sh_data.get("MIDDEAL_NET") or 0) + ((sz_data.get("MIDDEAL_NET") or 0) if sz_data else 0)) / YI, 2
+            )
+            small_net = round(
+                ((sh_data.get("SMALLDEAL_NET") or 0) + ((sz_data.get("SMALLDEAL_NET") or 0) if sz_data else 0)) / YI, 2
+            )
+
+            trade_date = (sh_data.get("TRADE_DATE") or "")[:10]
+            main_ratio = round(main_net / (main_net + abs(medium_net) + abs(small_net)) * 100, 2) if (abs(medium_net) + abs(small_net)) > 0 else 0.0
+
+            result = MarketCapitalFlow(
+                date=trade_date,
+                sh_index=None,  # datacenter API 不返回指数点位
+                sh_change=round(sh_data.get("CHANGERATE") or 0, 2),
+                sz_index=None,
+                sz_change=round(sz_data.get("CHANGERATE") or 0, 2) if sz_data else None,
+                main_flow=CapitalFlow(
+                    net_amount=main_net,
+                    net_ratio=main_ratio,
+                    super_large_net=super_net,
+                    large_net=large_net,
+                    medium_net=medium_net,
+                    small_net=small_net,
+                ),
+            )
+            self._cache_set("market_capital_flow", result)
+            return result
         except Exception as e:
-            logger.warning(f"大盘资金流获取失败: {e}")
+            logger.warning(f"大盘资金流(datacenter-web API)获取失败: {e}")
             return None
 
     async def get_sector_flow_rankings(self) -> dict[str, SectorFlowRanking]:
