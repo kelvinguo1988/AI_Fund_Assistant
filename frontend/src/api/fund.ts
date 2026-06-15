@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import type { ApiResponse, FundCreate, FundUpdate, FundOut, FundHoldingOut, FundManagerOut, FundChangeSummary, FundDetailResponse, FundDetailStatus } from '../types';
+import type { ApiResponse, FundCreate, FundUpdate, FundOut, FundHoldingOut, FundManagerOut, FundChangeSummary, FundDetailResponse, FundDetailStatus, ExtendedDetailResponse } from '../types';
 
 const BASE = '/api/funds';
 
@@ -46,4 +46,7 @@ export const fundApi = {
 
   getChangeSummary: () =>
     apiClient.get<ApiResponse<FundChangeSummary[]>>(`${BASE}/change-summary`).then((r) => r.data),
+
+  getExtendedDetail: () =>
+    apiClient.get<ApiResponse<ExtendedDetailResponse>>(`${BASE}/extended-detail`).then((r) => r.data),
 };

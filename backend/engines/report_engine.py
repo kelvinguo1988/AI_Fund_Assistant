@@ -211,6 +211,11 @@ class ReportEngine:
         if scores and (max(scores) - min(scores)) > 1.5:
             warnings.append("因子评分分歧较大，信号可靠性降低，建议综合判断")
 
+        # ── 第零层：质量过滤警告（追加，不影响原有逻辑）──
+        if hasattr(signal, 'quality_warnings') and signal.quality_warnings:
+            for w in signal.quality_warnings:
+                warnings.append(w)
+
         if not warnings:
             warnings.append("当前无明显风险信号，但仍需关注市场变化")
 

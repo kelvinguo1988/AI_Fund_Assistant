@@ -148,8 +148,8 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
             signal_summary.hold_count += 1
 
     out_list.sort(key=lambda x: x.weighted_score, reverse=True)
-    signal_summary.top_buy = [o for o in out_list if o.signal_direction == "buy"][:5]
-    signal_summary.top_sell = [o for o in out_list if o.signal_direction == "sell"][-5:]
+    signal_summary.top_buy = [o for o in out_list if o.signal_direction == "buy"][:10]
+    signal_summary.top_sell = [o for o in out_list if o.signal_direction == "sell"][-10:]
 
     # 3. 尝试返回缓存的行情数据
     from backend.services.fund_cache_service import get_cached_json

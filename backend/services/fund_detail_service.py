@@ -1,6 +1,7 @@
-"""基金详情服务 — 阶段涨幅 + 数据批量获取
+"""基金详情服务 — 阶段涨幅 + 扩展数据 + 数据批量获取
 
-从基金详情页数据文件 pingzhongdata/{code}.js 中提取时段收益率等数据。
+从基金详情页数据文件 pingzhongdata/{code}.js 中提取时段收益率、
+累计收益走势、规模变动、持有人结构、资产配置等数据。
 持仓和经理详情需通过 AKShare（fund_holding_service / fund_manager_service）获取。
 """
 
@@ -28,6 +29,12 @@ _RETURN_PATTERNS: dict[str, re.Pattern] = {
 # 基金名称
 _FUND_NAME_PATTERN = re.compile(r'var fS_name\s*=\s*"([^"]*)"')
 
+# 扩展数据正则模式
+_PAT_GRAND_TOTAL = re.compile(r'var\s+Data_grandTotal\s*=\s*(\[)')
+_PAT_FLUCTUATION_SCALE = re.compile(r'var\s+Data_fluctuationScale\s*=\s*(\{)')
+_PAT_HOLDER_STRUCTURE = re.compile(r'var\s+Data_holderStructure\s*=\s*(\{)')
+_PAT_ASSET_ALLOCATION = re.compile(r'var\s+Data_assetAllocation\s*=\s*(\{)')
+
 # 并发控制：最多同时 5 个请求
 _SEMAPHORE = asyncio.Semaphore(5)
 
@@ -51,6 +58,57 @@ def _extract_js_array(text: str, start_pattern: re.Pattern) -> Optional[list]:
                 except json.JSONDecodeError:
                     return None
     return None
+
+
+def _extract_js_object(text: str, start_pattern: re.Pattern) -> Optional[dict]:
+    """从 JS 文本中提取匹配第一个 '{...}' 的 JSON 对象（支持嵌套）"""
+    m = start_pattern.search(text)
+    if not m:
+        return None
+    start = m.start(1)
+    depth = 0
+    for i in range(start, len(text)):
+        c = text[i]
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
+def _parse_grand_total(js_text: str) -> Optional[list]:
+    """解析累计收益走势 Data_grandTotal"""
+    return _extract_js_array(js_text, _PAT_GRAND_TOTAL)
+
+
+def _parse_fluctuation_scale(js_text: str) -> Optional[dict]:
+    """解析规模变动 Data_fluctuationScale"""
+    return _extract_js_object(js_text, _PAT_FLUCTUATION_SCALE)
+
+
+def _parse_holder_structure(js_text: str) -> Optional[dict]:
+    """解析持有人结构 Data_holderStructure"""
+    return _extract_js_object(js_text, _PAT_HOLDER_STRUCTURE)
+
+
+def _parse_asset_allocation(js_text: str) -> Optional[dict]:
+    """解析资产配置 Data_assetAllocation"""
+    return _extract_js_object(js_text, _PAT_ASSET_ALLOCATION)
+
+
+def _parse_extended_data(js_text: str) -> dict:
+    """从 JS 文本中解析全部扩展数据（4类）"""
+    return {
+        "grand_total": _parse_grand_total(js_text),
+        "fluctuation_scale": _parse_fluctuation_scale(js_text),
+        "holder_structure": _parse_holder_structure(js_text),
+        "asset_allocation": _parse_asset_allocation(js_text),
+    }
 
 
 def _parse_period_returns(js_text: str) -> dict[str, Optional[str]]:
@@ -84,33 +142,20 @@ def _fetch_js(code: str) -> Optional[str]:
 
 
 async def fetch_fund_detail(code: str) -> dict[str, Any]:
-    """一站式获取单只基金基础数据
-
-    Returns:
-        {
-            "period_returns": {"return_1m": "...", ...},
-            "fund_name": "基金名称",
-        }
-    """
+    """一站式获取单只基金基础数据"""
     js_text = await asyncio.to_thread(_fetch_js, code)
     if not js_text:
-        return {"period_returns": {}, "fund_name": ""}
+        return {"period_returns": {}, "fund_name": "", "extended_data": {}}
 
     return {
         "period_returns": _parse_period_returns(js_text),
         "fund_name": _parse_fund_name(js_text),
+        "extended_data": _parse_extended_data(js_text),
     }
 
 
 async def fetch_all_js_texts(codes: list[str]) -> dict[str, str]:
-    """并发批量获取多只基金的 pingzhongdata JS 文本
-
-    Args:
-        codes: 基金代码列表
-
-    Returns:
-        {"基金代码": "js文本内容", ...}
-    """
+    """并发批量获取多只基金的 pingzhongdata JS 文本"""
     if not codes:
         return {}
 

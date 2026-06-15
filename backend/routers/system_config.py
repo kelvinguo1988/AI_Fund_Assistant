@@ -14,12 +14,21 @@ from backend.schemas.system_config import (
     AIConfigUpdate,
     AIConfigOut,
     ConnectivityResult,
+    QualityConfigOut,
+    QualityConfigParamOut,
+    QualityConfigUpdate,
     ScoringConfigOut,
     ScoringConfigUpdate,
     ScoringTier,
 )
 from backend.services.connectivity_service import test_all_connectivity
 from backend.engines.scoring_engine import DEFAULT_THRESHOLDS
+from backend.engines.quality_filter import (
+    QUALITY_CONFIG,
+    PARAM_META,
+    merge_quality_config,
+    _QUALITY_CONFIG_DB_KEY,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -195,3 +204,75 @@ async def test_connectivity(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"AI API 配置无效: {e}")
     return ApiResponse(data=result)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 质量过滤配置 API
+# ═══════════════════════════════════════════════════════════════════════
+
+@router.get("/quality-config", response_model=ApiResponse[QualityConfigOut])
+async def get_quality_config(db: AsyncSession = Depends(get_db)):
+    """获取质量过滤配置（DB 值 + 默认值 + 元数据）"""
+    merged = await merge_quality_config(db)
+
+    # 获取配置更新时间
+    result = await db.execute(
+        select(SystemConfig).where(SystemConfig.config_key == _QUALITY_CONFIG_DB_KEY)
+    )
+    config_row = result.scalars().first()
+    updated_at = config_row.updated_at.isoformat() if config_row and config_row.updated_at else None
+
+    # 构建参数列表（只包含可数值化的参数，跳过 vol_adjust_formula 字符串）
+    parameters = []
+    for key, default_val in QUALITY_CONFIG.items():
+        # 跳过非数值参数（如 vol_adjust_formula, excess_windows_days）
+        if not isinstance(default_val, (int, float)):
+            continue
+        desc, cat = PARAM_META.get(key, (key, "其他"))
+        parameters.append(QualityConfigParamOut(
+            key=key,
+            value=float(merged.get(key, default_val)),
+            default_value=float(default_val),
+            description=desc,
+            category=cat,
+        ))
+
+    return ApiResponse(data=QualityConfigOut(parameters=parameters, updated_at=updated_at))
+
+
+@router.put("/quality-config", response_model=ApiResponse[QualityConfigOut])
+async def update_quality_config(
+    body: QualityConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """更新质量过滤配置参数"""
+    # 读取现有覆盖配置
+    result = await db.execute(
+        select(SystemConfig).where(SystemConfig.config_key == _QUALITY_CONFIG_DB_KEY)
+    )
+    config_row = result.scalars().first()
+
+    overrides: dict = {}
+    if config_row and config_row.config_value:
+        try:
+            overrides = json.loads(config_row.config_value)
+        except (json.JSONDecodeError, TypeError):
+            overrides = {}
+
+    # 应用更新
+    for item in body.parameters:
+        key = item.get("key", "")
+        value = item.get("value")
+        if key in QUALITY_CONFIG and isinstance(value, (int, float)):
+            overrides[key] = value
+
+    # 写入 DB
+    raw = json.dumps(overrides, ensure_ascii=False)
+    if config_row:
+        config_row.config_value = raw
+    else:
+        db.add(SystemConfig(config_key=_QUALITY_CONFIG_DB_KEY, config_value=raw))
+    await db.commit()
+
+    # 重新读取并返回
+    return await get_quality_config(db)

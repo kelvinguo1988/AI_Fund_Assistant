@@ -61,6 +61,7 @@ async def init_db() -> None:
         AnalysisResult,
         AIConversation,
         SystemConfig,
+        FundQuarterly,
     )
 
     # 建表
@@ -453,7 +454,7 @@ async def init_db() -> None:
                     created_at=now,
                 ),
                 ReportConfig(
-                    name="TOP5 买卖信号",
+                    name="TOP10 买卖信号",
                     item_key="top_buy_sell",
                     enabled=True,
                     sort_order=7,

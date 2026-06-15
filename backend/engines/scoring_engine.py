@@ -74,6 +74,10 @@ class SignalResult:
     signal_strength: str           # heavy_buy / moderate_buy / hold / moderate_sell / heavy_sell
     operation_advice: str          # 操作建议文本
     equity_ratio: float            # 建议权益仓位比例 0.0-1.0
+    # ── 第零层扩展字段（可选，向后兼容）──
+    original_score: float = 0.0           # 因子修正前的原始评分
+    dynamic_buy_threshold: float = 1.5    # 动态买入阈值
+    quality_warnings: list[str] = field(default_factory=list)  # 质量过滤警告
 
 
 class ScoringEngine:
@@ -179,3 +183,78 @@ class ScoringEngine:
 
 # 全局引擎实例
 scoring_engine = ScoringEngine()
+
+
+def compute_with_quality_filter(
+    factor_scores: list[FactorScoreResult],
+    factor_weights: list[float],
+    quality_result,
+    thresholds_json: Optional[str] = None,
+) -> SignalResult:
+    """评分 + 质量过滤器集成入口
+
+    原有 ScoringEngine.compute 完全不变。此函数作为外围包装器，
+    先调用 compute 得到基础信号，再根据质量过滤结果调整最终决策。
+
+    Args:
+        factor_scores: 已修正的因子评分列表
+        factor_weights: 已修正的因子权重列表
+        quality_result: QualityFilterResult 质量过滤结果
+        thresholds_json: 阈值配置 JSON（用于基础信号判定）
+
+    Returns:
+        SignalResult（含扩展字段）
+    """
+    # 1. 用原有 compute 得到基础信号
+    base_signal = scoring_engine.compute(
+        factor_scores=factor_scores,
+        factor_weights=factor_weights,
+        thresholds_json=thresholds_json,
+    )
+
+    original_score = base_signal.weighted_score
+
+    # 2. 加偏置得到最终评分
+    adjusted_score = original_score + quality_result.institution_bias
+    adjusted_score = round(max(-6.4, min(6.4, adjusted_score)), 2)
+
+    # 3. 动态阈值决策
+    from backend.engines.quality_filter import determine_signal
+    direction, strength, warning = determine_signal(
+        adjusted_score,
+        quality_result.dynamic_buy_threshold,
+        quality_result.dynamic_sell_threshold,
+        quality_result.drift_triggered,
+    )
+
+    # 4. 生成操作建议
+    equity_map = {
+        "heavy_buy": 0.9, "moderate_buy": 0.7,
+        "hold": 0.5,
+        "moderate_sell": 0.3, "heavy_sell": 0.1,
+    }
+    equity = equity_map.get(strength, 0.5)
+    advice = f"综合评分 {adjusted_score}（原始 {original_score} + 偏置 {quality_result.institution_bias:+.1f}），"
+    if direction == "buy":
+        advice += f"建议加仓，权益仓位可升至 {int(equity * 100)}%"
+    elif direction == "sell":
+        advice += f"建议减仓，权益仓位降至 {int(equity * 100)}%"
+    else:
+        advice += f"建议持有观望，维持基准仓位 {int(equity * 100)}%"
+
+    # 5. 汇总警告
+    warnings = list(quality_result.warnings)
+    if warning:
+        warnings.append(warning)
+
+    return SignalResult(
+        weighted_score=adjusted_score,
+        raw_score=base_signal.raw_score,
+        signal_direction=direction,
+        signal_strength=strength,
+        operation_advice=advice,
+        equity_ratio=equity,
+        original_score=round(original_score, 4),
+        dynamic_buy_threshold=quality_result.dynamic_buy_threshold,
+        quality_warnings=warnings,
+    )

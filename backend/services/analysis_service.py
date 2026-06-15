@@ -11,10 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.data_sources.data_source_manager import DataSourceManager
 from backend.data_sources.base import FundData
 from backend.engines.factor_engine import factor_engine, FactorScoreResult
-from backend.engines.scoring_engine import scoring_engine, SignalResult
+from backend.engines.scoring_engine import scoring_engine, SignalResult, compute_with_quality_filter
 from backend.engines.report_engine import report_engine
+from backend.engines.quality_filter import (
+    quality_filter as _default_quality_filter,
+    QualityFilterResult,
+    merge_quality_config,
+    build_quality_filter,
+)
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
+from backend.models.fund_quarterly import FundQuarterly
 from backend.models.report_config import ReportConfig
 from backend.models.system_config import SystemConfig
 from backend.schemas.analysis import AnalysisResultOut, FactorScore
@@ -31,6 +38,26 @@ class AnalysisService:
     def __init__(self, db: AsyncSession, tushare_token: str = "") -> None:
         self.db = db
         self.data_source = DataSourceManager(tushare_token=tushare_token)
+
+    async def _load_quarterly_data(self, fund_id: int) -> list[dict]:
+        """从数据库加载基金的季度扩展数据"""
+        result = await self.db.execute(
+            select(FundQuarterly)
+            .where(FundQuarterly.fund_id == fund_id)
+            .order_by(FundQuarterly.report_date)
+        )
+        records = result.scalars().all()
+        return [
+            {
+                "report_date": r.report_date,
+                "effective_date": r.effective_date,
+                "fund_size": r.fund_size,
+                "stock_position_ratio": r.stock_position_ratio,
+                "institution_holding_ratio": r.institution_holding_ratio,
+                "insider_holding_shares": r.insider_holding_shares,
+            }
+            for r in records
+        ]
 
     async def run_analysis(
         self,
@@ -77,14 +104,23 @@ class AnalysisService:
         )
         enabled_report_items = [r.item_key for r in report_result.scalars().all()]
 
-        # 5. 逐只基金获取数据 + 计算因子（第一遍）
+        # 5. 加载质量过滤配置（DB 覆盖默认值）
+        merged_qf_config = await merge_quality_config(self.db)
+        qf = build_quality_filter(merged_qf_config)
+
+        # 6. 逐只基金获取数据 + 计算因子（第一遍）
         fund_data_map: dict[str, FundData] = {}
         all_factor_results: dict[str, list[FactorScoreResult]] = {}
+        quarterly_data_map: dict[str, list[dict]] = {}
 
         for fund in funds:
             try:
                 fund_data = await self.data_source.get_fund_data(fund.code, fund_type=getattr(fund, "fund_type", None))
                 fund_data_map[fund.code] = fund_data
+
+                # 加载季度扩展数据
+                quarterly = await self._load_quarterly_data(fund.id)
+                quarterly_data_map[fund.code] = quarterly
 
                 factor_scores = factor_engine.calculate_all(fund_data, active_factors)
                 all_factor_results[fund.code] = factor_scores
@@ -104,31 +140,50 @@ class AnalysisService:
                 continue
 
             factor_scores = all_factor_results[fund.code]
+            fund_data = fund_data_map.get(fund.code)
+            quarterly = quarterly_data_map.get(fund.code, [])
 
-            # 加权评分 + 信号
-            weights = [f.get("weight", 1.0) for f in active_factors]
-            signal = scoring_engine.compute(
+            # ── 第零层：质量过滤 ──
+            if fund_data is None:
+                continue
+
+            qf_result, corrected_scores, corrected_weights = qf.build_result(
+                fund_code=fund.code,
+                fund_data=fund_data,
+                quarterly_history=quarterly,
                 factor_scores=factor_scores,
-                factor_weights=weights,
-                buy_threshold=buy_threshold,
-                sell_threshold=sell_threshold,
+                active_factors=active_factors,
+            )
+
+            # 被否决的基金跳过
+            if qf_result.vetoed:
+                logger.info(f"基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
+                continue
+
+            # ── 加权评分 + 质量过滤决策 ──
+            signal = compute_with_quality_filter(
+                factor_scores=corrected_scores,
+                factor_weights=corrected_weights,
+                quality_result=qf_result,
                 thresholds_json=thresholds_json,
             )
 
             # 生成报告
-            fund_data = fund_data_map.get(fund.code)
             analysis_date = date.today().isoformat()
             report_md = report_engine.generate_markdown(
                 fund_code=fund.code,
                 fund_name=fund.name,
                 analysis_date=analysis_date,
                 signal=signal,
-                factor_scores=factor_scores,
+                factor_scores=corrected_scores,
                 enabled_items=enabled_report_items,
             )
 
-            # 存储结果
-            result_out = await self._save_result(fund, signal, factor_scores)
+            # 存储结果（含质量过滤扩展字段）
+            result_out = await self._save_result(
+                fund, signal, corrected_scores,
+                qf_result=qf_result,
+            )
             if result_out:
                 results.append(result_out)
 
@@ -179,15 +234,23 @@ class AnalysisService:
         )
         enabled_report_items = [r.item_key for r in report_result.scalars().all()]
 
+        # 加载质量过滤配置
+        merged_qf_config = await merge_quality_config(self.db)
+        qf = build_quality_filter(merged_qf_config)
+
         # ── Phase 1: 逐只获取数据 + 计算因子（仅推进度，不推结果） ──
         fund_data_map: dict[str, FundData] = {}
         all_factor_results: dict[str, list[FactorScoreResult]] = {}
+        quarterly_data_map: dict[str, list[dict]] = {}
         failed_codes: list[str] = []
 
         for i, fund in enumerate(funds):
             try:
                 fund_data = await self.data_source.get_fund_data(fund.code, fund_type=getattr(fund, "fund_type", None))
                 fund_data_map[fund.code] = fund_data
+
+                quarterly = await self._load_quarterly_data(fund.id)
+                quarterly_data_map[fund.code] = quarterly
 
                 factor_scores = factor_engine.calculate_all(fund_data, active_factors)
                 all_factor_results[fund.code] = factor_scores
@@ -203,7 +266,6 @@ class AnalysisService:
 
         # ── Phase 2: 分块评分 + 存储 + 推送结果 ──
         results: list[AnalysisResultOut] = []
-        weights = [f.get("weight", 1.0) for f in active_factors]
 
         for chunk_start in range(0, len(funds), _STREAM_CHUNK_SIZE):
             chunk = funds[chunk_start:chunk_start + _STREAM_CHUNK_SIZE]
@@ -214,11 +276,29 @@ class AnalysisService:
                     continue
 
                 factor_scores = all_factor_results[fund.code]
-                signal = scoring_engine.compute(
+                fund_data = fund_data_map.get(fund.code)
+                quarterly = quarterly_data_map.get(fund.code, [])
+
+                if fund_data is None:
+                    continue
+
+                # 第零层：质量过滤
+                qf_result, corrected_scores, corrected_weights = qf.build_result(
+                    fund_code=fund.code,
+                    fund_data=fund_data,
+                    quarterly_history=quarterly,
                     factor_scores=factor_scores,
-                    factor_weights=weights,
-                    buy_threshold=buy_threshold,
-                    sell_threshold=sell_threshold,
+                    active_factors=active_factors,
+                )
+
+                if qf_result.vetoed:
+                    logger.info(f"流式分析: 基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
+                    continue
+
+                signal = compute_with_quality_filter(
+                    factor_scores=corrected_scores,
+                    factor_weights=corrected_weights,
+                    quality_result=qf_result,
                     thresholds_json=thresholds_json,
                 )
 
@@ -227,11 +307,14 @@ class AnalysisService:
                     fund_name=fund.name,
                     analysis_date=date.today().isoformat(),
                     signal=signal,
-                    factor_scores=factor_scores,
+                    factor_scores=corrected_scores,
                     enabled_items=enabled_report_items,
                 )
 
-                result_out = await self._save_result(fund, signal, factor_scores)
+                result_out = await self._save_result(
+                    fund, signal, corrected_scores,
+                    qf_result=qf_result,
+                )
                 if result_out:
                     chunk_results.append(result_out)
                     results.append(result_out)
@@ -258,6 +341,7 @@ class AnalysisService:
         fund: Fund,
         signal: SignalResult,
         factor_scores: list[FactorScoreResult],
+        qf_result: Optional[QualityFilterResult] = None,
     ) -> Optional[AnalysisResultOut]:
         """存储分析结果到数据库"""
         factor_scores_json = json.dumps({
@@ -325,6 +409,9 @@ class AnalysisService:
                 for fs in factor_scores
             ],
             created_at=datetime.now(),
+            original_score=signal.original_score,
+            dynamic_buy_threshold=signal.dynamic_buy_threshold,
+            quality_warnings=signal.quality_warnings or None,
         )
 
     async def _get_config_map(self) -> dict[str, str]:

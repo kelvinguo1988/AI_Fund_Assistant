@@ -11,6 +11,7 @@ from backend.models.system_config import SystemConfig
 from backend.models.fund_holding import FundHolding
 from backend.models.fund_manager_record import FundManagerRecord
 from backend.models.fund_data_cache import FundDataCache
+from backend.models.fund_quarterly import FundQuarterly
 
 __all__ = [
     "Fund",
@@ -24,4 +25,5 @@ __all__ = [
     "FundHolding",
     "FundManagerRecord",
     "FundDataCache",
+    "FundQuarterly",
 ]

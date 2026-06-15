@@ -42,6 +42,26 @@ class ScoringConfigUpdate(BaseModel):
     thresholds: list[ScoringTier] = Field(..., min_length=3, max_length=10, description="阈值配置列表")
 
 
+class QualityConfigParamOut(BaseModel):
+    """单个质量过滤参数输出"""
+    key: str = Field(..., description="参数名")
+    value: float = Field(..., description="当前值")
+    default_value: float = Field(..., description="默认值")
+    description: str = Field(..., description="中文说明")
+    category: str = Field(..., description="分组类别")
+
+
+class QualityConfigOut(BaseModel):
+    """质量过滤配置输出 Schema"""
+    parameters: list[QualityConfigParamOut]
+    updated_at: Optional[str] = None
+
+
+class QualityConfigUpdate(BaseModel):
+    """质量过滤配置更新请求体"""
+    parameters: list[dict] = Field(..., description='[{key: "...", value: 1.0}, ...]')
+
+
 class ConnectivityItem(BaseModel):
     """单个连通性测试结果"""
     name: str = Field(..., description="测试目标名称/域名")

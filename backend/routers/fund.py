@@ -21,6 +21,9 @@ from backend.services.fund_cache_service import (
     get_cached_period_returns,
     get_last_refreshed_time,
     update_period_returns_cache,
+    update_extended_detail_cache,
+    get_cached_json,
+    CACHE_KEY_EXTENDED_DETAIL,
 )
 from backend.services.fund_detail_service import fetch_period_returns
 from backend.services.fund_holding_service import get_latest_holdings, refresh_holdings
@@ -130,10 +133,10 @@ async def get_fund_manager(
 async def refresh_all_details(
     db: AsyncSession = Depends(get_db),
 ):
-    """刷新所有活跃基金的持仓+经理+阶段涨幅数据
+    """刷新所有活跃基金的持仓+经理+阶段涨幅+扩展数据
 
     数据来源：
-    - 阶段涨幅: pingzhongdata/{code}.js（批量并发）
+    - 阶段涨幅+扩展数据: pingzhongdata/{code}.js（批量并发）
     - 股票持仓: AKShare fund_portfolio_hold_em（逐只，3-6s 反爬间隔）
     - 基金经理: AKShare fund_manager_em（全量缓存，逐只匹配）
     """
@@ -146,11 +149,20 @@ async def refresh_all_details(
     name_map = {f.code: f.name for f in funds}
 
     # 1. 先刷新阶段涨幅缓存（批量并发，已含反爬延迟）
+    js_texts: dict[str, str] = {}
     try:
-        await update_period_returns_cache(db, codes, name_map)
+        _, js_texts = await update_period_returns_cache(db, codes, name_map)
         logger.info("阶段涨幅缓存已更新 (%d 只)", len(codes))
     except Exception as e:
         logger.warning("阶段涨幅刷新异常: %s", e)
+
+    # 1.5 解析扩展数据并缓存（复用已获取的 JS 文本，零额外网络请求）
+    if js_texts:
+        try:
+            await update_extended_detail_cache(db, js_texts, name_map)
+            logger.info("扩展数据缓存已更新 (%d 只)", len(js_texts))
+        except Exception as e:
+            logger.warning("扩展数据解析异常: %s", e)
 
     # 2. 逐只刷新持仓+经理（AKShare，需反爬间隔）
     results: list[dict] = []
@@ -267,6 +279,21 @@ async def refresh_fund_themes(
     if fund is None:
         raise HTTPException(status_code=404, detail="基金不存在")
     return ApiResponse(data=FundOut.model_validate(fund))
+
+
+@router.get("/extended-detail", response_model=ApiResponse[dict])
+async def get_funds_extended_detail(
+    db: AsyncSession = Depends(get_db),
+):
+    """获取所有活跃基金的扩展详情（累计收益走势/规模变动/持有人结构/资产配置）
+
+    优先返回缓存数据，无缓存时返回空。
+    数据在 refresh-details 时同步更新。
+    """
+    data, updated_at = await get_cached_json(db, CACHE_KEY_EXTENDED_DETAIL)
+    if data is None:
+        return ApiResponse(data={})
+    return ApiResponse(data={"funds": data, "updated_at": updated_at})
 
 
 @router.patch("/batch", response_model=ApiResponse[None])

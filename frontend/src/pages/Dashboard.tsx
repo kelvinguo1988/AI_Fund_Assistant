@@ -397,14 +397,14 @@ const Dashboard: React.FC = () => {
         </Grid>
       </Grid>
 
-      {/* ── 市场概况 — TOP5 + 资金流 + 板块 ── */}
+      {/* ── 市场概况 — TOP10 + 资金流 + 板块 ── */}
       <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>市场概况</Typography>
       <Grid container spacing={2} sx={{ mb: 3 }}>
-        {/* TOP5 买入 */}
+        {/* TOP10 买入 */}
         <Grid item xs={6}>
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="subtitle2" sx={{ color: '#f44336', mb: 1 }}>TOP 买入信号</Typography>
+              <Typography variant="subtitle2" sx={{ color: '#f44336', mb: 1 }}>TOP10 买入信号</Typography>
               {summary?.signals.top_buy.length ? (
                 <Table size="small">
                   <TableHead>
@@ -433,11 +433,11 @@ const Dashboard: React.FC = () => {
           </Card>
         </Grid>
 
-        {/* TOP5 卖出 */}
+        {/* TOP10 卖出 */}
         <Grid item xs={6}>
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="subtitle2" sx={{ color: '#4caf50', mb: 1 }}>TOP 卖出信号</Typography>
+              <Typography variant="subtitle2" sx={{ color: '#4caf50', mb: 1 }}>TOP10 卖出信号</Typography>
               {summary?.signals.top_sell.length ? (
                 <Table size="small">
                   <TableHead>
@@ -624,6 +624,33 @@ const Dashboard: React.FC = () => {
                   {selectedFund.fund_name} ({selectedFund.fund_code})
                 </Typography>
                 <ScoreGauge score={selectedFund.weighted_score} height={180} />
+
+                {/* ── 第零层质量过滤信息 ── */}
+                {selectedFund.original_score != null &&
+                  selectedFund.original_score !== selectedFund.weighted_score && (
+                    <Box sx={{ mt: 1, mb: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        质量过滤修正：原始评分 <b>{selectedFund.original_score.toFixed(2)}</b>
+                        {' → 修正后 '}<b>{selectedFund.weighted_score.toFixed(2)}</b>
+                      </Typography>
+                    </Box>
+                  )}
+                {selectedFund.dynamic_buy_threshold != null &&
+                  selectedFund.dynamic_buy_threshold !== 1.5 && (
+                    <Chip
+                      size="small"
+                      label={`买入阈值: ${selectedFund.dynamic_buy_threshold}（动态调整）`}
+                      color="warning"
+                      variant="outlined"
+                      sx={{ mt: 0.5, mb: 0.5 }}
+                    />
+                  )}
+                {selectedFund.quality_warnings?.map((w, i) => (
+                  <Alert key={i} severity="warning" sx={{ mt: 0.5, py: 0, fontSize: '0.75rem' }}>
+                    {w}
+                  </Alert>
+                ))}
+
                 <FactorRadarChart factorScores={selectedFund.factor_scores} height={250} />
                 <Typography variant="body2" sx={{ mt: 1 }}>
                   {selectedFund.operation_advice}

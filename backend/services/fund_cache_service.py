@@ -9,12 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.fund_data_cache import FundDataCache
-from backend.services.fund_detail_service import fetch_period_returns
+from backend.services.fund_detail_service import fetch_all_js_texts, _parse_period_returns, _parse_extended_data
 
 logger = logging.getLogger(__name__)
 
 CACHE_KEY_PERIOD_RETURNS = "period_returns"
 CACHE_KEY_REFRESH_TIME = "detail_last_refreshed"
+CACHE_KEY_EXTENDED_DETAIL = "extended_detail"
 
 
 async def get_cached_period_returns(
@@ -57,13 +58,16 @@ async def update_period_returns_cache(
     db: AsyncSession,
     codes: list[str],
     name_map: dict[str, str],
-) -> list[dict]:
-    """抓取阶段涨幅并更新缓存
+) -> tuple[list[dict], dict[str, str]]:
+    """抓取阶段涨幅并更新缓存，同时返回原始 JS 文本
 
     Returns:
-        更新后的数据列表
+        (data_list, js_texts) — js_texts 可供扩展数据解析复用
     """
-    returns = await fetch_period_returns(codes)
+    js_texts = await fetch_all_js_texts(codes)
+    returns: dict[str, dict] = {}
+    for code, text in js_texts.items():
+        returns[code] = _parse_period_returns(text)
     data = [
         {
             "code": code,
@@ -109,7 +113,31 @@ async def update_period_returns_cache(
         ))
 
     await db.commit()
-    return data
+    return data, js_texts
+
+
+async def update_extended_detail_cache(
+    db: AsyncSession,
+    js_texts: dict[str, str],
+    name_map: dict[str, str],
+) -> dict:
+    """解析批量 JS 文本中的扩展数据并缓存
+
+    Args:
+        js_texts: {code: js_text} 来自 fetch_all_js_texts()
+        name_map: {code: name}
+
+    Returns:
+        {code: {grand_total: ..., fluctuation_scale: ..., ...}}
+    """
+    all_data: dict[str, dict] = {}
+    for code, js_text in js_texts.items():
+        ext = _parse_extended_data(js_text)
+        ext["name"] = name_map.get(code, "")
+        all_data[code] = ext
+
+    await set_cached_json(db, CACHE_KEY_EXTENDED_DETAIL, all_data)
+    return all_data
 
 
 async def get_cached_json(db: AsyncSession, cache_key: str) -> tuple[Any, Optional[str]]:

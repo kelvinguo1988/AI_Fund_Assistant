@@ -199,6 +199,10 @@ export interface AnalysisResultOut {
   operation_advice: string;
   factor_scores: FactorScore[];
   created_at: string;
+  // ── 第零层扩展字段（可选）──
+  original_score?: number | null;
+  dynamic_buy_threshold?: number | null;
+  quality_warnings?: string[] | null;
 }
 
 /* ── AI 对话 ─────────────────────────────────────────────────────── */
@@ -425,4 +429,55 @@ export interface ConnectivityResult {
   status: 'ok' | 'partial' | 'fail';
   results: ConnectivityItem[];
   summary: { total: number; reachable: number; unreachable: number };
+}
+
+/* ── 基金扩展详情 ──────────────────────────────────────────── */
+export interface GrandTotalSeries {
+  name: string;
+  data: [number, number][];
+}
+
+export interface FluctuationScale {
+  categories: string[];
+  series: Array<{ y: number; mom: string }>;
+}
+
+export interface HolderStructure {
+  categories: string[];
+  series: Array<{ name: string; data: number[] }>;
+}
+
+export interface AssetAllocation {
+  series: Array<{ name: string; data: number[] }>;
+}
+
+export interface FundExtendedData {
+  name: string;
+  grand_total: GrandTotalSeries[] | null;
+  fluctuation_scale: FluctuationScale | null;
+  holder_structure: HolderStructure | null;
+  asset_allocation: AssetAllocation | null;
+}
+
+export interface ExtendedDetailResponse {
+  funds: Record<string, FundExtendedData>;
+  updated_at: string | null;
+}
+
+/* ── 质量过滤配置 ──────────────────────────────────────────────────── */
+export interface QualityConfigParam {
+  key: string;
+  value: number;
+  default_value: number;
+  description: string;
+  category: string;
+}
+
+export interface QualityConfigOut {
+  parameters: QualityConfigParam[];
+  updated_at: string | null;
+}
+
+export interface QualityConfigUpdate {
+  parameters: Array<{ key: string; value: number }>;
 }

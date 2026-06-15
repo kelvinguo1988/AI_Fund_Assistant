@@ -39,6 +39,11 @@ class FundData:
     fund_size_history: list[float] = field(default_factory=list)  # 基金季度规模序列
     # ── 日期序列 ──
     date_history: list[str] = field(default_factory=list)      # 日期序列
+    # ── 季度扩展数据（标的质量过滤用）──
+    # 每个元素: {"report_date": "2025-03-31", "effective_date": "2025-05-01",
+    #            "fund_size": 1e9, "stock_position_ratio": 85.0,
+    #            "institution_holding_ratio": 30.5, "insider_holding_shares": 1000.0}
+    quarterly_history: list[dict] = field(default_factory=list)
 
 
 @dataclass

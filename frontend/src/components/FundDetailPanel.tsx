@@ -1,5 +1,5 @@
 /**
- * 基金详情面板 — 阶段涨幅 / 持仓明细 & 调仓 / 基金经理 & 变更
+ * 基金详情面板 — 阶段涨幅 / 持仓明细 & 调仓 / 基金经理 & 变更 / 深度分析
  */
 
 import React, { useEffect, useState, useMemo } from 'react';
@@ -23,8 +23,9 @@ import {
   Alert,
 } from '@mui/material';
 import { ExpandMore, ExpandLess } from '@mui/icons-material';
+import ReactECharts from 'echarts-for-react';
 import { fundApi } from '../api/fund';
-import type { FundPeriodReturn, HoldingChanges, ManagerChanges } from '../types';
+import type { FundPeriodReturn, HoldingChanges, ManagerChanges, FundExtendedData } from '../types';
 
 /* ================================================================
    阶段涨幅子组件
@@ -47,7 +48,7 @@ const returnColor = (v: string | null): string => {
   if (!v) return '#95A5A6';
   const n = parseFloat(v);
   if (isNaN(n)) return '#95A5A6';
-  return n > 0 ? '#27AE60' : n < 0 ? '#E74C3C' : '#95A5A6';
+  return n > 0 ? '#E74C3C' : n < 0 ? '#27AE60' : '#95A5A6';
 };
 
 const parseReturn = (v: string | null): number => {
@@ -118,7 +119,6 @@ const ReturnTab: React.FC<{ data: FundPeriodReturn[] }> = ({ data }) => {
     </Box>
   );
 };
-
 /* ================================================================
    持仓 & 调仓 diff 子组件
    ================================================================ */
@@ -137,7 +137,8 @@ const HoldingRow: React.FC<{
   code: string;
   name: string;
   changes: HoldingChanges | null;
-}> = ({ fundId, code, name, changes }) => {
+  top3Text?: string;
+}> = ({ fundId, code, name, changes, top3Text }) => {
   const [open, setOpen] = useState(false);
   const [holdings, setHoldings] = useState<any[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -147,9 +148,7 @@ const HoldingRow: React.FC<{
     fundApi.getHoldings(fundId).then((res) => { setHoldings(res.data || []); setLoaded(true); });
   }, [open, fundId, loaded]);
 
-  const top3 = holdings.slice(0, 3)
-    .map((h: any) => `${h.stock_name}${h.ratio != null ? h.ratio.toFixed(1) : ''}%`)
-    .join(' | ');
+  const top3 = top3Text || '--';
 
   return (
     <>
@@ -159,7 +158,7 @@ const HoldingRow: React.FC<{
         <TableCell>{name}</TableCell>
         <TableCell>{changes?.latest_quarter?.slice(0, 10) || '--'}</TableCell>
         <TableCell sx={{ fontSize: '0.85em', color: 'text.secondary', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {top3 || '--'}
+          {top3}
         </TableCell>
         <TableCell sx={{ minWidth: 160 }}>
           {changes && (changes.added.length > 0 || changes.removed.length > 0) && (
@@ -174,7 +173,6 @@ const HoldingRow: React.FC<{
         <TableCell colSpan={6} sx={{ p: 0 }}>
           <Collapse in={open}>
             <Box sx={{ px: 3, pb: 2, pt: 1 }}>
-              {/* 调仓 diff */}
               {changes && (changes.added.length > 0 || changes.removed.length > 0) && (
                 <Box sx={{ mb: 1.5, p: 1.5, bgcolor: '#fafafa', borderRadius: 1 }}>
                   <Typography variant="caption" sx={{ fontWeight: 600, mb: 0.5, display: 'block' }}>
@@ -225,32 +223,56 @@ const HoldingRow: React.FC<{
   );
 };
 
-const HoldingTab: React.FC<{ funds: { id: number; code: string; name: string }[]; changesMap: Record<number, HoldingChanges | null> }> = ({ funds, changesMap }) => (
-  <TableContainer component={Paper} variant="outlined">
-    <Table size="small">
-      <TableHead>
-        <TableRow>
-          <TableCell sx={{ fontWeight: 600, width: 40 }} />
-          <TableCell sx={{ fontWeight: 600 }}>代码</TableCell>
-          <TableCell sx={{ fontWeight: 600 }}>名称</TableCell>
-          <TableCell sx={{ fontWeight: 600 }}>最新季度</TableCell>
-          <TableCell sx={{ fontWeight: 600 }}>前3持仓</TableCell>
-          <TableCell sx={{ fontWeight: 600 }}>调仓</TableCell>
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {funds.length === 0 ? (
-          <TableRow><TableCell colSpan={6} align="center">暂无基金数据</TableCell></TableRow>
-        ) : (
-          funds.map((f) => (
-            <HoldingRow key={f.id} fundId={f.id} code={f.code} name={f.name}
-              changes={changesMap[f.id] ?? null} />
-          ))
-        )}
-      </TableBody>
-    </Table>
-  </TableContainer>
-);
+const HoldingTab: React.FC<{ funds: { id: number; code: string; name: string }[]; changesMap: Record<number, HoldingChanges | null> }> = ({ funds, changesMap }) => {
+  const [top3Map, setTop3Map] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    Promise.all(
+      funds.map((f) =>
+        fundApi.getHoldings(f.id)
+          .then((res) => {
+            const items = (res.data || []).slice(0, 3);
+            const text = items
+              .map((h: any) => `${h.stock_name}${h.ratio != null ? h.ratio.toFixed(1) : ''}%`)
+              .join(' | ');
+            return { id: f.id, text };
+          })
+          .catch(() => ({ id: f.id, text: '--' }))
+      )
+    ).then((results) => {
+      const m: Record<number, string> = {};
+      results.forEach((r) => { m[r.id] = r.text; });
+      setTop3Map(m);
+    });
+  }, [funds]);
+
+  return (
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell sx={{ fontWeight: 600, width: 40 }} />
+            <TableCell sx={{ fontWeight: 600 }}>代码</TableCell>
+            <TableCell sx={{ fontWeight: 600 }}>名称</TableCell>
+            <TableCell sx={{ fontWeight: 600 }}>最新季度</TableCell>
+            <TableCell sx={{ fontWeight: 600 }}>前3持仓</TableCell>
+            <TableCell sx={{ fontWeight: 600 }}>调仓</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {funds.length === 0 ? (
+            <TableRow><TableCell colSpan={6} align="center">暂无基金数据</TableCell></TableRow>
+          ) : (
+            funds.map((f) => (
+              <HoldingRow key={f.id} fundId={f.id} code={f.code} name={f.name}
+                changes={changesMap[f.id] ?? null} top3Text={top3Map[f.id]} />
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+};
 
 /* ================================================================
    基金经理 & 变更子组件
@@ -313,6 +335,151 @@ const ManagerTab: React.FC<{
 );
 
 /* ================================================================
+   深度分析 — ECharts 图表组件
+   ================================================================ */
+
+const CHART_STYLE = { height: 320, width: '100%' };
+
+/** 累计收益走势 — 折线图 (基金 vs 沪深300) */
+const CumulativeReturnChart: React.FC<{ data: FundExtendedData['grand_total'] }> = ({ data }) => {
+  if (!data || data.length === 0) return <Typography variant="body2" color="text.secondary">暂无累计收益数据</Typography>;
+  const colors = ['#1976D2', '#E74C3C', '#27AE60', '#F39C12'];
+  const option = {
+    tooltip: { trigger: 'axis' as const, formatter: (params: any) => params.map((p: any) => `${p.marker}${p.seriesName}: ${p.value[1]?.toFixed(2)}%`).join('<br/>') },
+    legend: { bottom: 0, textStyle: { fontSize: 11 } },
+    grid: { top: 20, right: 20, bottom: 40, left: 60 },
+    xAxis: { type: 'time' as const, axisLabel: { fontSize: 10 } },
+    yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}%', fontSize: 10 } },
+    series: data.map((s, i) => ({
+      name: s.name,
+      type: 'line',
+      data: s.data.map(([t, v]: [number, number]) => [t, v]),
+      smooth: true,
+      symbol: 'none',
+      lineStyle: { width: 1.5 },
+      color: colors[i % colors.length],
+    })),
+  };
+  return <ReactECharts option={option} style={CHART_STYLE} />;
+};
+
+/** 规模变动 — 柱状图 (亿元 + 环比%标注) */
+const ScaleChangeChart: React.FC<{ data: FundExtendedData['fluctuation_scale'] }> = ({ data }) => {
+  if (!data) return <Typography variant="body2" color="text.secondary">暂无规模数据</Typography>;
+  const option = {
+    tooltip: { trigger: 'axis' as const },
+    grid: { top: 30, right: 20, bottom: 30, left: 60 },
+    xAxis: { type: 'category' as const, data: data.categories, axisLabel: { fontSize: 10, rotate: 30 } },
+    yAxis: { type: 'value' as const, name: '亿元', axisLabel: { fontSize: 10 } },
+    series: [{
+      type: 'bar',
+      data: data.series.map((d) => d.y),
+      itemStyle: { color: '#1976D2' },
+      label: {
+        show: true,
+        position: 'top' as const,
+        fontSize: 10,
+        formatter: (p: any) => {
+          const mom = data.series[p.dataIndex]?.mom;
+          return mom ? `${p.value}\n${mom}` : `${p.value}`;
+        },
+      },
+    }],
+  };
+  return <ReactECharts option={option} style={CHART_STYLE} />;
+};
+
+/** 持有人结构 — 堆叠柱状图 */
+const HolderStructureChart: React.FC<{ data: FundExtendedData['holder_structure'] }> = ({ data }) => {
+  if (!data) return <Typography variant="body2" color="text.secondary">暂无持有人结构数据</Typography>;
+  const colors: Record<string, string> = { '机构持有比例': '#1976D2', '个人持有比例': '#27AE60', '内部持有比例': '#F39C12' };
+  const option = {
+    tooltip: { trigger: 'axis' as const, formatter: (params: any) => params.map((p: any) => `${p.marker}${p.seriesName}: ${p.value?.toFixed(2)}%`).join('<br/>') },
+    legend: { bottom: 0, textStyle: { fontSize: 11 } },
+    grid: { top: 20, right: 20, bottom: 40, left: 60 },
+    xAxis: { type: 'category' as const, data: data.categories, axisLabel: { fontSize: 10, rotate: 30 } },
+    yAxis: { type: 'value' as const, max: 100, axisLabel: { formatter: '{value}%', fontSize: 10 } },
+    series: data.series.map((s) => ({
+      name: s.name,
+      type: 'bar',
+      stack: 'holder',
+      data: s.data,
+      itemStyle: { color: colors[s.name] || '#999' },
+    })),
+  };
+  return <ReactECharts option={option} style={CHART_STYLE} />;
+};
+
+/** 资产配置 — 分组柱状图 */
+const AssetAllocationChart: React.FC<{ data: FundExtendedData['asset_allocation'] }> = ({ data }) => {
+  if (!data) return <Typography variant="body2" color="text.secondary">暂无资产配置数据</Typography>;
+  const colors: Record<string, string> = { '股票占净比': '#E74C3C', '债券占净比': '#1976D2', '现金占净比': '#27AE60' };
+  const option = {
+    tooltip: { trigger: 'axis' as const, formatter: (params: any) => params.map((p: any) => `${p.marker}${p.seriesName}: ${p.value?.toFixed(2)}%`).join('<br/>') },
+    legend: { bottom: 0, textStyle: { fontSize: 11 } },
+    grid: { top: 20, right: 20, bottom: 40, left: 60 },
+    xAxis: { type: 'category' as const, data: data.series[0]?.data?.map((_: any, i: number) => `Q${i + 1}`) || [], axisLabel: { fontSize: 10 } },
+    yAxis: { type: 'value' as const, axisLabel: { formatter: '{value}%', fontSize: 10 } },
+    series: data.series.map((s) => ({
+      name: s.name,
+      type: 'bar',
+      data: s.data,
+      itemStyle: { color: colors[s.name] || '#999' },
+    })),
+  };
+  return <ReactECharts option={option} style={CHART_STYLE} />;
+};
+
+/* ================================================================
+   深度分析 Tab
+   ================================================================ */
+
+const ExtendedAnalysisTab: React.FC<{ funds: Record<string, FundExtendedData> }> = ({ funds }) => {
+  const codes = Object.keys(funds);
+  const [selected, setSelected] = useState<string>(codes[0] || '');
+
+  useEffect(() => {
+    if (!selected && codes.length > 0) setSelected(codes[0]);
+  }, [codes]);
+
+  const d = funds[selected];
+  if (!d) return <Typography variant="body2" color="text.secondary">暂无扩展数据，请先刷新基金详情</Typography>;
+
+  return (
+    <Box>
+      {/* 基金选择器 */}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+        {codes.map((code) => (
+          <Chip key={code} label={`${code} ${funds[code].name || ''}`}
+            color={selected === code ? 'primary' : 'default'}
+            size="small" onClick={() => setSelected(code)} clickable />
+        ))}
+      </Box>
+
+      {/* 2x2 图表网格 */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>累计收益走势</Typography>
+          <CumulativeReturnChart data={d.grand_total} />
+        </Paper>
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>规模变动</Typography>
+          <ScaleChangeChart data={d.fluctuation_scale} />
+        </Paper>
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>持有人结构</Typography>
+          <HolderStructureChart data={d.holder_structure} />
+        </Paper>
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>资产配置</Typography>
+          <AssetAllocationChart data={d.asset_allocation} />
+        </Paper>
+      </Box>
+    </Box>
+  );
+};
+
+/* ================================================================
    主组件
    ================================================================ */
 
@@ -335,14 +502,13 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
   const [returns, setReturns] = useState<FundPeriodReturn[]>(externalReturns || []);
   const [loading, setLoading] = useState(externalLoading ?? true);
   const [error, setError] = useState<string | null>(null);
+  const [extendedData, setExtendedData] = useState<Record<string, FundExtendedData>>({});
 
   const loadData = async () => {
     if (externalReturns && externalReturns.length > 0) {
-      // 外部已提供阶段涨幅数据
       setReturns(externalReturns);
     }
 
-    // 基金列表 + 变更摘要始终并行加载（不依赖外部缓存）
     try {
       const [listRes, changeRes] = await Promise.all([
         fundApi.list('active'),
@@ -368,6 +534,16 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
     }
   };
 
+  // 加载扩展数据
+  const loadExtended = async () => {
+    try {
+      const res = await fundApi.getExtendedDetail();
+      setExtendedData(res.data?.funds || {});
+    } catch {
+      // 扩展数据加载失败不影响主流程
+    }
+  };
+
   useEffect(() => {
     if (externalReturns) {
       setReturns(externalReturns);
@@ -380,7 +556,7 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
     }
   }, [externalLoading]);
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => { loadData(); loadExtended(); }, []);
 
   if (loading) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>;
@@ -413,6 +589,7 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
           <Tab label="阶段涨幅" />
           <Tab label="持仓明细" />
           <Tab label="基金经理" />
+          <Tab label="深度分析" />
         </Tabs>
       </Box>
 
@@ -427,6 +604,7 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
           Object.entries(changesMap).map(([k, v]: [string, any]) => [Number(k), v.manager_changes])
         )} />
       )}
+      {tabIdx === 3 && <ExtendedAnalysisTab funds={extendedData} />}
     </Box>
   );
 };

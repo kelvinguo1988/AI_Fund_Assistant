@@ -33,6 +33,7 @@ import {
   Menu as MenuIcon,
   SmartToy as AIIcon,
   Tune as ScoringIcon,
+  Security as QualityIcon,
   Settings as SettingsIcon,
 } from '@mui/icons-material';
 import { useAppStore } from './store';
@@ -47,6 +48,7 @@ import ReportConfig from './pages/ReportConfig';
 import SchedulePlan from './pages/SchedulePlan';
 import HistoryReports from './pages/HistoryReports';
 import ScoringConfig from './pages/ScoringConfig';
+import QualityConfig from './pages/QualityConfig';
 import SystemPage from './pages/System';
 import FundDetailPage from './pages/FundDetailPage';
 
@@ -75,6 +77,7 @@ const NAV_ITEMS = [
   { key: 'report', label: '报告配置', icon: <ReportIcon />, path: '/report' },
   { key: 'schedule', label: '调度计划', icon: <ScheduleIcon />, path: '/schedule' },
   { key: 'scoring', label: '评分配置', icon: <ScoringIcon />, path: '/scoring' },
+  { key: 'quality', label: '质量过滤', icon: <QualityIcon />, path: '/quality-config' },
   { key: 'history', label: '历史报告', icon: <HistoryIcon />, path: '/history' },
   { key: 'system', label: '系统设置', icon: <SettingsIcon />, path: '/system' },
 ];
@@ -195,6 +198,7 @@ const AppLayout: React.FC = () => {
           <Route path="/report" element={<ReportConfig />} />
           <Route path="/schedule" element={<SchedulePlan />} />
           <Route path="/scoring" element={<ScoringConfig />} />
+          <Route path="/quality-config" element={<QualityConfig />} />
           <Route path="/history" element={<HistoryReports />} />
           <Route path="/system" element={<SystemPage />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

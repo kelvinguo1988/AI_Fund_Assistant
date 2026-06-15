@@ -1,7 +1,7 @@
 """分析结果 Pydantic Schema"""
 
 from datetime import date, datetime
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,5 +29,9 @@ class AnalysisResultOut(BaseModel):
     equity_ratio: float = 0.5     # 建议权益仓位比例
     factor_scores: List[FactorScore]
     created_at: datetime
+    # ── 第零层扩展字段（可选，向后兼容）──
+    original_score: Optional[float] = None         # 因子修正前原始评分
+    dynamic_buy_threshold: Optional[float] = None  # 动态买入阈值
+    quality_warnings: Optional[List[str]] = None   # 质量过滤警告
 
     model_config = {"from_attributes": True}
