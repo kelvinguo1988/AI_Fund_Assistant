@@ -35,11 +35,10 @@ _STREAM_CHUNK_SIZE = 5
 class AnalysisService:
     """分析编排服务"""
 
-    def __init__(self, db: AsyncSession, tushare_token: str = "",
+    def __init__(self, db: AsyncSession,
                  joinquant_user: str = "", joinquant_password: str = "") -> None:
         self.db = db
         self.data_source = DataSourceManager(
-            tushare_token=tushare_token,
             joinquant_user=joinquant_user,
             joinquant_password=joinquant_password,
         )

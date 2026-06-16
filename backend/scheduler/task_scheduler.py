@@ -130,7 +130,6 @@ class TaskScheduler:
                 from backend.config import settings
                 svc = AnalysisService(
                     session,
-                    tushare_token=settings.TUSHARE_TOKEN,
                     joinquant_user=settings.JOINQUANT_USER,
                     joinquant_password=settings.JOINQUANT_PASSWORD,
                 )

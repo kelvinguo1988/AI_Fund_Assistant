@@ -42,7 +42,6 @@ class Settings:
     DEFAULT_AI_BASE_URL: str = "https://api.deepseek.com/v1"
 
     # 数据源
-    TUSHARE_TOKEN: str = os.getenv("TUSHARE_TOKEN", "")
     JOINQUANT_USER: str = os.getenv("JOINQUANT_USER", "")
     JOINQUANT_PASSWORD: str = os.getenv("JOINQUANT_PASSWORD", "")
 

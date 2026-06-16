@@ -2,10 +2,7 @@
 
 数据源优先级（由高到低）：
   1. AKShare        — 主接口，数据最全
-  2. TuShare         — 次接口，需 token
-  3. JoinQuant       — 聚宽接口，需账号
-  4. BaoStock        — 备1，免费无需 token
-  5. TickFlow        — 备2，末级兆底
+  2. JoinQuant      — 聚宽接口，需账号
 
 降级规则：
 - 当前优先源失败 → 自动切换下一级
@@ -70,23 +67,15 @@ class DataSourceManager(BaseDataSource):
     对外透明：analysis_service 只需注入此管理器，调用方式不变。
     """
 
-    def __init__(self, tushare_token: str = "", joinquant_user: str = "", joinquant_password: str = "") -> None:
+    def __init__(self, joinquant_user: str = "", joinquant_password: str = "") -> None:
         self._sources: list[_SourceStatus] = []
-        self._build_chain(tushare_token, joinquant_user, joinquant_password)
+        self._build_chain(joinquant_user, joinquant_password)
 
-    def _build_chain(self, tushare_token: str, joinquant_user: str, joinquant_password: str) -> None:
+    def _build_chain(self, joinquant_user: str, joinquant_password: str) -> None:
         """按优先级构建数据源链"""
         chain: list[tuple[str, BaseDataSource]] = [
             ("AKShare", AKShareAdapter()),
         ]
-
-        # TuShare（初始化失败时标记不可用但不阻断）
-        try:
-            from backend.data_sources.tushare_adapter import TuShareAdapter
-            ts_adapter = TuShareAdapter(token=tushare_token)
-            chain.append(("TuShare", ts_adapter))
-        except Exception as e:
-            logger.warning(f"TuShare 加载失败: {e}")
 
         # JoinQuant（聚宽）
         try:
@@ -95,22 +84,6 @@ class DataSourceManager(BaseDataSource):
             chain.append(("JoinQuant", jq_adapter))
         except Exception as e:
             logger.warning(f"JoinQuant 加载失败: {e}")
-
-        # BaoStock
-        try:
-            from backend.data_sources.baostock_adapter import BaoStockAdapter
-            bs_adapter = BaoStockAdapter()
-            chain.append(("BaoStock", bs_adapter))
-        except Exception as e:
-            logger.warning(f"BaoStock 加载失败: {e}")
-
-        # TickFlow（末级保底）
-        try:
-            from backend.data_sources.tickflow_adapter import TickFlowAdapter
-            tf_adapter = TickFlowAdapter()
-            chain.append(("TickFlow", tf_adapter))
-        except Exception as e:
-            logger.warning(f"TickFlow 加载失败: {e}")
 
         self._sources = [
             _SourceStatus(name, adapter, idx)

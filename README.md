@@ -20,7 +20,7 @@ AI_Fund_Assistant/
 │   │   ├── factor_engine.py    # 8 因子计算 + 信号规则 + 截面标准化
 │   │   ├── scoring_engine.py   # 加权评分 + 信号判定
 │   │   └── report_engine.py    # 报告生成（Markdown / HTML）
-│   ├── data_sources/           # 多数据源适配器（AKShare/TuShare/BaoStock/TickFlow）
+│   ├── data_sources/           # 多数据源适配器（AKShare/JoinQuant）
 │   ├── llm/                    # AI 大模型接入（DeepSeek/OpenAI/通义千问）
 │   ├── patch/                  # 东方财富反爬虫补丁
 │   ├── push/                   # 推送机器人（飞书等）
@@ -44,7 +44,7 @@ AI_Fund_Assistant/
 - **8 因子配置体系**：PE 百分位、股债性价比 FED、动量因子、波动率倒数、信息比率、MACD 信号、最大回撤、规模稳定性
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
-- **多数据源链**：AKShare → TuShare → BaoStock → TickFlow，自动降级恢复
+- **多数据源链**：AKShare → JoinQuant（聚宽），自动降级恢复
 - **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、系统设置（共 11 个页面）
 - **基金详情模块**：阶段涨幅排序展示、季度持仓明细（可展开）、基金经理信息，含调仓 diff 和经理变更标注
 - **一键批量导入**：自动识别 ETF/场外类型，自动从天天基金抓取相关主题标签
@@ -172,9 +172,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 ```
 请求数据 → DataSourceManager
   主 → AKShare（东财，按 fund_type 路由 ETF/OTC，另一方自动降级）
-  次 → TuShare Pro（需 Token）
-  备 → BaoStock（免费）
-  末 → TickFlow（保底）
+  备 → JoinQuant 聚宽（需账号，jqdatasdk）
 ```
 
 任一源连续失败后降级，5min 后自动尝试恢复。
@@ -193,7 +191,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `DEFAULT_AI_BASE_URL` | 否 | `https://api.deepseek.com/v1` | AI API 基础 URL |
 | `FEISHU_WEBHOOK_URL` | 否 | — | 飞书机器人 Webhook URL |
 | `FEISHU_WEBHOOK_SECRET` | 否 | — | 飞书签名密钥 |
-| `TUSHARE_TOKEN` | 否 | — | TuShare Pro Token |
+| `JOINQUANT_USER` | 否 | — | 聚宽账号 |
+| `JOINQUANT_PASSWORD` | 否 | — | 聚宽密码 |
 | `FUND_QUANT_DATABASE_DIR` | 否 | `data/` | 数据库目录 |
 | `FUND_QUANT_DATABASE_NAME` | 否 | `fund_quant.db` | 数据库文件名 |
 | `FUND_QUANT_HOST` | 否 | `0.0.0.0` | 服务监听地址 |

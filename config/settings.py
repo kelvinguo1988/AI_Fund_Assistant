@@ -88,7 +88,7 @@ POSITION_TIERS = {
 # 数据采集配置
 # ============================================================
 DATA_CONFIG = {
-    "tushare_token": os.getenv("TUSHARE_TOKEN", ""),       # TuShare Pro Token
+
     "akshare_delay": 0.5,    # AKShare请求间隔（秒）防封禁
     "retry_times":   3,      # 失败重试次数
     "retry_delay":   2,      # 重试间隔（秒）

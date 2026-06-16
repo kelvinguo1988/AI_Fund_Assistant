@@ -246,7 +246,6 @@ async def trigger_analysis(
         from backend.services.analysis_service import AnalysisService
         svc = AnalysisService(
             db,
-            tushare_token=settings.TUSHARE_TOKEN,
             joinquant_user=settings.JOINQUANT_USER,
             joinquant_password=settings.JOINQUANT_PASSWORD,
         )
@@ -273,7 +272,6 @@ async def trigger_analysis_stream(
 
     svc = AnalysisService(
         db,
-        tushare_token=settings.TUSHARE_TOKEN,
         joinquant_user=settings.JOINQUANT_USER,
         joinquant_password=settings.JOINQUANT_PASSWORD,
     )
