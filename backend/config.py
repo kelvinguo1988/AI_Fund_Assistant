@@ -43,6 +43,8 @@ class Settings:
 
     # 数据源
     TUSHARE_TOKEN: str = os.getenv("TUSHARE_TOKEN", "")
+    JOINQUANT_USER: str = os.getenv("JOINQUANT_USER", "")
+    JOINQUANT_PASSWORD: str = os.getenv("JOINQUANT_PASSWORD", "")
 
     # 评分阈值
     DEFAULT_BUY_THRESHOLD: float = 3.5

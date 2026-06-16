@@ -8,8 +8,6 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-import tushare as ts  # type: ignore
-
 from backend.data_sources.base import BaseDataSource, FundData, MarketIndices
 
 logger = logging.getLogger(__name__)
@@ -27,11 +25,15 @@ class TuShareAdapter(BaseDataSource):
 
     def __init__(self, token: str = "") -> None:
         self._available = False
+        self._pro = None
         if token:
             try:
+                import tushare as ts  # type: ignore  # lazy import
                 ts.set_token(token)
                 self._pro = ts.pro_api()
                 self._available = True
+            except ImportError:
+                logger.info("tushare 未安装，跳过此数据源")
             except Exception as e:
                 logger.warning(f"TuShare 初始化失败: {e}")
 

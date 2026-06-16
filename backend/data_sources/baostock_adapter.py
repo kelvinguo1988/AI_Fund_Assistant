@@ -8,7 +8,6 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-import baostock as bs  # type: ignore
 import pandas as pd
 
 from backend.data_sources.base import BaseDataSource, FundData, MarketIndices
@@ -47,14 +46,18 @@ class BaoStockAdapter(BaseDataSource):
     def __init__(self) -> None:
         self._available = False
         try:
+            import baostock as bs  # type: ignore  # lazy import
             bs.login()
             self._available = True
+        except ImportError:
+            logger.info("baostock 未安装，跳过此数据源")
         except Exception as e:
             logger.warning(f"BaoStock 登录失败: {e}")
 
     def __del__(self) -> None:
         if self._available:
             try:
+                import baostock as bs  # type: ignore
                 bs.logout()
             except Exception:
                 pass
@@ -66,6 +69,8 @@ class BaoStockAdapter(BaseDataSource):
     async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
         if not self._available:
             raise RuntimeError("BaoStock 未登录")
+
+        import baostock as bs  # type: ignore  # lazy import
 
         fund_data = FundData(code=code)
         bs_code = _to_bs_code(code)
@@ -122,6 +127,8 @@ class BaoStockAdapter(BaseDataSource):
         indices = MarketIndices()
         if not self._available:
             return indices
+
+        import baostock as bs  # type: ignore  # lazy import
 
         index_map = {
             "sh.000001": "sh_composite",

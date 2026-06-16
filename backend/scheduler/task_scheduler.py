@@ -127,7 +127,13 @@ class TaskScheduler:
                 await session.commit()
 
                 # 执行分析
-                svc = AnalysisService(session)
+                from backend.config import settings
+                svc = AnalysisService(
+                    session,
+                    tushare_token=settings.TUSHARE_TOKEN,
+                    joinquant_user=settings.JOINQUANT_USER,
+                    joinquant_password=settings.JOINQUANT_PASSWORD,
+                )
                 results = await svc.run_analysis()
 
                 # 推送

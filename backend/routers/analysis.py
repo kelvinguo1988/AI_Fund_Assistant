@@ -244,7 +244,12 @@ async def trigger_analysis(
     try:
         from backend.config import settings
         from backend.services.analysis_service import AnalysisService
-        svc = AnalysisService(db, tushare_token=settings.TUSHARE_TOKEN)
+        svc = AnalysisService(
+            db,
+            tushare_token=settings.TUSHARE_TOKEN,
+            joinquant_user=settings.JOINQUANT_USER,
+            joinquant_password=settings.JOINQUANT_PASSWORD,
+        )
         fund_ids = body.get("fund_ids") if body else None
         results = await svc.run_analysis(fund_ids=fund_ids)
         return ApiResponse(data=results)
@@ -266,16 +271,25 @@ async def trigger_analysis_stream(
     from backend.config import settings
     from backend.services.analysis_service import AnalysisService
 
-    svc = AnalysisService(db, tushare_token=settings.TUSHARE_TOKEN)
+    svc = AnalysisService(
+        db,
+        tushare_token=settings.TUSHARE_TOKEN,
+        joinquant_user=settings.JOINQUANT_USER,
+        joinquant_password=settings.JOINQUANT_PASSWORD,
+    )
 
     body = await request.json() if request.headers.get("content-type") else None
     fund_ids = body.get("fund_ids") if isinstance(body, dict) else None
 
     async def _event_stream():
-        async for event in svc.run_analysis_streaming(fund_ids=fund_ids):
-            yield event
-            if await request.is_disconnected():
-                break
+        try:
+            async for event in svc.run_analysis_streaming(fund_ids=fund_ids):
+                yield event
+                if await request.is_disconnected():
+                    break
+        finally:
+            # 客户端断开时确保 DB session 归还连接池
+            await db.close()
 
     return StreamingResponse(
         _event_stream(),
