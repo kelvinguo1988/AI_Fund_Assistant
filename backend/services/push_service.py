@@ -115,6 +115,10 @@ class PushService:
                 hold_results = [r for r in results if r.signal_direction == "hold"]
                 top_buy = sorted(buy_results, key=lambda r: r.weighted_score, reverse=True)[:10]
                 top_sell = sorted(sell_results, key=lambda r: r.weighted_score)[:10]
+                logger.info(
+                    f"推送 TOP10 构建: buy={len(buy_results)}只→取{len(top_buy)}, "
+                    f"sell={len(sell_results)}只→取{len(top_sell)}"
+                )
 
                 market_summary = MarketSummaryOut(
                     date=today_str,
@@ -196,7 +200,7 @@ class PushService:
                             analysis_date=str(r.analysis_date),
                             signal=signal,
                             factor_scores=factor_scores,
-                            enabled_items=enabled_fund if enabled_fund else None,
+                            enabled_items=enabled_fund,
                         )
 
                         success = await pusher.send_analysis_report(

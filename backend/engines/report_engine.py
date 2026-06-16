@@ -259,17 +259,23 @@ class ReportEngine:
         if "top_buy_sell" in enabled_items:
             lines.append("## 🔴 TOP10 买入信号")
             lines.append("")
-            lines.append("| 基金 | 代码 | 评分 | 强度 |")
-            lines.append("|------|------|------|------|")
-            for r in ms.signals.top_buy:
-                lines.append(f"| {r.fund_name} | {r.fund_code} | {r.weighted_score} | {r.signal_strength} |")
+            if ms.signals.top_buy:
+                lines.append("| 基金 | 代码 | 评分 | 强度 |")
+                lines.append("|------|------|------|------|")
+                for r in ms.signals.top_buy:
+                    lines.append(f"| {r.fund_name} | {r.fund_code} | {r.weighted_score} | {r.signal_strength} |")
+            else:
+                lines.append("*暂无买入信号*")
             lines.append("")
             lines.append("## 🟢 TOP10 卖出信号")
             lines.append("")
-            lines.append("| 基金 | 代码 | 评分 | 强度 |")
-            lines.append("|------|------|------|------|")
-            for r in ms.signals.top_sell:
-                lines.append(f"| {r.fund_name} | {r.fund_code} | {r.weighted_score} | {r.signal_strength} |")
+            if ms.signals.top_sell:
+                lines.append("| 基金 | 代码 | 评分 | 强度 |")
+                lines.append("|------|------|------|------|")
+                for r in ms.signals.top_sell:
+                    lines.append(f"| {r.fund_name} | {r.fund_code} | {r.weighted_score} | {r.signal_strength} |")
+            else:
+                lines.append("*暂无卖出信号*")
             lines.append("")
 
         # ── 涨跌分布 ──

@@ -45,13 +45,13 @@ AI_Fund_Assistant/
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
 - **多数据源链**：AKShare → TuShare → BaoStock → TickFlow，自动降级恢复
-- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、历史报告、系统设置（共 10 个页面）
+- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、系统设置（共 11 个页面）
 - **基金详情模块**：阶段涨幅排序展示、季度持仓明细（可展开）、基金经理信息，含调仓 diff 和经理变更标注
 - **一键批量导入**：自动识别 ETF/场外类型，自动从天天基金抓取相关主题标签
 - **"先展示缓存，手动/定时触发刷新"模式**：仪表盘行情数据、基金阶段涨幅均持久化缓存到数据库，页面加载直接展示缓存数据 + 时间戳；数据仅在手动手动刷新或定时推送任务触发时更新，推送后自动同步仪表盘缓存
 - **定时分析**：交易日自动执行 + 手动触发
 - **流式分析**：手动触发时分块处理基金数据，SSE 逐块推送结果至仪表盘，实时展示进度与中间结果
-- **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析）
+- **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析），推送内容严格跟随报告配置项过滤，未启用的报告项不会推送
 - **AI 分析**：集成 DeepSeek / ChatGPT，生成自然语言建议
 - **东方财富反爬虫补丁**：NID 授权令牌 + User-Agent 轮换 + 请求频率控制
 - **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
@@ -150,7 +150,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/funds/{id}/refresh-themes` | POST | 重新抓取天天基金主题标签 |
 | `/api/analysis` | GET | 查询分析结果 |
 | `/api/analysis/latest` | GET | 最新分析结果 |
-| `/api/analysis/summary` | GET | 市场概况汇总（信号TOP5 + 资金流 + 板块排行 + 涨跌分布 + 成交额） |
+| `/api/analysis/summary` | GET | 市场概况汇总（信号TOP10 + 资金流 + 板块排行 + 涨跌分布 + 成交额） |
 | `/api/analysis/trigger` | POST | 手动触发分析（同步返回全部结果） |
 | `/api/analysis/trigger-stream` | POST | 手动触发分析（SSE 流式推送，逐块返回结果） |
 | `/api/analysis/refresh-summary` | POST | 后台刷新行情缓存数据（资金流 + 板块排行 + 涨跌分布 + 成交额） |
@@ -161,6 +161,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/schedules` | GET/POST | 调度计划 |
 | `/api/system` | GET/PUT | 系统配置（AI 开关、模型、API Key） |
 | `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
+| `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（32 个参数分 6 组，含前置否决 / 因子修正 / 动态阈值 / 固定偏置） |
 | `/api/system/connectivity` | GET | 数据源连通性测试 |
 | `/health` | GET | 健康检查 |
 
@@ -212,6 +213,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 - AI API Key（`ai_api_key`）
 - AI API 基础 URL（`ai_base_url`）
 - 评分阈值（`scoring_thresholds`，五档对称阈值 JSON）
+- 质量过滤参数（`quality_filter_config`，32 个数值参数，覆盖棺材钉 / 心电图 / 清盘 / 因子修正 / 动态阈值 / 固定偏置 6 组）
 
 ---
 
