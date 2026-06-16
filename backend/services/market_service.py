@@ -152,7 +152,13 @@ class MarketService:
             self._cache_set("market_capital_flow", result)
             return result
         except Exception as orig_e:
-            logger.warning(f"大盘资金流(akshare)获取失败: {orig_e}，尝试东方财富直接API")
+            logger.warning(f"大盘资金流(akshare)获取失败: {orig_e}，尝试 push2his 直连API")
+
+        # 降级: push2his 历史K线直连 API
+        result = await self._fetch_capital_flow_push2his()
+        if result is not None:
+            self._cache_set("market_capital_flow", result)
+            return result
 
         # 备选: 东方财富 datacenter-web API 获取大盘资金流
         try:
@@ -228,7 +234,142 @@ class MarketService:
             self._cache_set("market_capital_flow", result)
             return result
         except Exception as e:
-            logger.warning(f"大盘资金流(datacenter-web API)获取失败: {e}")
+            logger.warning(f"大盘资金流(datacenter-web API)获取失败: {e}，尝试 push2 实时API")
+
+        # 最终兜底: push2 实时 API
+        result = await self._fetch_capital_flow_push2_realtime()
+        if result is not None:
+            self._cache_set("market_capital_flow", result)
+            return result
+
+        return None
+
+    async def _fetch_capital_flow_push2his(self) -> Optional[MarketCapitalFlow]:
+        """通过 push2his 历史K线 API 获取大盘资金流（akshare 降级方案）"""
+        import requests as _req
+
+        def _do_fetch() -> str:
+            r = _req.get(
+                "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+                params={
+                    "lmt": 1,
+                    "klt": 101,
+                    "fields1": "f1,f2,f3,f7",
+                    "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+                    "secid": "1.000001",
+                    "secid2": "0.399001",
+                },
+                headers={
+                    "User-Agent": random.choice(_USER_AGENTS),
+                    "Referer": "https://data.eastmoney.com/",
+                },
+                timeout=15,
+            )
+            r.raise_for_status()
+            data = r.json()
+            klines = data.get("data", {}).get("klines", [])
+            if not klines:
+                raise ValueError("push2his klines 为空")
+            return klines[0]
+
+        try:
+            kline_str = await asyncio.wait_for(
+                asyncio.to_thread(_do_fetch), timeout=20.0
+            )
+            parts = kline_str.split(",")
+            if len(parts) < 15:
+                raise ValueError(f"push2his kline 字段不足: {len(parts)}")
+
+            YI = 100_000_000  # 元→亿元
+
+            return MarketCapitalFlow(
+                date=parts[0],
+                sh_index=_parse_pct_value(parts[11]),
+                sh_change=_parse_pct_value(parts[12]),
+                sz_index=_parse_pct_value(parts[13]),
+                sz_change=_parse_pct_value(parts[14]),
+                main_flow=CapitalFlow(
+                    net_amount=round(float(parts[1]) / YI, 2),
+                    net_ratio=_parse_pct_value(parts[6]),
+                    super_large_net=round(float(parts[5]) / YI, 2),
+                    large_net=round(float(parts[4]) / YI, 2),
+                    medium_net=round(float(parts[3]) / YI, 2),
+                    small_net=round(float(parts[2]) / YI, 2),
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"大盘资金流(push2his API)获取失败: {e}")
+            return None
+
+    async def _fetch_capital_flow_push2_realtime(self) -> Optional[MarketCapitalFlow]:
+        """通过 push2 实时 API 获取大盘资金流（最终兜底方案）"""
+        import requests as _req
+
+        def _do_fetch() -> list:
+            r = _req.get(
+                "https://push2.eastmoney.com/api/qt/ulist.np/get",
+                params={
+                    "secids": "1.000001,0.399001",
+                    "fields": "f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
+                },
+                headers={
+                    "User-Agent": random.choice(_USER_AGENTS),
+                    "Referer": "https://data.eastmoney.com/",
+                },
+                timeout=15,
+            )
+            r.raise_for_status()
+            data = r.json()
+            items = data.get("data", {}).get("diff", [])
+            if not items:
+                raise ValueError("push2 realtime diff 为空")
+            return items
+
+        try:
+            items = await asyncio.wait_for(
+                asyncio.to_thread(_do_fetch), timeout=20.0
+            )
+
+            YI = 100_000_000
+            main_net = 0.0
+            super_net = 0.0
+            large_net = 0.0
+            medium_net = 0.0
+            small_net = 0.0
+            main_ratio = 0.0
+            item_count = 0
+
+            for item in items:
+                main_net += float(item.get("f62", 0) or 0)
+                super_net += float(item.get("f66", 0) or 0)
+                large_net += float(item.get("f72", 0) or 0)
+                medium_net += float(item.get("f78", 0) or 0)
+                small_net += float(item.get("f84", 0) or 0)
+                r = item.get("f184")
+                if r is not None:
+                    main_ratio += float(r)
+                    item_count += 1
+
+            if item_count > 0:
+                main_ratio = round(main_ratio / item_count, 2)
+
+            return MarketCapitalFlow(
+                date=date.today().isoformat(),
+                sh_index=None,
+                sh_change=None,
+                sz_index=None,
+                sz_change=None,
+                main_flow=CapitalFlow(
+                    net_amount=round(main_net / YI, 2),
+                    net_ratio=main_ratio,
+                    super_large_net=round(super_net / YI, 2),
+                    large_net=round(large_net / YI, 2),
+                    medium_net=round(medium_net / YI, 2),
+                    small_net=round(small_net / YI, 2),
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"大盘资金流(push2 实时API)获取失败: {e}")
             return None
 
     async def get_sector_flow_rankings(self) -> dict[str, SectorFlowRanking]:
