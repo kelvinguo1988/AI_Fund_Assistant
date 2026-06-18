@@ -99,6 +99,51 @@ export interface FactorOut {
   weight_percentage: number;
 }
 
+/** 因子导出载体 */
+export interface FactorExportPayload {
+  version: string;
+  exported_at: string;
+  factors: Array<Omit<FactorOut, 'id' | 'status' | 'weight_percentage'>>;
+}
+
+/** 因子导入结果 */
+export interface FactorImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: string[];
+}
+
+/* ── 信号回测 ─────────────────────────────────────────────────── */
+export interface BacktestPoint {
+  date: string;
+  nav: number;
+  nav_return: number;
+  strategy_return: number;
+  signal_direction: 'buy' | 'sell' | 'hold' | null;
+  signal_strength: string | null;
+  weighted_score: number | null;
+  signal_effectiveness: number | null;
+}
+
+export interface BacktestSummary {
+  fund_code: string;
+  fund_name: string;
+  period: number;
+  total_nav_return: number;
+  total_strategy_return: number;
+  excess_return: number;
+  max_drawdown: number;
+  signal_count: number;
+  total_days: number;
+  effectiveness_window: number;
+  avg_effectiveness: number | null;
+  buy_effectiveness: number | null;
+  sell_effectiveness: number | null;
+  effectiveness_rate: number | null;
+  points: BacktestPoint[];
+}
+
 /* ── 推送渠道 ────────────────────────────────────────────────────── */
 export interface PushChannelCreate {
   name: string;

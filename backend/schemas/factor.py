@@ -75,3 +75,41 @@ class FactorOut(BaseModel):
     _parse_norm_config = field_validator("normalization_config", mode="before")(_try_parse_json)
 
     model_config = {"from_attributes": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 导入导出 Schema
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class FactorExportItem(BaseModel):
+    """单个因子的导出字段（不含 id / status / 时间戳）"""
+    name: str
+    code: str
+    data_field: Optional[str] = None
+    data_fields: Optional[list[str]] = None
+    weight: float = 1.0
+    direction: str = "positive"
+    params: Optional[dict] = None
+    formula: Optional[str] = None
+    window: Optional[int] = None
+    window_unit: Optional[str] = None
+    signal_rules: Optional[list[dict]] = None
+    normalization: str = "none"
+    normalization_config: Optional[dict] = None
+    sort_order: int = 0
+
+
+class FactorExportPayload(BaseModel):
+    """因子导出载体"""
+    version: str = "1.0"
+    exported_at: str
+    factors: list[FactorExportItem]
+
+
+class FactorImportResult(BaseModel):
+    """因子导入结果"""
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: list[str] = Field(default_factory=list)

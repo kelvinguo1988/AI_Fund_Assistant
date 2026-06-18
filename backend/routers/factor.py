@@ -2,12 +2,15 @@
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.schemas.common import ApiResponse
-from backend.schemas.factor import FactorCreate, FactorUpdate, FactorOut
+from backend.schemas.factor import (
+    FactorCreate, FactorUpdate, FactorOut,
+    FactorExportPayload, FactorImportResult,
+)
 from backend.services.factor_service import FactorService
 
 router = APIRouter()
@@ -41,6 +44,33 @@ async def list_factors(db: AsyncSession = Depends(get_db)):
     total_weight = await svc.get_total_weight(status="active")
     results = [_enrich_factor_out(f, total_weight) for f in factors]
     return ApiResponse(data=results)
+
+
+@router.get("/export")
+async def export_factors(db: AsyncSession = Depends(get_db)):
+    """导出全部因子为 JSON 文件"""
+    svc = FactorService(db)
+    payload = await svc.export_factors()
+    data = payload.model_dump_json(indent=2)
+    return Response(
+        content=data,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="factors_export.json"',
+        },
+    )
+
+
+@router.post("/import", response_model=ApiResponse[FactorImportResult])
+async def import_factors(
+    payload: FactorExportPayload,
+    overwrite: bool = Query(False, description="已存在的因子是否覆盖"),
+    db: AsyncSession = Depends(get_db),
+):
+    """导入因子配置"""
+    svc = FactorService(db)
+    result = await svc.import_factors(payload, overwrite=overwrite)
+    return ApiResponse(data=result)
 
 
 @router.post("", response_model=ApiResponse[FactorOut])

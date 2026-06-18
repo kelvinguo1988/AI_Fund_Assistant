@@ -10,6 +10,7 @@ from backend.routers.report_config import router as report_config_router
 from backend.routers.analysis import router as analysis_router
 from backend.routers.system_config import router as system_config_router
 from backend.routers.ai_chat import router as ai_chat_router
+from backend.routers.backtest import router as backtest_router
 
 router = APIRouter()
 
@@ -21,3 +22,4 @@ router.include_router(report_config_router, prefix="/report-config", tags=["报�
 router.include_router(analysis_router, prefix="/analysis", tags=["分析结果"])
 router.include_router(ai_chat_router, prefix="/ai", tags=["AI 对话"])
 router.include_router(system_config_router, prefix="/system", tags=["系统配置"])
+router.include_router(backtest_router, prefix="/backtest", tags=["信号回测"])

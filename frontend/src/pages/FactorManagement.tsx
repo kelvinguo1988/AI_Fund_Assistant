@@ -27,10 +27,17 @@ import {
   Snackbar,
   Alert,
   Tooltip,
+  FormControlLabel,
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
+  FileDownload as ExportIcon,
+  FileUpload as ImportIcon,
+} from '@mui/icons-material';
 import { factorApi } from '../api/factor';
-import type { FactorOut, FactorCreate, FactorUpdate } from '../types';
+import type { FactorOut, FactorCreate, FactorUpdate, FactorImportResult, FactorExportPayload } from '../types';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 const DIRECTION_OPTIONS = [
@@ -57,6 +64,12 @@ const FactorManagement: React.FC = () => {
   const [editFactor, setEditFactor] = useState<FactorOut | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FactorOut | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+
+  // 导入导出
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importOverwrite, setImportOverwrite] = useState(false);
+  const [importResult, setImportResult] = useState<FactorImportResult | null>(null);
+  const importFileRef = React.useRef<HTMLInputElement>(null);
 
   // 表单
   const [formName, setFormName] = useState('');
@@ -166,11 +179,56 @@ const FactorManagement: React.FC = () => {
     }
   };
 
+  // ── 导出 ────────────────────────────────────────────────────────
+  const handleExport = async () => {
+    try {
+      const blob = await factorApi.exportFactors();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `factors_export_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setSnackbar({ open: true, message: '导出成功', severity: 'success' });
+    } catch {
+      setSnackbar({ open: true, message: '导出失败', severity: 'error' });
+    }
+  };
+
+  // ── 导入 ────────────────────────────────────────────────────────
+  const handleImportFile = async () => {
+    const input = importFileRef.current;
+    if (!input?.files?.length) return;
+    const file = input.files[0];
+    try {
+      const text = await file.text();
+      const payload: FactorExportPayload = JSON.parse(text);
+      if (!payload.factors || !Array.isArray(payload.factors)) {
+        throw new Error('无效的因子导出文件');
+      }
+      const result = await factorApi.importFactors(payload, importOverwrite);
+      if (result.data) {
+        setImportResult(result.data);
+        loadFactors();
+        const msg = `导入完成：新建 ${result.data.created}，更新 ${result.data.updated}，跳过 ${result.data.skipped}`;
+        setSnackbar({ open: true, message: msg, severity: result.data.errors.length ? 'error' : 'success' });
+      }
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err.message || '导入失败', severity: 'error' });
+    } finally {
+      if (input) input.value = '';
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
         <Typography variant="h5">因子管理</Typography>
-        <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenAdd}>新增因子</Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="outlined" startIcon={<ExportIcon />} onClick={handleExport}>导出</Button>
+          <Button variant="outlined" startIcon={<ImportIcon />} onClick={() => { setImportResult(null); setImportDialogOpen(true); }}>导入</Button>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenAdd}>新增因子</Button>
+        </Box>
       </Box>
 
       <TableContainer component={Paper}>
@@ -250,6 +308,34 @@ const FactorManagement: React.FC = () => {
         <DialogActions>
           <Button onClick={() => setDialogOpen(false)}>取消</Button>
           <Button variant="contained" onClick={handleSave}>保存</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── 导入对话框 ─────────────────────────────────────── */}
+      <Dialog open={importDialogOpen} onClose={() => setImportDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>导入因子配置</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+          <Button variant="outlined" component="label">
+            选择 JSON 文件
+            <input ref={importFileRef} type="file" accept=".json" hidden onChange={handleImportFile} />
+          </Button>
+          <FormControlLabel
+            control={<Switch checked={importOverwrite} onChange={(_, v) => setImportOverwrite(v)} />}
+            label="覆盖已有因子（关闭则跳过已存在的因子）"
+          />
+          {importResult && (
+            <Alert severity={importResult.errors.length ? 'warning' : 'success'}>
+              新建: {importResult.created} | 更新: {importResult.updated} | 跳过: {importResult.skipped}
+              {importResult.errors.length > 0 && (
+                <Box component="ul" sx={{ mt: 1, pl: 2, m: 0 }}>
+                  {importResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+                </Box>
+              )}
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setImportDialogOpen(false)}>关闭</Button>
         </DialogActions>
       </Dialog>
 

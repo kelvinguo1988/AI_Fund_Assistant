@@ -171,46 +171,47 @@ class PushService:
                     if market_summary_md:
                         await pusher.send_market_overview(market_summary_md)
 
-                    # 逐只基金推送
-                    for r in results:
-                        # 重建 FactorScoreResult 用于报告生成
-                        from backend.engines.factor_engine import FactorScoreResult as FSR
-                        factor_scores = [
-                            FSR(
-                                factor_code=fs.factor_code,
-                                factor_name=fs.factor_name,
-                                raw_value=fs.raw_value,
-                                score=fs.score,
-                                direction=fs.direction,
+                    # 逐只基金推送（仅当有启用的基金维度报告项时才发送）
+                    if enabled_fund:
+                        for r in results:
+                            # 重建 FactorScoreResult 用于报告生成
+                            from backend.engines.factor_engine import FactorScoreResult as FSR
+                            factor_scores = [
+                                FSR(
+                                    factor_code=fs.factor_code,
+                                    factor_name=fs.factor_name,
+                                    raw_value=fs.raw_value,
+                                    score=fs.score,
+                                    direction=fs.direction,
+                                )
+                                for fs in r.factor_scores
+                            ]
+                            signal = SignalResult(
+                                weighted_score=r.weighted_score,
+                                raw_score=0.0,
+                                signal_direction=r.signal_direction,
+                                signal_strength=r.signal_strength,
+                                operation_advice=r.operation_advice,
+                                equity_ratio=getattr(r, "equity_ratio", 0.5),
                             )
-                            for fs in r.factor_scores
-                        ]
-                        signal = SignalResult(
-                            weighted_score=r.weighted_score,
-                            raw_score=0.0,
-                            signal_direction=r.signal_direction,
-                            signal_strength=r.signal_strength,
-                            operation_advice=r.operation_advice,
-                            equity_ratio=getattr(r, "equity_ratio", 0.5),
-                        )
 
-                        report_md = report_engine.generate_markdown(
-                            fund_code=r.fund_code,
-                            fund_name=r.fund_name,
-                            analysis_date=str(r.analysis_date),
-                            signal=signal,
-                            factor_scores=factor_scores,
-                            enabled_items=enabled_fund,
-                        )
+                            report_md = report_engine.generate_markdown(
+                                fund_code=r.fund_code,
+                                fund_name=r.fund_name,
+                                analysis_date=str(r.analysis_date),
+                                signal=signal,
+                                factor_scores=factor_scores,
+                                enabled_items=enabled_fund,
+                            )
 
-                        success = await pusher.send_analysis_report(
-                            fund_name=r.fund_name,
-                            fund_code=r.fund_code,
-                            signal_direction=r.signal_direction,
-                            weighted_score=r.weighted_score,
-                            report_markdown=report_md,
-                        )
-                        push_results[f"{channel.name}:{r.fund_code}"] = success
+                            success = await pusher.send_analysis_report(
+                                fund_name=r.fund_name,
+                                fund_code=r.fund_code,
+                                signal_direction=r.signal_direction,
+                                weighted_score=r.weighted_score,
+                                report_markdown=report_md,
+                            )
+                            push_results[f"{channel.name}:{r.fund_code}"] = success
 
                 else:
                     logger.warning(f"不支持的渠道类型: {channel.channel_type}")

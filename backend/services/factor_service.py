@@ -8,7 +8,10 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.factor import Factor
-from backend.schemas.factor import FactorCreate, FactorUpdate
+from backend.schemas.factor import (
+    FactorCreate, FactorUpdate,
+    FactorExportItem, FactorExportPayload, FactorImportResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,3 +136,90 @@ class FactorService:
             }
             for f in factors
         ]
+
+    # ═══════════════════════════════════════════════════════════════════
+    # 导入导出
+    # ═══════════════════════════════════════════════════════════════════
+
+    async def export_factors(self) -> FactorExportPayload:
+        """导出全部因子为 JSON 载体"""
+        from datetime import datetime
+        factors = await self.list_factors()  # 全部（含 disabled）
+        items = []
+        for f in factors:
+            items.append(FactorExportItem(
+                name=f.name,
+                code=f.code,
+                data_field=f.data_field,
+                data_fields=json.loads(f.data_fields) if f.data_fields else None,
+                weight=f.weight,
+                direction=f.direction,
+                params=json.loads(f.params) if f.params else None,
+                formula=f.formula,
+                window=f.window,
+                window_unit=f.window_unit,
+                signal_rules=json.loads(f.signal_rules) if f.signal_rules else None,
+                normalization=f.normalization or "none",
+                normalization_config=json.loads(f.normalization_config) if f.normalization_config else None,
+                sort_order=f.sort_order,
+            ))
+        return FactorExportPayload(
+            version="1.0",
+            exported_at=datetime.now().isoformat(timespec="seconds"),
+            factors=items,
+        )
+
+    async def import_factors(
+        self,
+        payload: FactorExportPayload,
+        overwrite: bool = False,
+    ) -> FactorImportResult:
+        """从 JSON 载体导入因子
+
+        Args:
+            payload: 导入载体
+            overwrite: 已存在的因子是否覆盖（默认跳过）
+        """
+        result = FactorImportResult()
+        for item in payload.factors:
+            try:
+                existing = await self.get_factor_by_code(item.code)
+                if existing:
+                    if not overwrite:
+                        result.skipped += 1
+                        continue
+                    # 覆盖更新
+                    update_fields = item.model_dump(exclude={"code"}, exclude_none=True)
+                    # JSON 字段序列化
+                    for jf in ("data_fields", "params", "signal_rules", "normalization_config"):
+                        if jf in update_fields and update_fields[jf] is not None:
+                            update_fields[jf] = json.dumps(update_fields[jf], ensure_ascii=False)
+                    for k, v in update_fields.items():
+                        setattr(existing, k, v)
+                    result.updated += 1
+                else:
+                    # 新建
+                    create_data = FactorCreate(
+                        name=item.name,
+                        code=item.code,
+                        data_field=item.data_field,
+                        data_fields=item.data_fields,
+                        weight=item.weight,
+                        direction=item.direction if item.direction in ("positive", "negative") else "positive",
+                        params=item.params,
+                        formula=item.formula,
+                        window=item.window,
+                        window_unit=item.window_unit,
+                        signal_rules=item.signal_rules,
+                        normalization=item.normalization or "none",
+                        normalization_config=item.normalization_config,
+                        sort_order=item.sort_order,
+                    )
+                    await self.create_factor(create_data)
+                    result.created += 1
+            except Exception as e:
+                result.errors.append(f"[{item.code}] {e}")
+                logger.warning(f"导入因子 {item.code} 失败: {e}")
+
+        await self.db.commit()
+        return result

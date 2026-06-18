@@ -35,6 +35,7 @@ import {
   Tune as ScoringIcon,
   Security as QualityIcon,
   Settings as SettingsIcon,
+  Science as BacktestIcon,
 } from '@mui/icons-material';
 import { useAppStore } from './store';
 import AIChatWidget from './components/AIChatWidget';
@@ -51,6 +52,7 @@ import ScoringConfig from './pages/ScoringConfig';
 import QualityConfig from './pages/QualityConfig';
 import SystemPage from './pages/System';
 import FundDetailPage from './pages/FundDetailPage';
+import SignalBacktest from './pages/SignalBacktest';
 
 /* ── MUI 主题（红涨绿跌） ─────────────────────────────────────────── */
 const theme = createTheme({
@@ -79,6 +81,7 @@ const NAV_ITEMS = [
   { key: 'scoring', label: '评分配置', icon: <ScoringIcon />, path: '/scoring' },
   { key: 'quality', label: '质量过滤', icon: <QualityIcon />, path: '/quality-config' },
   { key: 'history', label: '历史报告', icon: <HistoryIcon />, path: '/history' },
+  { key: 'backtest', label: '信号回测', icon: <BacktestIcon />, path: '/backtest' },
   { key: 'system', label: '系统设置', icon: <SettingsIcon />, path: '/system' },
 ];
 
@@ -200,6 +203,7 @@ const AppLayout: React.FC = () => {
           <Route path="/scoring" element={<ScoringConfig />} />
           <Route path="/quality-config" element={<QualityConfig />} />
           <Route path="/history" element={<HistoryReports />} />
+          <Route path="/backtest" element={<SignalBacktest />} />
           <Route path="/system" element={<SystemPage />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
