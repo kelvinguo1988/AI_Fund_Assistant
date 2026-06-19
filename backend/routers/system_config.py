@@ -13,6 +13,7 @@ from backend.schemas.common import ApiResponse
 from backend.schemas.system_config import (
     AIConfigUpdate,
     AIConfigOut,
+    AIModelPreset,
     ConnectivityResult,
     QualityConfigOut,
     QualityConfigParamOut,
@@ -34,6 +35,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# 预设模型配置
+_AI_MODEL_PRESETS: list[AIModelPreset] = [
+    AIModelPreset(key="deepseek", label="DeepSeek", base_url="https://api.deepseek.com/v1", model_name="deepseek-chat"),
+    AIModelPreset(key="glm", label="智谱 GLM", base_url="https://open.bigmodel.cn/api/paas/v4/", model_name="glm-4-flash"),
+    AIModelPreset(key="tongyi", label="通义千问", base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", model_name="qwen-plus"),
+    AIModelPreset(key="openai", label="OpenAI", base_url="https://api.openai.com/v1", model_name="gpt-4o-mini"),
+]
+
+
 async def _get_config_map(db: AsyncSession) -> dict[str, str]:
     """获取所有系统配置的 KV 映射"""
     result = await db.execute(select(SystemConfig))
@@ -50,6 +60,7 @@ async def get_system_config(db: AsyncSession = Depends(get_db)):
         ai_enabled=config_map.get("ai_enabled", "true").lower() == "true",
         ai_model=config_map.get("ai_model", "deepseek"),
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
+        presets=_AI_MODEL_PRESETS,
     ))
 
 
@@ -86,6 +97,7 @@ async def update_system_config(
         ai_enabled=config_map.get("ai_enabled", "true").lower() == "true",
         ai_model=config_map.get("ai_model", "deepseek"),
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
+        presets=_AI_MODEL_PRESETS,
     ))
 
 

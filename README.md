@@ -1,6 +1,6 @@
 # AI Fund Assistant — 基金量化交易系统
 
-> FastAPI + React 基金量化分析平台。8 因子配置体系、双层评分、Web 管理、流式 SSE 推送、自动化信号推送、数据源连通性检测。
+> FastAPI + React 基金量化分析平台。8 因子配置体系、双层评分、Web 管理、流式 SSE 推送、自动化信号推送、数据源连通性检测、AI 多模型配置、信号回测评分。
 
 ---
 
@@ -21,12 +21,12 @@ AI_Fund_Assistant/
 │   │   ├── scoring_engine.py   # 加权评分 + 信号判定
 │   │   └── report_engine.py    # 报告生成（Markdown / HTML）
 │   ├── data_sources/           # 多数据源适配器（AKShare/JoinQuant）
-│   ├── llm/                    # AI 大模型接入（DeepSeek/OpenAI/通义千问）
+│   ├── llm/                    # AI 大模型接入（DeepSeek/智谱GLM/通义千问/OpenAI）
 │   ├── patch/                  # 东方财富反爬虫补丁
 │   ├── push/                   # 推送机器人（飞书等）
 │   └── scheduler/              # 定时任务调度（APScheduler）
 ├── frontend/                   # React + TypeScript + MUI + Tailwind
-│   ├── src/pages/              # 10 个管理页面
+│   ├── src/pages/              # 11 个管理页面（含信号回测）
 │   ├── src/components/         # 图表组件（ECharts）、AI 对话、信号指示器等
 │   ├── src/api/                # API 客户端
 │   ├── src/hooks/              # 自定义 Hooks（AI 对话、分析）
@@ -45,14 +45,15 @@ AI_Fund_Assistant/
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
 - **多数据源链**：AKShare → JoinQuant（聚宽），自动降级恢复
-- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、系统设置（共 11 个页面）
+- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、信号回测、系统设置（共 12 个页面）
 - **基金详情模块**：阶段涨幅排序展示、季度持仓明细（可展开）、基金经理信息，含调仓 diff 和经理变更标注
 - **一键批量导入**：自动识别 ETF/场外类型，自动从天天基金抓取相关主题标签
 - **"先展示缓存，手动/定时触发刷新"模式**：仪表盘行情数据、基金阶段涨幅均持久化缓存到数据库，页面加载直接展示缓存数据 + 时间戳；数据仅在手动手动刷新或定时推送任务触发时更新，推送后自动同步仪表盘缓存
 - **定时分析**：交易日自动执行 + 手动触发
 - **流式分析**：手动触发时分块处理基金数据，SSE 逐块推送结果至仪表盘，实时展示进度与中间结果
 - **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析），推送内容严格跟随报告配置项过滤，未启用的报告项不会推送
-- **AI 分析**：集成 DeepSeek / ChatGPT，生成自然语言建议
+- **AI 多模型配置**：支持 DeepSeek、智谱 GLM、通义千问、OpenAI 四种模型，系统设置页可视化配置模型/API Key/Base URL，AI 对话自动注入系统全量数据（基金池+最新分析+因子配置）
+- **信号回测**：历史信号与基金净值按日期对齐，仓位策略模拟累计收益，信号有效性评分（买入看 N 日上涨/卖出看 N 日下跌），ECharts 双轴图表+评分明细表格
 - **东方财富反爬虫补丁**：NID 授权令牌 + User-Agent 轮换 + 请求频率控制
 - **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
 - **数据源连通性检测**：一键测试东方财富系列域名 + AI API 可达性，SSRF 防护，结果含延迟与状态汇总
@@ -154,7 +155,10 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/analysis/trigger` | POST | 手动触发分析（同步返回全部结果） |
 | `/api/analysis/trigger-stream` | POST | 手动触发分析（SSE 流式推送，逐块返回结果） |
 | `/api/analysis/refresh-summary` | POST | 后台刷新行情缓存数据（资金流 + 板块排行 + 涨跌分布 + 成交额） |
+| `/api/backtest/{id}` | GET | 信号回测（含有效性评分） |
 | `/api/factors` | GET/POST | 因子 CRUD |
+| `/api/factors/export` | GET | 因子导出 JSON |
+| `/api/factors/import` | POST | 因子导入 JSON |
 | `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
 | `/api/ai/chat` | POST | AI 对话 |
 | `/api/push-channels` | GET/POST | 推送渠道 |
@@ -208,9 +212,10 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 以下配置存储在 `system_config` 表中，可通过前端「系统设置」页面动态调整：
 
 - AI 开关（`ai_enabled`）
-- AI 模型名称（`ai_model`）
+- AI 模型名称（`ai_model`，支持 deepseek / glm / tongyi / openai）
 - AI API Key（`ai_api_key`）
 - AI API 基础 URL（`ai_base_url`）
+- 系统设置页提供可视化配置卡片，支持预设模型快速切换
 - 评分阈值（`scoring_thresholds`，五档对称阈值 JSON）
 - 质量过滤参数（`quality_filter_config`，32 个数值参数，覆盖棺材钉 / 心电图 / 清盘 / 因子修正 / 动态阈值 / 固定偏置 6 组）
 

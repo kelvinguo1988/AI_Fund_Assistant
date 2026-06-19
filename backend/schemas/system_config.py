@@ -13,11 +13,20 @@ class AIConfigUpdate(BaseModel):
     ai_base_url: Optional[str] = Field(None, description="AI 模型 API Base URL")
 
 
+class AIModelPreset(BaseModel):
+    """预设模型配置"""
+    key: str = Field(..., description="模型标识: deepseek / glm / tongyi / openai")
+    label: str = Field(..., description="显示名称")
+    base_url: str = Field(..., description="默认 Base URL")
+    model_name: str = Field(..., description="默认模型名")
+
+
 class AIConfigOut(BaseModel):
     """系统配置输出 Schema（不返回 api_key）"""
     ai_enabled: bool
     ai_model: str
     ai_base_url: str
+    presets: list[AIModelPreset] = Field(default_factory=list)
 
 
 class ScoringTier(BaseModel):

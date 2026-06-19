@@ -107,7 +107,7 @@ class AIService:
         )
 
     async def _build_system_prompt(self, message: ChatMessage) -> str:
-        """构建系统提示词"""
+        """构建系统提示词 — 注入系统全量数据"""
         base_prompt = (
             "你是基金量化交易系统的AI助手，专门帮助用户分析基金投资机会。"
             "你可以基于量化因子评分、市场数据和历史分析结果，为用户提供专业的投资建议。\n\n"
@@ -117,17 +117,66 @@ class AIService:
             "- 回答要简洁专业，数据驱动\n"
         )
 
-        # 根据上下文类型补充信息
+        # ── 始终注入：系统全量数据 ──
+        global_parts: list[str] = []
+
+        # 1. 全部活跃基金 + 最新分析结果
+        funds_result = await self.db.execute(select(Fund).where(Fund.status == "active"))
+        funds = funds_result.scalars().all()
+        if funds:
+            fund_lines: list[str] = []
+            for f in funds:
+                # 获取每只基金的最新分析结果
+                ar = await self.db.execute(
+                    select(AnalysisResult)
+                    .where(AnalysisResult.fund_id == f.id)
+                    .order_by(AnalysisResult.analysis_date.desc())
+                    .limit(1)
+                )
+                analysis = ar.scalars().first()
+                if analysis:
+                    line = (
+                        f"  {f.name}({f.code}): "
+                        f"评分={analysis.weighted_score:.2f}, "
+                        f"方向={analysis.signal_direction}, "
+                        f"强度={analysis.signal_strength}"
+                    )
+                    try:
+                        scores = json.loads(analysis.factor_scores)
+                        line += f", 因子={json.dumps(scores, ensure_ascii=False)}"
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    fund_lines.append(line)
+                else:
+                    fund_lines.append(f"  {f.name}({f.code}): 暂无分析数据")
+            global_parts.append("\n【基金池及最新分析】\n" + "\n".join(fund_lines))
+
+        # 2. 评分阈值配置
+        config_map = await self._get_config_map()
+        thresholds_raw = config_map.get("scoring_thresholds", "")
+        if thresholds_raw:
+            try:
+                thresholds = json.loads(thresholds_raw)
+                tier_lines = [
+                    f"  最低分≥{t['min_score']}: {t['label']} ({t['signal_direction']}/{t['signal_strength']})"
+                    for t in thresholds
+                ]
+                global_parts.append("\n【评分阈值配置】\n" + "\n".join(tier_lines))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if global_parts:
+            base_prompt += "\n系统当前数据:\n" + "\n".join(global_parts)
+
+        # ── 根据上下文类型补充特定信息 ──
         context_parts: list[str] = []
 
         if message.context_type == "single_fund" and message.fund_id:
-            # 单基金上下文
             fund_result = await self.db.execute(select(Fund).where(Fund.id == message.fund_id))
             fund = fund_result.scalars().first()
             if fund:
                 context_parts.append(f"\n当前分析基金: {fund.name}({fund.code})")
 
-                # 获取最新分析结果
                 analysis_result = await self.db.execute(
                     select(AnalysisResult)
                     .where(AnalysisResult.fund_id == fund.id)
@@ -148,9 +197,6 @@ class AIService:
                         pass
 
         elif message.context_type == "pool":
-            # 基金池上下文
-            funds_result = await self.db.execute(select(Fund).where(Fund.status == "active"))
-            funds = funds_result.scalars().all()
             if funds:
                 fund_names = ", ".join(f"{f.name}({f.code})" for f in funds)
                 context_parts.append(f"\n当前基金池: {fund_names}")

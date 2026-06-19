@@ -27,6 +27,9 @@ class LLMFactory:
         elif model_name == "tongyi":
             from backend.llm.tongyi_provider import TongyiProvider
             return TongyiProvider(model_name="qwen-plus", api_key=api_key, base_url=base_url)
+        elif model_name == "glm":
+            from backend.llm.glm_provider import GLMProvider
+            return GLMProvider(model_name="glm-4-flash", api_key=api_key, base_url=base_url)
         else:
             # 默认使用 DeepSeek 兼容接口
             from backend.llm.deepseek_provider import DeepSeekProvider

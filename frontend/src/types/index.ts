@@ -273,10 +273,18 @@ export interface AIConfigUpdate {
   ai_base_url?: string | null;
 }
 
+export interface AIModelPreset {
+  key: string;
+  label: string;
+  base_url: string;
+  model_name: string;
+}
+
 export interface AIConfigOut {
   ai_enabled: boolean;
   ai_model: string;
   ai_base_url: string;
+  presets: AIModelPreset[];
 }
 
 /* ── 评分阈值配置 ───────────────────────────────────────────────── */
