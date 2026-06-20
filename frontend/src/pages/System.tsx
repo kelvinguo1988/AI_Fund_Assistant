@@ -32,7 +32,7 @@ import {
   Save as SaveIcon,
 } from '@mui/icons-material';
 import { systemApi } from '../api/system';
-import type { ConnectivityResult, AIConfigOut, AIModelPreset } from '../types';
+import type { ConnectivityResult, AIConfigOut } from '../types';
 
 const SystemPage: React.FC = () => {
   const [testing, setTesting] = useState(false);
@@ -54,13 +54,14 @@ const SystemPage: React.FC = () => {
     setAiLoading(true);
     systemApi.getConfig()
       .then((res) => {
-        if (res.data) {
-          setAiConfig(res.data);
-          setAiEnabled(res.data.ai_enabled);
-          setAiModel(res.data.ai_model);
-          setAiBaseUrl(res.data.ai_base_url);
+        const cfg = res.data;
+        if (cfg) {
+          setAiConfig(cfg);
+          setAiEnabled(cfg.ai_enabled);
+          setAiModel(cfg.ai_model);
+          setAiBaseUrl(cfg.ai_base_url);
           // 匹配预设
-          const matched = res.data.presets?.find((p) => p.key === res.data.ai_model);
+          const matched = cfg.presets?.find((p) => p.key === cfg.ai_model);
           if (matched) setSelectedPreset(matched.key);
         }
       })
