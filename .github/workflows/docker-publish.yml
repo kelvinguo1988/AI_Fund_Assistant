@@ -96,4 +96,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          # 前端构建产物为静态文件，与 CPU 架构无关
+          # arm64 的 npm install 在 QEMU 下会 Illegal instruction
+          # 只构建 amd64，Nginx serve 同样可用于所有架构
+          platforms: linux/amd64
