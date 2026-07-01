@@ -2,7 +2,7 @@
  * 基金池管理页面
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -67,6 +67,7 @@ const FundPool: React.FC = () => {
   const [_importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ total: number; created: number; skipped: string[]; errors: string[] } | null>(null);
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
+  const jsonInputRef = useRef<HTMLInputElement>(null);
 
   // 表单状态
   const [formCode, setFormCode] = useState('');
@@ -155,6 +156,27 @@ const FundPool: React.FC = () => {
     setSelected((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   };
 
+  const handleJsonImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const items = (data.items || []).map((item: any) => ({
+        code: item.code,
+        name: item.name,
+        tags: item.tags || undefined,
+      }));
+      if (!items.length) { setSnackbar({ open: true, message: 'JSON 中没有基金数据', severity: 'error' }); return; }
+      const res = await fundApi.batchImport(items);
+      setSnackbar({ open: true, message: `导入完成: 新建${res.data?.created || 0} 跳过${(res.data?.skipped || []).length}`, severity: 'success' });
+      loadFunds();
+    } catch (err: any) {
+      setSnackbar({ open: true, message: `导入失败: ${err.message || ''}`, severity: 'error' });
+    }
+    if (jsonInputRef.current) jsonInputRef.current.value = '';
+  };
+
   const allSelected = funds.length > 0 && funds.every((f) => selected.includes(f.id));
   const someSelected = selected.length > 0 && !allSelected;
 
@@ -178,6 +200,8 @@ const FundPool: React.FC = () => {
             </>
           )}
           <Button variant="outlined" startIcon={<DownloadIcon />} onClick={() => fundApi.exportFunds().catch(() => setSnackbar({ open: true, message: '导出失败', severity: 'error' }))}>导出</Button>
+          <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => jsonInputRef.current?.click()}>导入JSON</Button>
+          <input type="file" ref={jsonInputRef} accept=".json" style={{ display: 'none' }} onChange={handleJsonImport} />
           <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => { setImportOpen(true); setImportResult(null); setImportText(''); }}>批量导入</Button>
           <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenAdd}>新增基金</Button>
         </Box>
