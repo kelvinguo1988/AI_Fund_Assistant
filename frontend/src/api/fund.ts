@@ -11,6 +11,16 @@ export const fundApi = {
   list: (status?: string) =>
     apiClient.get<ApiResponse<FundOut[]>>(BASE, { params: { status } }).then((r) => r.data),
 
+  exportFunds: () =>
+    apiClient.get(`${BASE}/export`, { responseType: 'blob' }).then((r) => {
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `funds_export_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    }),
+
   create: (data: FundCreate) =>
     apiClient.post<ApiResponse<FundOut>>(BASE, data).then((r) => r.data),
 

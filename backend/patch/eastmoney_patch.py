@@ -72,6 +72,9 @@ def _get_nid(user_agent: str) -> Optional[str]:
         return _cache.data
 
     with _cache.lock:
+        # 二次检查：避免多个线程排队后重复请求
+        if _cache.data and time.time() < _cache.expire_at:
+            return _cache.data
         try:
             url = "https://anonflow2.eastmoney.com/backend/api/webreport"
             screen = random.choice(["1920X1080", "2560X1440", "3840X2160"])

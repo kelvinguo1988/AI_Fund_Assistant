@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,13 +15,48 @@ from backend.database import get_db
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.schemas.common import ApiResponse
-from backend.schemas.analysis import FactorScore, AnalysisResultOut
+from backend.schemas.analysis import (
+    FactorScore, AnalysisResultOut,
+    AnalysisExportPayload, AnalysisImportResult,
+)
 from backend.schemas.market import MarketSummaryOut, SignalSummary, MarketCapitalFlow, SectorFlowRanking, HSGTFlow, MarketAdvDecline, MarketTurnover
 
 CACHE_KEY_MARKET = "market_summary"
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ── 导出/导入历史报告 ──────────────────────────────────────────────
+
+
+@router.get("/export")
+async def export_analysis(db: AsyncSession = Depends(get_db)):
+    """导出全部分析结果为 JSON 文件"""
+    from backend.services.analysis_service import AnalysisService
+    svc = AnalysisService(db)
+    payload = await svc.export_analysis()
+    data = payload.model_dump_json(indent=2, ensure_ascii=False)
+    return Response(
+        content=data,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="analysis_export.json"',
+        },
+    )
+
+
+@router.post("/import", response_model=ApiResponse[AnalysisImportResult])
+async def import_analysis(
+    payload: AnalysisExportPayload,
+    overwrite: bool = Query(False, description="已存在的记录是否覆盖"),
+    db: AsyncSession = Depends(get_db),
+):
+    """导入分析结果备份"""
+    from backend.services.analysis_service import AnalysisService
+    svc = AnalysisService(db)
+    result = await svc.import_analysis(payload, overwrite=overwrite)
+    return ApiResponse(data=result)
 
 
 def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResultOut:

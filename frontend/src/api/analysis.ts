@@ -11,6 +11,19 @@ export const analysisApi = {
   query: (params?: { date?: string; fund_id?: number }) =>
     apiClient.get<ApiResponse<AnalysisResultOut[]>>(BASE, { params }).then((r) => r.data),
 
+  exportAnalysis: () =>
+    apiClient.get(`${BASE}/export`, { responseType: 'blob' }).then((r) => {
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `analysis_export_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    }),
+
+  importAnalysis: (data: any, overwrite: boolean = false) =>
+    apiClient.post<ApiResponse<any>>(`${BASE}/import?overwrite=${overwrite}`, data).then((r) => r.data),
+
   trigger: (fundIds?: number[]) =>
     apiClient.post<ApiResponse<AnalysisResultOut[]>>(`${BASE}/trigger`, {
       fund_ids: fundIds,

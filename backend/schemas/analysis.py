@@ -35,3 +35,37 @@ class AnalysisResultOut(BaseModel):
     quality_warnings: Optional[List[str]] = None   # 质量过滤警告
 
     model_config = {"from_attributes": True}
+
+
+# ── 历史报告导出/导入 ─────────────────────────────────────────────
+
+
+class AnalysisExportItem(BaseModel):
+    """单个历史报告导出条目"""
+    fund_code: str
+    fund_name: str
+    analysis_date: str          # YYYY-MM-DD
+    weighted_score: float
+    signal_direction: str
+    signal_strength: str
+    operation_advice: str
+    equity_ratio: float = 0.5
+    factor_scores: dict  # JSON dict
+    original_score: Optional[float] = None
+    dynamic_buy_threshold: Optional[float] = None
+    quality_warnings: Optional[list[str]] = None
+
+
+class AnalysisExportPayload(BaseModel):
+    """分析结果导出载体"""
+    version: str = "1.0"
+    exported_at: str = ""
+    items: list[AnalysisExportItem]
+
+
+class AnalysisImportResult(BaseModel):
+    """导入结果统计"""
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    errors: list[str] = []

@@ -1,11 +1,13 @@
 """基金 CRUD 路由"""
 
 import asyncio
+import json
 import logging
 import random
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +34,26 @@ from backend.services.fund_change_detector import get_fund_changes
 from backend.services.fund_service import FundService
 
 router = APIRouter()
+
+
+@router.get("/export")
+async def export_funds(db: AsyncSession = Depends(get_db)):
+    """导出基金池为 JSON 文件"""
+    svc = FundService(db)
+    funds = await svc.list_funds()
+    items = [FundOut.model_validate(f).model_dump(mode="json") for f in funds]
+    payload = {
+        "version": "1.0",
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "items": items,
+    }
+    return Response(
+        content=json.dumps(payload, indent=2, ensure_ascii=False),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="funds_export.json"',
+        },
+    )
 
 
 @router.get("", response_model=ApiResponse[list[FundOut]])

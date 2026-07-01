@@ -66,10 +66,10 @@ async def _rate_limited_call(func, *args, **kwargs):
             _last_call_time = 0  # 失败时重置
             if attempt < 2:
                 delay = 5.0 + random.uniform(1, 3)
-                logger.debug(f"{func.__name__} 失败 (attempt {attempt}/2): {e}, {delay:.1f}s后重试")
+                logger.debug(f"{func.__name__} 失败 (attempt {attempt}/2): {type(e).__name__}: {e}, {delay:.1f}s后重试")
                 await asyncio.sleep(delay)
 
-    logger.warning(f"{func.__name__} 重试2次后失败: {last_exc}")
+    logger.warning(f"{func.__name__} 重试2次后失败: {type(last_exc).__name__}: {last_exc}")
     raise last_exc
 
 
@@ -152,7 +152,7 @@ class MarketService:
             self._cache_set("market_capital_flow", result)
             return result
         except Exception as orig_e:
-            logger.warning(f"大盘资金流(akshare)获取失败: {orig_e}，尝试 push2his 直连API")
+            logger.warning(f"大盘资金流(akshare)获取失败: {type(orig_e).__name__}: {orig_e}，尝试 push2his 直连API")
 
         # 降级: push2his 历史K线直连 API
         result = await self._fetch_capital_flow_push2his()
@@ -234,7 +234,7 @@ class MarketService:
             self._cache_set("market_capital_flow", result)
             return result
         except Exception as e:
-            logger.warning(f"大盘资金流(datacenter-web API)获取失败: {e}，尝试 push2 实时API")
+            logger.warning(f"大盘资金流(datacenter-web API)获取失败: {type(e).__name__}: {e}，尝试 push2 实时API")
 
         # 最终兜底: push2 实时 API
         result = await self._fetch_capital_flow_push2_realtime()
@@ -298,7 +298,7 @@ class MarketService:
                 ),
             )
         except Exception as e:
-            logger.warning(f"大盘资金流(push2his API)获取失败: {e}")
+            logger.warning(f"大盘资金流(push2his API)获取失败: {type(e).__name__}: {e}")
             return None
 
     async def _fetch_capital_flow_push2_realtime(self) -> Optional[MarketCapitalFlow]:
@@ -369,7 +369,7 @@ class MarketService:
                 ),
             )
         except Exception as e:
-            logger.warning(f"大盘资金流(push2 实时API)获取失败: {e}")
+            logger.warning(f"大盘资金流(push2 实时API)获取失败: {type(e).__name__}: {e}")
             return None
 
     async def get_sector_flow_rankings(self) -> dict[str, SectorFlowRanking]:
@@ -390,7 +390,7 @@ class MarketService:
                 ranking = self._parse_ths_sector_df(df, tf_label, symbol)
                 results[tf_label] = ranking
             except Exception as e:
-                logger.warning(f"板块资金流获取失败 {tf_label}: {e}")
+                logger.warning(f"板块资金流获取失败 {tf_label}: {type(e).__name__}: {e}")
                 results[tf_label] = SectorFlowRanking(timeframe=tf_label)
 
         self._cache_set("sector_flow_rankings", results)

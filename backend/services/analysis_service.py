@@ -24,7 +24,10 @@ from backend.models.fund import Fund
 from backend.models.fund_quarterly import FundQuarterly
 from backend.models.report_config import ReportConfig
 from backend.models.system_config import SystemConfig
-from backend.schemas.analysis import AnalysisResultOut, FactorScore
+from backend.schemas.analysis import (
+    AnalysisResultOut, FactorScore,
+    AnalysisExportItem, AnalysisExportPayload, AnalysisImportResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -423,3 +426,105 @@ class AnalysisService:
         result = await self.db.execute(select(SystemConfig))
         configs = result.scalars().all()
         return {c.config_key: c.config_value for c in configs}
+
+    # ── 历史报告导出/导入 ─────────────────────────────────────────
+
+    async def export_analysis(self) -> AnalysisExportPayload:
+        """导出全部分析结果为 JSON 载体"""
+        result = await self.db.execute(
+            select(AnalysisResult).order_by(AnalysisResult.analysis_date.desc())
+        )
+        records = result.scalars().all()
+
+        items: list[AnalysisExportItem] = []
+        for r in records:
+            fund_result = await self.db.execute(select(Fund).where(Fund.id == r.fund_id))
+            fund = fund_result.scalars().first()
+            factor_scores = json.loads(r.factor_scores) if isinstance(r.factor_scores, str) else (r.factor_scores or {})
+
+            item = AnalysisExportItem(
+                fund_code=fund.code if fund else "",
+                fund_name=fund.name if fund else "",
+                analysis_date=r.analysis_date.isoformat() if hasattr(r.analysis_date, "isoformat") else str(r.analysis_date),
+                weighted_score=r.weighted_score,
+                signal_direction=r.signal_direction,
+                signal_strength=r.signal_strength or "",
+                operation_advice=r.operation_advice or "",
+                equity_ratio=r.equity_ratio,
+                factor_scores=factor_scores if isinstance(factor_scores, dict) else {},
+            )
+            items.append(item)
+
+        return AnalysisExportPayload(
+            version="1.0",
+            exported_at=datetime.now().isoformat(timespec="seconds"),
+            items=items,
+        )
+
+    async def import_analysis(
+        self,
+        payload: AnalysisExportPayload,
+        overwrite: bool = False,
+    ) -> AnalysisImportResult:
+        """从 JSON 载体导入分析结果
+
+        Args:
+            payload: 导入载体
+            overwrite: 已存在的记录是否覆盖（默认跳过）
+        """
+        result = AnalysisImportResult()
+        for item in payload.items:
+            try:
+                # 查找 fund_id
+                fund_result = await self.db.execute(
+                    select(Fund).where(Fund.code == item.fund_code)
+                )
+                fund = fund_result.scalars().first()
+                if not fund:
+                    result.errors.append(f"基金代码不存在: {item.fund_code}")
+                    continue
+
+                analysis_date = date.fromisoformat(item.analysis_date)
+
+                existing_result = await self.db.execute(
+                    select(AnalysisResult).where(
+                        AnalysisResult.fund_id == fund.id,
+                        AnalysisResult.analysis_date == analysis_date,
+                    )
+                )
+                existing = existing_result.scalars().first()
+
+                factor_scores_json = json.dumps(item.factor_scores, ensure_ascii=False) if item.factor_scores else "{}"
+
+                if existing:
+                    if not overwrite:
+                        result.skipped += 1
+                        continue
+                    existing.weighted_score = item.weighted_score
+                    existing.signal_direction = item.signal_direction
+                    existing.signal_strength = item.signal_strength
+                    existing.operation_advice = item.operation_advice
+                    existing.equity_ratio = item.equity_ratio
+                    existing.factor_scores = factor_scores_json
+                    result.updated += 1
+                else:
+                    new_record = AnalysisResult(
+                        fund_id=fund.id,
+                        analysis_date=analysis_date,
+                        weighted_score=item.weighted_score,
+                        signal_direction=item.signal_direction,
+                        signal_strength=item.signal_strength,
+                        operation_advice=item.operation_advice,
+                        equity_ratio=item.equity_ratio,
+                        factor_scores=factor_scores_json,
+                    )
+                    self.db.add(new_record)
+                    result.created += 1
+
+            except Exception as e:
+                result.errors.append(f"导入失败 [{item.fund_code}/{item.analysis_date}]: {e}")
+
+        if result.created > 0 or result.updated > 0:
+            await self.db.commit()
+
+        return result

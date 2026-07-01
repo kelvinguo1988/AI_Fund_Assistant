@@ -2,7 +2,7 @@
  * 历史报告页面
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -22,8 +22,10 @@ import {
   Button,
   Snackbar,
   Alert,
+  Checkbox,
+  FormControlLabel,
 } from '@mui/material';
-import { Visibility as ViewIcon } from '@mui/icons-material';
+import { Visibility as ViewIcon, Download as DownloadIcon, Upload as UploadIcon } from '@mui/icons-material';
 import SignalIndicator from '../components/SignalIndicator';
 import { analysisApi } from '../api/analysis';
 import type { AnalysisResultOut } from '../types';
@@ -34,6 +36,8 @@ const HistoryReports: React.FC = () => {
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedResult, setSelectedResult] = useState<AnalysisResultOut | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+  const [overwrite, setOverwrite] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadResults = async () => {
     try {
@@ -45,6 +49,34 @@ const HistoryReports: React.FC = () => {
   };
 
   useEffect(() => { loadResults(); }, [filterDate]);
+
+  const handleExport = async () => {
+    try {
+      await analysisApi.exportAnalysis();
+      setSnackbar({ open: true, message: '历史报告导出成功', severity: 'success' });
+    } catch {
+      setSnackbar({ open: true, message: '导出失败', severity: 'error' });
+    }
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await analysisApi.importAnalysis(data, overwrite);
+      setSnackbar({ open: true, message: `导入完成: 新建${res.data?.created || 0} 更新${res.data?.updated || 0} 跳过${res.data?.skipped || 0}`, severity: 'success' });
+      loadResults();
+    } catch (err: any) {
+      setSnackbar({ open: true, message: `导入失败: ${err.message || ''}`, severity: 'error' });
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handleViewDetail = (result: AnalysisResultOut) => {
     setSelectedResult(result);
@@ -60,14 +92,24 @@ const HistoryReports: React.FC = () => {
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5">历史报告</Typography>
-        <TextField
-          label="筛选日期"
-          type="date"
-          value={filterDate}
-          onChange={(e) => setFilterDate(e.target.value)}
-          size="small"
-          InputLabelProps={{ shrink: true }}
-        />
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+          <Button size="small" variant="outlined" startIcon={<DownloadIcon />} onClick={handleExport}>导出</Button>
+          <Button size="small" variant="outlined" startIcon={<UploadIcon />} onClick={handleImportClick}>导入</Button>
+          <FormControlLabel
+            control={<Checkbox size="small" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />}
+            label="覆盖"
+            sx={{ '& .MuiTypography-root': { fontSize: '0.8rem' } }}
+          />
+          <input type="file" ref={fileInputRef} accept=".json" style={{ display: 'none' }} onChange={handleImportFile} />
+          <TextField
+            label="筛选日期"
+            type="date"
+            value={filterDate}
+            onChange={(e) => setFilterDate(e.target.value)}
+            size="small"
+            InputLabelProps={{ shrink: true }}
+          />
+        </Box>
       </Box>
 
       <TableContainer component={Paper}>

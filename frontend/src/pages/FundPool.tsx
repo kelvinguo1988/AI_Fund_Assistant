@@ -26,7 +26,7 @@ import {
   Snackbar,
   Alert,
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Upload as UploadIcon, Refresh as RefreshIcon } from '@mui/icons-material';
+import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Upload as UploadIcon, Download as DownloadIcon, Refresh as RefreshIcon } from '@mui/icons-material';
 import { fundApi } from '../api/fund';
 import type { FundOut, FundCreate, FundUpdate } from '../types';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -177,6 +177,7 @@ const FundPool: React.FC = () => {
               <Button size="small" variant="outlined" color="warning" onClick={() => handleBatchAction('disabled')}>批量停用</Button>
             </>
           )}
+          <Button variant="outlined" startIcon={<DownloadIcon />} onClick={() => fundApi.exportFunds().catch(() => setSnackbar({ open: true, message: '导出失败', severity: 'error' }))}>导出</Button>
           <Button variant="outlined" startIcon={<UploadIcon />} onClick={() => { setImportOpen(true); setImportResult(null); setImportText(''); }}>批量导入</Button>
           <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenAdd}>新增基金</Button>
         </Box>
