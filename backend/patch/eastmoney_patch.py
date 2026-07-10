@@ -42,6 +42,11 @@ _TARGET_DOMAINS = [
 
 original_request = requests.Session.request
 
+# 默认请求超时（秒）。akshare 等数据源内部 requests 调用默认 timeout=None，
+# 在容器长运行后死连接上会无限挂起，耗尽默认线程池，使所有 asyncio.to_thread
+# 调用排队超时（仪表盘数据更新全部 TimeoutError）。注入有界超时可确保线程必然释放。
+DEFAULT_REQUEST_TIMEOUT = 20
+
 
 class AuthCache:
     def __init__(self):
@@ -117,6 +122,11 @@ def apply_patch():
         return
 
     def patched_request(self, method, url, **kwargs):
+        # 根因修复：为所有 requests 调用注入默认超时（调用方显式传入的 timeout 优先）。
+        # 避免出现 timeout=None 的阻塞调用在死连接上永久挂起、耗尽默认线程池，
+        # 进而使所有 asyncio.to_thread 调用排队触发 asyncio.wait_for 超时。
+        kwargs.setdefault("timeout", DEFAULT_REQUEST_TIMEOUT)
+
         is_target = any(d in (url or "") for d in _TARGET_DOMAINS)
         if not is_target:
             return original_request(self, method, url, **kwargs)
