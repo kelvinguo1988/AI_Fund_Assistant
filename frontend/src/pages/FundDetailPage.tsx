@@ -2,7 +2,7 @@
  * 基金详情页面 — 先展示缓存数据，后台刷新后更新
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -23,6 +23,17 @@ const FundDetailPage: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshStatus, setRefreshStatus] = useState<string>('');
+  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /** 组件卸载时清理轮询定时器 */
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+    };
+  }, []);
 
   /** 加载缓存数据 */
   const loadCached = async () => {
@@ -40,36 +51,65 @@ const FundDetailPage: React.FC = () => {
     }
   };
 
-  /** 后台刷新数据 */
+  /** 后台刷新数据：触发后立即返回，前端轮询进度，完成后重载 */
   const refreshInBackground = async () => {
     if (refreshing) return;
     setRefreshing(true);
-    setRefreshStatus('正在刷新阶段涨幅...');
     setError(null);
-    try {
-      // 先刷新阶段涨幅（较快），然后刷新持仓+经理（较慢）
-      const res = await fundApi.refreshDetails();
-      const r = res.data as any;
-      const total = r?.total ?? 0;
-      const errors = (r?.results ?? []).filter((x: any) => x.error).length;
-      if (r?.updated_at) {
-        setUpdatedAt(r.updated_at);
-      }
-      setRefreshStatus(`刷新完成: ${total} 只基金${errors > 0 ? `, ${errors} 只失败` : ''}`);
 
-      // 重载最新数据
-      const updated = await fundApi.detail();
-      if (updated.data) {
-        setReturns(updated.data.funds || []);
-        if (updated.data.updated_at) {
-          setUpdatedAt(updated.data.updated_at);
-        }
+    const stopPolling = () => {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current);
+        refreshTimerRef.current = null;
       }
+    };
+
+    // 轮询刷新进度，完成后重载详情
+    const startPolling = () => {
+      refreshTimerRef.current = setInterval(async () => {
+        try {
+          const st = await fundApi.refreshDetailsStatus();
+          const s = st.data;
+          if (!s) return;
+          if (s.status === 'running') {
+            setRefreshStatus(
+              s.message || `刷新中 ${s.done}/${s.total}`
+            );
+          } else if (s.status === 'done') {
+            stopPolling();
+            setRefreshing(false);
+            if (s.updated_at) setUpdatedAt(s.updated_at);
+            setRefreshStatus(`刷新完成: ${s.total} 只基金`);
+            const updated = await fundApi.detail();
+            if (updated.data) {
+              setReturns(updated.data.funds || []);
+              if (updated.data.updated_at) setUpdatedAt(updated.data.updated_at);
+            }
+          } else if (s.status === 'failed') {
+            stopPolling();
+            setRefreshing(false);
+            setError('刷新详情失败: ' + (s.error || '未知错误'));
+          }
+        } catch (e) {
+          // 轮询异常不打断后端任务，仅记录
+          console.error('查询刷新进度失败', e);
+        }
+      }, 2000);
+    };
+
+    try {
+      const res = await fundApi.refreshDetails();
+      if (res.data?.already_running) {
+        setRefreshStatus('刷新任务已在后台运行');
+      } else {
+        setRefreshStatus('已启动后台刷新...');
+      }
+      startPolling();
     } catch (err: any) {
+      stopPolling();
+      setRefreshing(false);
       console.error('刷新详情失败', err);
       setError('刷新详情失败: ' + (err.message || ''));
-    } finally {
-      setRefreshing(false);
     }
   };
 

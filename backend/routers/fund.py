@@ -23,7 +23,6 @@ from backend.services.fund_cache_service import (
     get_cached_period_returns,
     get_last_refreshed_time,
     update_period_returns_cache,
-    update_extended_detail_cache,
     get_cached_json,
     CACHE_KEY_EXTENDED_DETAIL,
 )
@@ -32,6 +31,7 @@ from backend.services.fund_holding_service import get_latest_holdings, refresh_h
 from backend.services.fund_manager_service import get_current_managers, refresh_managers
 from backend.services.fund_change_detector import get_fund_changes
 from backend.services.fund_service import FundService
+from backend.services.fund_refresh_task import get_refresh_state, run_refresh_all_details
 
 router = APIRouter()
 
@@ -155,59 +155,43 @@ async def get_fund_manager(
 async def refresh_all_details(
     db: AsyncSession = Depends(get_db),
 ):
-    """刷新所有活跃基金的持仓+经理+阶段涨幅+扩展数据
+    """触发后台刷新所有活跃基金的持仓+经理+阶段涨幅+扩展数据
+
+    立即返回，重活在后台 asyncio 任务中执行（避免长耗时请求被前端/网关超时掐断）。
+    前端轮询 GET /refresh-details/status 获取实时进度，完成后自动重载详情。
 
     数据来源：
     - 阶段涨幅+扩展数据: pingzhongdata/{code}.js（批量并发）
     - 股票持仓: AKShare fund_portfolio_hold_em（逐只，3-6s 反爬间隔）
     - 基金经理: AKShare fund_manager_em（全量缓存，逐只匹配）
     """
-    svc = FundService(db)
-    funds = await svc.list_funds(status="active")
-    if not funds:
-        return ApiResponse(data={"total": 0, "results": []})
+    state = get_refresh_state()
+    if state.status == "running":
+        # 已有刷新在跑，直接返回当前任务状态，不重复触发
+        return ApiResponse(data={
+            "accepted": True,
+            "already_running": True,
+            "status": state.status,
+            "total": state.total,
+            "done": state.done,
+        })
 
-    codes = [f.code for f in funds]
-    name_map = {f.code: f.name for f in funds}
-
-    # 1. 先刷新阶段涨幅缓存（批量并发，已含反爬延迟）
-    js_texts: dict[str, str] = {}
-    try:
-        _, js_texts = await update_period_returns_cache(db, codes, name_map)
-        logger.info("阶段涨幅缓存已更新 (%d 只)", len(codes))
-    except Exception as e:
-        logger.warning("阶段涨幅刷新异常: %s", e)
-
-    # 1.5 解析扩展数据并缓存（复用已获取的 JS 文本，零额外网络请求）
-    if js_texts:
-        try:
-            await update_extended_detail_cache(db, js_texts, name_map)
-            logger.info("扩展数据缓存已更新 (%d 只)", len(js_texts))
-        except Exception as e:
-            logger.warning("扩展数据解析异常: %s", e)
-
-    # 2. 逐只刷新持仓+经理（AKShare，需反爬间隔）
-    results: list[dict] = []
-    for i, f in enumerate(funds):
-        try:
-            await refresh_holdings(db, f.id, f.code)
-            await refresh_managers(db, f.id, f.code)
-            results.append({"code": f.code, "name": f.name, "status": "ok"})
-            logger.info("刷新基金 %s 详情完成 (%d/%d)", f.code, i + 1, len(funds))
-        except Exception as e:
-            logger.warning("刷新基金 %s 详情异常: %s", f.code, e)
-            results.append({"code": f.code, "name": f.name, "error": str(e)})
-        # 反爬：每只基金间隔 3-6 秒
-        if i < len(funds) - 1:
-            await asyncio.sleep(random.uniform(3, 6))
-    await db.commit()
-
-    new_updated = await get_last_refreshed_time(db)
+    # 启动后台任务（使用独立 DB 会话，不占用请求级会话）
+    asyncio.create_task(run_refresh_all_details())
     return ApiResponse(data={
-        "total": len(funds),
-        "results": results,
-        "updated_at": new_updated,
+        "accepted": True,
+        "already_running": False,
+        "status": "running",
     })
+
+
+@router.get("/refresh-details/status", response_model=ApiResponse[dict])
+async def get_refresh_details_status(
+    db: AsyncSession = Depends(get_db),
+):
+    """查询后台刷新任务的实时进度"""
+    state = get_refresh_state()
+    return ApiResponse(data=state.to_dict())
 
 
 @router.get("/change-summary", response_model=ApiResponse[list[FundChangeSummary]])
@@ -284,9 +268,11 @@ async def get_funds_detail_status(
 ):
     """获取基金详情缓存状态 — 前端用于判断是否需要刷新"""
     cached_data, updated_at = await get_cached_period_returns(db)
+    state = get_refresh_state()
     return ApiResponse(data=FundDetailStatus(
         has_cache=bool(cached_data),
         updated_at=updated_at,
+        refreshing=(state.status == "running"),
     ))
 
 

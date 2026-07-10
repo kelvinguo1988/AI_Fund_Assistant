@@ -148,7 +148,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/funds/{id}/holdings` | GET | 基金最新季度持仓 |
 | `/api/funds/{id}/manager` | GET | 基金经理信息 |
 | `/api/funds/change-summary` | GET | 持仓调仓 + 经理变更摘要 |
-| `/api/funds/refresh-details` | POST | 刷新所有基金持仓 + 经理数据 |
+| `/api/funds/refresh-details` | POST | 触发后台刷新所有基金详情（阶段涨幅 + 扩展数据 + 持仓 + 经理），立即返回，前端轮询进度 |
+| `/api/funds/refresh-details/status` | GET | 查询后台刷新进度（status/total/done/current/message/updated_at） |
 | `/api/funds/{id}/refresh-themes` | POST | 重新抓取天天基金主题标签 |
 | `/api/analysis` | GET | 查询分析结果 |
 | `/api/analysis/latest` | GET | 最新分析结果 |
