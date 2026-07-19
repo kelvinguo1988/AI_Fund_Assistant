@@ -13,12 +13,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.fund_manager_record import FundManagerRecord
+from backend.utils.concurrency import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
 # 全量经理数据缓存（服务启动后缓存一次，避免重复 10s 查询）
 _manager_cache: Optional[list[dict]] = None
 _cache_lock = asyncio.Lock()
+
+# 全量经理查询超时。fund_manager_em 返回全市场经理数据（~5MB），首次较慢，
+# 60s 留足缓冲；超时返回空列表，不阻塞调用方。
+_MANAGER_TIMEOUT: float = 60.0
 
 
 async def _get_all_managers() -> list[dict]:
@@ -31,12 +36,17 @@ async def _get_all_managers() -> list[dict]:
         if _manager_cache is not None:
             return _manager_cache
         try:
-            df = await asyncio.to_thread(ak.fund_manager_em)
+            df = await run_with_timeout(
+                ak.fund_manager_em,
+                timeout=_MANAGER_TIMEOUT,
+            )
             if df is not None and not df.empty:
                 records = df.to_dict(orient="records")
                 _manager_cache = records
                 logger.info("基金经理缓存已加载: %d 条", len(records))
                 return records
+        except asyncio.TimeoutError:
+            logger.warning("获取全量基金经理超时（%ss），本次返回空列表", _MANAGER_TIMEOUT)
         except Exception as e:
             logger.warning("获取全量基金经理失败: %s", e)
         return []

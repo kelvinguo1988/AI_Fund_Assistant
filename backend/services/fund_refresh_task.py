@@ -11,7 +11,6 @@
 
 import asyncio
 import logging
-import random
 from datetime import datetime
 from typing import Any, Optional
 
@@ -72,6 +71,12 @@ async def run_refresh_all_details() -> None:
     """后台执行：刷新全部活跃基金的阶段涨幅/扩展数据/持仓/经理，实时更新状态。
 
     使用独立 DB 会话（请求级会话在响应返回后已关闭，不可复用）。
+
+    修复说明：
+    - 原实现串行 for 循环 + 每只 `sleep(3-6s)`，40-60 只 = 10-20 分钟纯等待。
+    - 改为并发刷新（5 并发），每只基金使用独立 DB session（AsyncSession 非并发安全）。
+    - 移除 sleep 间隔（refresh_holdings 内部已有 25s 超时 + 全局信号量限流）。
+    - 进度更新使用 Lock 保护，避免并发写冲突。
     """
     from backend.database import async_session_factory
     from backend.services.fund_service import FundService
@@ -115,24 +120,44 @@ async def run_refresh_all_details() -> None:
                 except Exception as e:
                     logger.warning("扩展数据解析异常: %s", e)
 
-            # 2. 逐只刷新持仓 + 经理（AKShare，含反爬间隔）
-            for i, f in enumerate(funds):
-                state.current = f"{f.code} {f.name}"
-                state.message = f"刷新持仓/经理 ({i + 1}/{len(funds)})"
-                try:
-                    await refresh_holdings(db, f.id, f.code)
-                    await refresh_managers(db, f.id, f.code)
-                    state.results.append({"code": f.code, "name": f.name, "status": "ok"})
-                    logger.info("刷新基金 %s 详情完成 (%d/%d)", f.code, i + 1, len(funds))
-                except Exception as e:
-                    logger.warning("刷新基金 %s 详情异常: %s", f.code, e)
-                    state.results.append({"code": f.code, "name": f.name, "error": str(e)})
-                state.done = i + 1
-                if i < len(funds) - 1:
-                    await asyncio.sleep(random.uniform(3, 6))
+        # 2. 并发刷新持仓 + 经理（每只独立 DB session，避免 AsyncSession 并发冲突）
+        # 5 并发：与全局 akshare 信号量一致，避免过度争抢。
+        state.message = "并发刷新持仓/经理..."
+        sem = asyncio.Semaphore(5)
+        progress_lock = asyncio.Lock()
+        done_counter = [0]  # 用 list 包装以便闭包内修改
 
+        async def _refresh_one(fund) -> dict:
+            """单只基金的持仓+经理刷新（独立 session）"""
+            async with sem:
+                # 进度状态更新
+                async with progress_lock:
+                    state.current = f"{fund.code} {fund.name}"
+                result = {"code": fund.code, "name": fund.name}
+                try:
+                    async with async_session_factory() as fund_db:
+                        await refresh_holdings(fund_db, fund.id, fund.code)
+                        await refresh_managers(fund_db, fund.id, fund.code)
+                        await fund_db.commit()
+                    result["status"] = "ok"
+                except Exception as e:
+                    logger.warning("刷新基金 %s 详情异常: %s", fund.code, e)
+                    result["error"] = str(e)
+
+                async with progress_lock:
+                    done_counter[0] += 1
+                    state.done = done_counter[0]
+                    state.results.append(result)
+                return result
+
+        # 并发执行所有基金刷新
+        await asyncio.gather(
+            *[_refresh_one(f) for f in funds], return_exceptions=True
+        )
+
+        # 获取最终刷新时间
+        async with async_session_factory() as db:
             state.updated_at = await get_last_refreshed_time(db)
-            await db.commit()
 
         state.status = "done"
         state.message = "刷新完成"

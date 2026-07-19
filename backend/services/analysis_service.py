@@ -1,5 +1,6 @@
 """分析编排服务 — 数据获取→因子计算→评分→信号→存储→推送"""
 
+import asyncio
 import json
 import logging
 from datetime import date, datetime
@@ -116,25 +117,43 @@ class AnalysisService:
         qf = build_quality_filter(merged_qf_config)
 
         # 6. 逐只基金获取数据 + 计算因子（第一遍）
+        # 修复：原实现串行 for 循环，40-60 只基金 × (3s 限流 + 2-5s jitter + 请求耗时)
+        # = 10-40 分钟。改为并发获取基金数据（网络密集型，最慢），
+        # 串行做 DB 查询 + 因子计算（AsyncSession 非并发安全 + CPU 快）。
+        # get_fund_data 内部已有全局信号量（并发 5）控制实际网络并发数。
         fund_data_map: dict[str, FundData] = {}
         all_factor_results: dict[str, list[FactorScoreResult]] = {}
         quarterly_data_map: dict[str, list[dict]] = {}
 
-        for fund in funds:
+        async def _fetch_one(fund: Fund) -> tuple[Fund, Optional[FundData]]:
+            """并发获取单只基金数据（网络密集型）"""
             try:
-                fund_data = await self.data_source.get_fund_data(fund.code, fund_type=getattr(fund, "fund_type", None))
-                fund_data_map[fund.code] = fund_data
+                fd = await self.data_source.get_fund_data(
+                    fund.code, fund_type=getattr(fund, "fund_type", None)
+                )
+                return fund, fd
+            except Exception as e:
+                logger.error(f"获取基金 {fund.code} 数据失败: {e}")
+                return fund, None
 
-                # 加载季度扩展数据
+        # 并发获取所有基金数据（信号量在底层 _call 中控制并发为 5）
+        fetch_results = await asyncio.gather(
+            *[_fetch_one(f) for f in funds], return_exceptions=False
+        )
+
+        # 串行加载季度数据 + 计算因子（AsyncSession 非并发安全）
+        for fund, fund_data in fetch_results:
+            if fund_data is None:
+                continue
+            try:
+                fund_data_map[fund.code] = fund_data
                 quarterly = await self._load_quarterly_data(fund.id)
                 quarterly_data_map[fund.code] = quarterly
-
                 factor_scores = factor_engine.calculate_all(fund_data, active_factors)
                 all_factor_results[fund.code] = factor_scores
-
                 logger.info(f"因子计算完成: {fund.code} ({fund.name}), {len(factor_scores)} 个因子")
             except Exception as e:
-                logger.error(f"获取/计算基金 {fund.code} 失败: {e}")
+                logger.error(f"计算基金 {fund.code} 因子失败: {e}")
                 continue
 
         # 6. 跨基金截面标准化

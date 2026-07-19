@@ -13,10 +13,15 @@ from typing import Any, Optional
 
 import requests
 
+from backend.utils.concurrency import run_with_timeout
+
 logger = logging.getLogger(__name__)
 
 # 天天基金详情数据 JS 文件 URL 模板
 _PINGZHONG_URL = "https://fund.eastmoney.com/pingzhongdata/{code}.js"
+
+# 单只基金 JS 获取超时（秒）
+_JS_TIMEOUT: float = 20.0
 
 # 正则提取 syl_ 变量值
 _RETURN_PATTERNS: dict[str, re.Pattern] = {
@@ -34,9 +39,6 @@ _PAT_GRAND_TOTAL = re.compile(r'var\s+Data_grandTotal\s*=\s*(\[)')
 _PAT_FLUCTUATION_SCALE = re.compile(r'var\s+Data_fluctuationScale\s*=\s*(\{)')
 _PAT_HOLDER_STRUCTURE = re.compile(r'var\s+Data_holderStructure\s*=\s*(\{)')
 _PAT_ASSET_ALLOCATION = re.compile(r'var\s+Data_assetAllocation\s*=\s*(\{)')
-
-# 并发控制：最多同时 5 个请求
-_SEMAPHORE = asyncio.Semaphore(5)
 
 
 def _extract_js_array(text: str, start_pattern: re.Pattern) -> Optional[list]:
@@ -143,7 +145,7 @@ def _fetch_js(code: str) -> Optional[str]:
 
 async def fetch_fund_detail(code: str) -> dict[str, Any]:
     """一站式获取单只基金基础数据"""
-    js_text = await asyncio.to_thread(_fetch_js, code)
+    js_text = await run_with_timeout(_fetch_js, code, timeout=_JS_TIMEOUT)
     if not js_text:
         return {"period_returns": {}, "fund_name": "", "extended_data": {}}
 
@@ -155,14 +157,21 @@ async def fetch_fund_detail(code: str) -> dict[str, Any]:
 
 
 async def fetch_all_js_texts(codes: list[str]) -> dict[str, str]:
-    """并发批量获取多只基金的 pingzhongdata JS 文本"""
+    """并发批量获取多只基金的 pingzhongdata JS 文本
+
+    修复：原实现使用 `asyncio.to_thread` 走默认线程池，孤儿线程堆积会耗尽池子。
+    改为使用 `run_with_timeout` 走独立 akshare 线程池 + 强制超时。
+    """
     if not codes:
         return {}
 
     async def fetch_one(code: str) -> tuple[str, Optional[str]]:
-        async with _SEMAPHORE:
-            text = await asyncio.to_thread(_fetch_js, code)
+        try:
+            text = await run_with_timeout(_fetch_js, code, timeout=_JS_TIMEOUT)
             return code, text
+        except Exception as e:
+            logger.debug("批量抓取基金 %s 数据异常: %s", code, e)
+            return code, None
 
     tasks = [fetch_one(code) for code in codes]
     results = await asyncio.gather(*tasks, return_exceptions=True)

@@ -40,9 +40,6 @@ class AKShareAdapter(BaseDataSource):
 
     MAX_RETRIES = 3       # 最大重试次数（含首次）
     BASE_DELAY = 2.0      # 初始退避延迟（秒）
-    _last_call_time: float = 0.0  # 上次 API 调用时间
-    _min_call_interval: float = 3.0  # 最小调用间隔（秒），防止触发限流
-    _ua_pool = _USER_AGENTS
 
     # 类级缓存 + 文件持久化：通过 fund_open_fund_rank_em 批量获取基金名称映射，
     # 避免每次查询都走网络请求。内存 dict 缓存 + JSON 文件持久化。
@@ -52,52 +49,79 @@ class AKShareAdapter(BaseDataSource):
     _CACHE_TTL: float = 3600.0
     _CACHE_FILE: str = "fund_name_cache.json"
 
-    async def _call(self, func, *args, **kwargs):
-        """带限流 + User-Agent 轮换 + 指数退避重试的异步 API 调用
+    # 共享数据缓存：全市场基金共用的数据（国债收益率、沪深300基准、指数估值），
+    # 避免每只基金重复请求同一接口。51 只基金原实现会产生 100+ 次重复调用。
+    _bond_yield_cache: Optional[float] = None
+    _bond_yield_ts: float = 0.0
+    _benchmark_cache: Optional[list[float]] = None
+    _benchmark_ts: float = 0.0
+    _index_value_cache: dict[str, tuple[float, pd.DataFrame]] = {}  # {index_code: (ts, df)}
+    _SHARED_CACHE_TTL: float = 3600.0  # 共享数据缓存 1 小时
 
-        AKShare 的 HTTP 连接可能因网络波动、限流等原因断开。
-        通过 UA 轮换、随机抖动和重试机制降低被封概率。
+    # ETF 行情缓存：fund_etf_spot_em 返回全量 ETF 行情，多只 ETF 并发时复用
+    _etf_spot_cache: Optional[pd.DataFrame] = None
+    _etf_spot_ts: float = 0.0
+
+    # ── 并发缓存锁（防止缓存穿透时多协程同时发起网络请求）──────────────
+    # 背景：51 只基金并发分析时，第一只基金的网络请求还没返回填充缓存，
+    # 其余 50 只基金都已检测到缓存为 None 并同时发起网络请求，
+    # 导致 91 次 fund_open_fund_rank_em + 47 次 stock_zh_index_value_csindex 超时。
+    # 修复：使用 asyncio.Lock + 双重检查模式，确保同一接口同一时间只有一个网络请求。
+    # 使用 lazy init（Python 3.9 中 asyncio.Lock 不能在类定义时创建）。
+    _fund_name_lock: Optional["asyncio.Lock"] = None
+    _bond_yield_lock: Optional["asyncio.Lock"] = None
+    _benchmark_lock: Optional["asyncio.Lock"] = None
+    _index_value_locks: dict[str, "asyncio.Lock"] = {}  # 按 index_code 分锁
+    _etf_spot_lock: Optional["asyncio.Lock"] = None
+
+    @classmethod
+    def _get_lock(cls, lock_attr: str, key: Optional[str] = None) -> "asyncio.Lock":
+        """Lazy-init asyncio.Lock
+
+        Python 3.9 中 asyncio.Lock() 在类定义时创建会触发 DeprecationWarning，
+        因此使用 lazy init，在第一次实际使用时创建并绑定到当前事件循环。
+
+        Args:
+            lock_attr: 类属性名（如 '_fund_name_lock'）
+            key: 可选的二级 key（用于按 index_code 分锁），None 时使用 lock_attr
+        """
+        if key is not None:
+            lock = cls._index_value_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                cls._index_value_locks[key] = lock
+            return lock
+        else:
+            lock = getattr(cls, lock_attr)
+            if lock is None:
+                lock = asyncio.Lock()
+                setattr(cls, lock_attr, lock)
+            return lock
+
+    async def _call(self, func, *args, **kwargs):
+        """带超时 + UA 轮换 + 指数退避重试的异步 API 调用
+
+        修复说明：
+        - 原实现使用类级全局 `_last_call_time` + `sleep(3)` 串行限流，导致 40-60 只
+          基金 × (3s 限流 + 2-5s jitter + 请求耗时) = 数十分钟串行等待。
+        - 改为使用 `run_with_timeout` 内置的全局信号量（并发 5）限流，允许并发。
+        - 移除成功后的 `sleep(jitter)`，保留失败后的指数退避重试。
+        - 使用独立线程池，避免 akshare 卡住时孤儿线程耗尽默认线程池。
+        - 超时从 30s 降为 25s（配合 patch 的 20s requests 超时）。
 
         支持 _max_attempts 参数覆盖最大重试次数：
         - 有降级接口的调用（如 ETF→OTC）设 1，失败立即切接口
         - 无降级的独立调用保持默认 3 次
         """
-        import functools
-        import time
-
         max_attempts = kwargs.pop('_max_attempts', self.MAX_RETRIES)
 
-        # 限流：确保两次调用间隔不少于 _min_call_interval
-        now = time.time()
-        since_last = now - self._last_call_time
-        if since_last < self._min_call_interval:
-            await asyncio.sleep(self._min_call_interval - since_last)
-        self._last_call_time = time.time()
-
-        # 随机 User-Agent（通过 akshare 底层的 session headers）
-        try:
-            import akshare as ak
-            session = getattr(ak, "_session", None) or getattr(ak, "session", None)
-            if session is not None:
-                session.headers.update({"User-Agent": random.choice(self._ua_pool)})
-        except Exception:
-            pass
-
-        async def _call_and_jitter():
-            partial = functools.partial(func, *args, **kwargs)
-            result = await asyncio.wait_for(
-                asyncio.to_thread(partial),
-                timeout=30.0,
-            )
-            return result
+        from backend.utils.concurrency import run_with_timeout
 
         last_exc = None
+        func_name = getattr(func, "__name__", repr(func))
         for attempt in range(1, max_attempts + 1):
             try:
-                result = await _call_and_jitter()
-                # 成功后随机抖动，避免固定频率
-                jitter = random.uniform(2.0, 5.0)
-                await asyncio.sleep(jitter)
+                result = await run_with_timeout(func, *args, timeout=25.0, **kwargs)
                 return result
             except (asyncio.TimeoutError, ConnectionError, ConnectionResetError, Exception) as e:
                 last_exc = e
@@ -106,13 +130,13 @@ class AKShareAdapter(BaseDataSource):
                     reason = type(e).__name__
                     msg = str(e) or "(no error message)"
                     logger.warning(
-                        f"{func.__name__} 失败 (attempt {attempt}/{max_attempts}): "
+                        f"{func_name} 失败 (attempt {attempt}/{max_attempts}): "
                         f"[{reason}] {msg}, {delay:.1f}s 后重试..."
                     )
                     await asyncio.sleep(delay)
         reason = type(last_exc).__name__
         msg = str(last_exc) or "(no error message)"
-        logger.error(f"{func.__name__} 重试 {max_attempts} 次后仍然失败: [{reason}] {msg}")
+        logger.error(f"{func_name} 重试 {max_attempts} 次后仍然失败: [{reason}] {msg}")
         raise last_exc
 
     async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
@@ -199,13 +223,9 @@ class AKShareAdapter(BaseDataSource):
         fund_data.volume = float(last_row["成交量"])
         fund_data.date = str(last_row["日期"])
 
-        # 尝试获取基金名称
+        # 尝试获取基金名称（带缓存的 fund_etf_spot_em）
         try:
-            info_df = await self._call(ak.fund_etf_spot_em)
-            if info_df is not None and not info_df.empty:
-                match = info_df[info_df["代码"] == code]
-                if not match.empty:
-                    fund_data.name = str(match.iloc[0]["名称"])
+            await self._fill_etf_name(code, fund_data)
         except Exception as e:
             logger.warning(f"ETF 名称获取失败 code={code}: {e}")
 
@@ -216,6 +236,51 @@ class AKShareAdapter(BaseDataSource):
             logger.warning(f"ETF PE/PB 数据获取失败 code={code}: {e}")
 
         return fund_data
+
+    async def _fill_etf_name(self, code: str, fund_data: FundData) -> None:
+        """填充 ETF 名称（带缓存的 fund_etf_spot_em）
+
+        优化：fund_etf_spot_em 返回全量 ETF 行情数据（800+ 只），
+        多只 ETF 并发时复用同一份缓存，避免重复请求。
+        使用 asyncio.Lock 防止缓存穿透。
+        """
+        import time as _time
+
+        # 无锁快速检查缓存
+        now = _time.time()
+        if (
+            AKShareAdapter._etf_spot_cache is not None
+            and now - AKShareAdapter._etf_spot_ts < AKShareAdapter._SHARED_CACHE_TTL
+        ):
+            match = AKShareAdapter._etf_spot_cache[AKShareAdapter._etf_spot_cache["代码"] == code]
+            if not match.empty:
+                fund_data.name = str(match.iloc[0]["名称"])
+                logger.debug(f"ETF 名称命中缓存 code={code}")
+                return
+
+        # 获取锁后再次检查
+        lock = self._get_lock('_etf_spot_lock')
+        async with lock:
+            # 双重检查
+            now = _time.time()
+            if (
+                AKShareAdapter._etf_spot_cache is not None
+                and now - AKShareAdapter._etf_spot_ts < AKShareAdapter._SHARED_CACHE_TTL
+            ):
+                match = AKShareAdapter._etf_spot_cache[AKShareAdapter._etf_spot_cache["代码"] == code]
+                if not match.empty:
+                    fund_data.name = str(match.iloc[0]["名称"])
+                    logger.debug(f"ETF 名称命中缓存（锁内复用）code={code}")
+                    return
+
+            info_df = await self._call(ak.fund_etf_spot_em)
+            if info_df is not None and not info_df.empty:
+                AKShareAdapter._etf_spot_cache = info_df
+                AKShareAdapter._etf_spot_ts = now
+                match = info_df[info_df["代码"] == code]
+                if not match.empty:
+                    fund_data.name = str(match.iloc[0]["名称"])
+                    logger.info(f"ETF 行情缓存已填充: {len(info_df)} 只（首次网络请求）")
 
     async def _get_otc_fund_nav_raw(self, code: str, period: int) -> Optional[pd.DataFrame]:
         """直接调用天天基金原始 API 获取场外基金净值（备用）
@@ -231,7 +296,7 @@ class AKShareAdapter(BaseDataSource):
         url = "http://api.fund.eastmoney.com/f10/lsjz"
         headers = {
             "Referer": f"http://fund.eastmoney.com/f10/jjjz_{code}.html",
-            "User-Agent": random.choice(self._ua_pool),
+            "User-Agent": random.choice(_USER_AGENTS),
         }
         params = {
             "fundCode": code,
@@ -247,10 +312,8 @@ class AKShareAdapter(BaseDataSource):
             return resp.json()
 
         try:
-            data = await asyncio.wait_for(
-                asyncio.to_thread(_fetch),
-                timeout=15.0,
-            )
+            from backend.utils.concurrency import run_with_timeout
+            data = await run_with_timeout(_fetch, timeout=15.0)
         except Exception as e:
             logger.debug(f"天天基金原始 API 获取失败 code={code}: {e}")
             return None
@@ -339,10 +402,13 @@ class AKShareAdapter(BaseDataSource):
         优先使用 fund_open_fund_rank_em 批量拉取全量基金名称，
         缓存在内存 dict 和 JSON 文件中，后续查询不产生网络调用。
         完全避开 fund_name_em（东财反爬高危接口）。
+
+        并发安全：使用 asyncio.Lock + 双重检查模式，防止 51 只基金并发时
+        同时穿透缓存发起 51 次网络请求（实测导致 91 次超时）。
         """
         import time
 
-        # 步骤 1: 内存缓存（最快路径）
+        # 步骤 1: 无锁快速检查内存缓存（命中则直接返回，不阻塞）
         now = time.time()
         if AKShareAdapter._fund_name_map is not None:
             name = AKShareAdapter._fund_name_map.get(code)
@@ -352,7 +418,7 @@ class AKShareAdapter(BaseDataSource):
             if now - AKShareAdapter._cache_timestamp < AKShareAdapter._CACHE_TTL:
                 return None  # 缓存未过期，确实没有
 
-        # 步骤 2: 文件缓存（进程间持久化）
+        # 步骤 2: 文件缓存（进程间持久化，无锁检查）
         if AKShareAdapter._fund_name_map is None:
             file_cache = self._load_name_cache_from_file()
             if file_cache is not None:
@@ -362,27 +428,49 @@ class AKShareAdapter(BaseDataSource):
                 if name is not None:
                     return name
 
-        # 步骤 3: 网络请求（穿透缓存）
-        try:
-            rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
-            if rank_df is not None and not rank_df.empty:
-                name_map = dict(zip(rank_df["基金代码"].astype(str), rank_df["基金简称"]))
-                AKShareAdapter._fund_name_map = name_map
-                AKShareAdapter._fund_rank_df = rank_df
-                AKShareAdapter._cache_timestamp = now
-                # 异步写文件（不阻塞）
-                self._save_name_cache_to_file(name_map)
-                return name_map.get(code)
-        except Exception as e:
-            logger.debug(f"场外基金名称获取失败 code={code} (rank_em): {e}")
+        # 步骤 3: 获取锁后再次检查（double-checked locking）
+        # 防止 51 只基金并发时同时穿透：第一个协程发网络请求填充缓存，
+        # 其余协程等待锁释放后直接读缓存。
+        lock = self._get_lock('_fund_name_lock')
+        async with lock:
+            # 双重检查：等待锁期间可能已被其他协程填充
+            now = time.time()
+            if AKShareAdapter._fund_name_map is not None:
+                name = AKShareAdapter._fund_name_map.get(code)
+                if name is not None:
+                    logger.debug(f"基金名称命中缓存（锁内复用）code={code}")
+                    return name
+                if now - AKShareAdapter._cache_timestamp < AKShareAdapter._CACHE_TTL:
+                    return None
+
+            # 仍需网络请求（只有第一个进入的协程会走到这里）
+            try:
+                rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
+                if rank_df is not None and not rank_df.empty:
+                    name_map = dict(zip(rank_df["基金代码"].astype(str), rank_df["基金简称"]))
+                    AKShareAdapter._fund_name_map = name_map
+                    AKShareAdapter._fund_rank_df = rank_df
+                    AKShareAdapter._cache_timestamp = now
+                    # 异步写文件（不阻塞）
+                    self._save_name_cache_to_file(name_map)
+                    logger.info(f"基金名称缓存已填充: {len(name_map)} 只（首次网络请求）")
+                    return name_map.get(code)
+            except Exception as e:
+                logger.debug(f"场外基金名称获取失败 code={code} (rank_em): {e}")
 
         return None
 
     async def _fill_pe_pb_for_etf(self, code: str, fund_data: FundData) -> None:
         """根据 ETF 代码尝试填充 PE/PB 数据
 
-        通过 stock_zh_index_value_csindex 接口获取关联指数的估值数据
+        通过 stock_zh_index_value_csindex 接口获取关联指数的估值数据。
+        优化：按指数代码缓存，同一指数不重复请求（如多只 ETF 都跟踪沪深300）。
+
+        并发安全：按 index_code 分锁，防止多只跟踪同一指数的 ETF 并发时
+        同时穿透缓存（实测 stock_zh_index_value_csindex 47 次超时）。
         """
+        import time as _time
+
         # ETF 代码到指数代码的映射
         etf_index_map = {
             "510300": "000300",  # 沪深300ETF → 沪深300
@@ -398,27 +486,100 @@ class AKShareAdapter(BaseDataSource):
             logger.debug(f"ETF {code} 无关联指数映射，跳过 PE/PB 获取")
             return
 
-        try:
-            df = await self._call(ak.stock_zh_index_value_csindex, symbol=index_code)
-            if df is not None and not df.empty:
-                row = df.iloc[-1]  # 取最新一条
+        # 检查缓存（无锁快速路径）
+        now = _time.time()
+        cached = AKShareAdapter._index_value_cache.get(index_code)
+        if cached is not None:
+            ts, df = cached
+            if now - ts < AKShareAdapter._SHARED_CACHE_TTL and df is not None:
+                row = df.iloc[-1]
                 pe_str = str(row.get("市盈率1", ""))
                 pb_str = str(row.get("市盈率2", ""))
                 if pe_str and pe_str not in ("", "None", "nan"):
                     fund_data.pe = float(pe_str)
                 if pb_str and pb_str not in ("", "None", "nan"):
                     fund_data.pb = float(pb_str)
-        except Exception as e:
-            logger.warning(f"PE/PB 数据获取失败 index={index_code}: {e}")
+                logger.debug(f"PE/PB 命中缓存 index={index_code}")
+                return
+
+        # 获取锁后再次检查（按 index_code 分锁，不同指数不互相阻塞）
+        lock = self._get_lock('_index_value_locks', key=index_code)
+        async with lock:
+            # 双重检查：等待锁期间可能已被其他协程填充
+            now = _time.time()
+            cached = AKShareAdapter._index_value_cache.get(index_code)
+            if cached is not None:
+                ts, df = cached
+                if now - ts < AKShareAdapter._SHARED_CACHE_TTL and df is not None:
+                    row = df.iloc[-1]
+                    pe_str = str(row.get("市盈率1", ""))
+                    pb_str = str(row.get("市盈率2", ""))
+                    if pe_str and pe_str not in ("", "None", "nan"):
+                        fund_data.pe = float(pe_str)
+                    if pb_str and pb_str not in ("", "None", "nan"):
+                        fund_data.pb = float(pb_str)
+                    logger.debug(f"PE/PB 命中缓存（锁内复用）index={index_code}")
+                    return
+
+            try:
+                df = await self._call(ak.stock_zh_index_value_csindex, symbol=index_code)
+                if df is not None and not df.empty:
+                    # 写入缓存
+                    AKShareAdapter._index_value_cache[index_code] = (now, df)
+                    row = df.iloc[-1]  # 取最新一条
+                    pe_str = str(row.get("市盈率1", ""))
+                    pb_str = str(row.get("市盈率2", ""))
+                    if pe_str and pe_str not in ("", "None", "nan"):
+                        fund_data.pe = float(pe_str)
+                    if pb_str and pb_str not in ("", "None", "nan"):
+                        fund_data.pb = float(pb_str)
+                    logger.info(f"PE/PB 缓存已填充 index={index_code}（首次网络请求）")
+            except Exception as e:
+                logger.warning(f"PE/PB 数据获取失败 index={index_code}: {e}")
 
     async def _fill_benchmark_data(self, fund_data: FundData, period: int) -> None:
-        """填充基准指数（沪深300）历史行情用于信息比率计算"""
-        df = await self._call(ak.stock_zh_index_daily, symbol="sh000300")
-        if df is not None and not df.empty:
-            df = df.tail(period + 10)
-            df = df.sort_values("date")
-            fund_data.benchmark_history = df["close"].astype(float).tolist()
-            logger.info(f"基准指数数据填充完成: {len(fund_data.benchmark_history)} 行")
+        """填充基准指数（沪深300）历史行情用于信息比率计算
+
+        优化：沪深300是全市场共享基准，51 只基金重复请求同一接口。
+        添加类级缓存，1 小时内复用，避免重复网络调用。
+
+        并发安全：使用 asyncio.Lock 防止 51 只基金并发时同时穿透缓存。
+        """
+        import time as _time
+
+        # 无锁快速检查缓存
+        now = _time.time()
+        if (
+            AKShareAdapter._benchmark_cache is not None
+            and now - AKShareAdapter._benchmark_ts < AKShareAdapter._SHARED_CACHE_TTL
+        ):
+            fund_data.benchmark_history = AKShareAdapter._benchmark_cache
+            logger.debug(f"基准指数数据命中缓存: {len(fund_data.benchmark_history)} 行")
+            return
+
+        # 获取锁后再次检查（double-checked locking）
+        lock = self._get_lock('_benchmark_lock')
+        async with lock:
+            # 双重检查：等待锁期间可能已被其他协程填充
+            now = _time.time()
+            if (
+                AKShareAdapter._benchmark_cache is not None
+                and now - AKShareAdapter._benchmark_ts < AKShareAdapter._SHARED_CACHE_TTL
+            ):
+                fund_data.benchmark_history = AKShareAdapter._benchmark_cache
+                logger.debug(f"基准指数数据命中缓存（锁内复用）: {len(fund_data.benchmark_history)} 行")
+                return
+
+            df = await self._call(ak.stock_zh_index_daily, symbol="sh000300")
+            if df is not None and not df.empty:
+                df = df.tail(period + 10)
+                df = df.sort_values("date")
+                history = df["close"].astype(float).tolist()
+                fund_data.benchmark_history = history
+                # 写入缓存
+                AKShareAdapter._benchmark_cache = history
+                AKShareAdapter._benchmark_ts = now
+                logger.info(f"基准指数数据填充完成: {len(history)} 行（首次网络请求）")
 
     async def _fill_fund_size(self, code: str, fund_data: FundData) -> None:
         """填充基金季度规模数据用于规模稳定性计算
@@ -474,35 +635,93 @@ class AKShareAdapter(BaseDataSource):
     async def get_bond_yield(self) -> Optional[float]:
         """获取 10 年期国债收益率
 
+        优化：国债收益率是全市场共享数据，所有基金用同一个值。
+        添加类级缓存，1 小时内复用，避免 51 只基金重复请求同一接口。
+
+        并发安全：使用 asyncio.Lock 防止 51 只基金并发时同时穿透缓存
+        （实测 stock_zh_index_value_csindex 在 get_bond_yield 和 _fill_pe_pb_for_etf
+        中同时被调用，并发时大量超时）。
+
         注：bond_china_yield 数据源自 2021 年起未更新，新日期范围返回空。
         当前优先尝试实时替代接口，仍不可得时使用回退值。
         """
-        # 策略 1: 尝试全局指数估值表获取无风险利率参考
-        try:
-            df = await self._call(ak.stock_zh_index_value_csindex, symbol="000300")
-            if df is not None and not df.empty:
-                last_row = df.iloc[-1]
+        import time as _time
+
+        # 无锁快速检查缓存
+        now = _time.time()
+        if (
+            AKShareAdapter._bond_yield_cache is not None
+            and now - AKShareAdapter._bond_yield_ts < AKShareAdapter._SHARED_CACHE_TTL
+        ):
+            return AKShareAdapter._bond_yield_cache
+
+        # 获取锁后再次检查（double-checked locking）
+        lock = self._get_lock('_bond_yield_lock')
+        async with lock:
+            # 双重检查：等待锁期间可能已被其他协程填充
+            now = _time.time()
+            if (
+                AKShareAdapter._bond_yield_cache is not None
+                and now - AKShareAdapter._bond_yield_ts < AKShareAdapter._SHARED_CACHE_TTL
+            ):
+                logger.debug(f"国债收益率命中缓存（锁内复用）: {AKShareAdapter._bond_yield_cache}")
+                return AKShareAdapter._bond_yield_cache
+
+            # 策略 1: 尝试全局指数估值表获取无风险利率参考
+            # 优化：优先复用 _fill_pe_pb_for_etf 已缓存的 000300 数据，
+            # 避免同一接口被 get_bond_yield 和 _fill_pe_pb_for_etf 同时调用。
+            cached_df = None
+            cached_entry = AKShareAdapter._index_value_cache.get("000300")
+            if cached_entry is not None:
+                ts, cached_df = cached_entry
+                if now - ts >= AKShareAdapter._SHARED_CACHE_TTL:
+                    cached_df = None
+
+            if cached_df is not None and not cached_df.empty:
+                last_row = cached_df.iloc[-1]
                 div_yield = last_row.get("股息率1", None)
                 if div_yield and str(div_yield) not in ("", "None", "nan"):
-                    # 股息率 ≈ 无风险利率替代，保守加 1.5% 风险溢价作为 10Y 国债近似
-                    logger.info(f"基于股息率估算无风险利率: {float(div_yield):.2f}%")
-                    return round(float(div_yield) + 1.5, 2)
-        except Exception as e:
-            logger.debug(f"国债收益率估值替代获取失败: {e}")
+                    result = round(float(div_yield) + 1.5, 2)
+                    logger.info(f"基于股息率估算无风险利率: {float(div_yield):.2f}%（复用 PE/PB 缓存）")
+                    AKShareAdapter._bond_yield_cache = result
+                    AKShareAdapter._bond_yield_ts = now
+                    return result
 
-        # 策略 2: 尝试 bond_china_yield 历史接口（仅 2021 年前数据有效）
-        try:
-            df = await self._call(ak.bond_china_yield, start_date="20200101")
-            if df is not None and not df.empty:
-                bond_10y = df[df["曲线名称"] == "中债国债收益率曲线"]
-                if not bond_10y.empty:
-                    latest = bond_10y.sort_values("日期").iloc[-1]
-                    yield_val = latest.get("10年", None)
-                    if yield_val is not None and str(yield_val) not in ("", "None", "nan"):
-                        return float(yield_val)
-        except Exception as e:
-            logger.debug(f"国债收益率历史接口获取失败: {e}")
+            try:
+                df = await self._call(ak.stock_zh_index_value_csindex, symbol="000300")
+                if df is not None and not df.empty:
+                    # 同时写入 _index_value_cache 供 _fill_pe_pb_for_etf 复用
+                    AKShareAdapter._index_value_cache["000300"] = (now, df)
+                    last_row = df.iloc[-1]
+                    div_yield = last_row.get("股息率1", None)
+                    if div_yield and str(div_yield) not in ("", "None", "nan"):
+                        # 股息率 ≈ 无风险利率替代，保守加 1.5% 风险溢价作为 10Y 国债近似
+                        result = round(float(div_yield) + 1.5, 2)
+                        logger.info(f"基于股息率估算无风险利率: {float(div_yield):.2f}%（首次网络请求）")
+                        AKShareAdapter._bond_yield_cache = result
+                        AKShareAdapter._bond_yield_ts = now
+                        return result
+            except Exception as e:
+                logger.debug(f"国债收益率估值替代获取失败: {e}")
 
-        # 回退：使用常见值 2.7%（近年 10Y 国债收益率中枢）
-        logger.info("国债收益率实时接口不可用，使用回退值 2.7%")
-        return 2.7
+            # 策略 2: 尝试 bond_china_yield 历史接口（仅 2021 年前数据有效）
+            try:
+                df = await self._call(ak.bond_china_yield, start_date="20200101")
+                if df is not None and not df.empty:
+                    bond_10y = df[df["曲线名称"] == "中债国债收益率曲线"]
+                    if not bond_10y.empty:
+                        latest = bond_10y.sort_values("日期").iloc[-1]
+                        yield_val = latest.get("10年", None)
+                        if yield_val is not None and str(yield_val) not in ("", "None", "nan"):
+                            result = float(yield_val)
+                            AKShareAdapter._bond_yield_cache = result
+                            AKShareAdapter._bond_yield_ts = now
+                            return result
+            except Exception as e:
+                logger.debug(f"国债收益率历史接口获取失败: {e}")
+
+            # 回退：使用常见值 2.7%（近年 10Y 国债收益率中枢）
+            logger.info("国债收益率实时接口不可用，使用回退值 2.7%")
+            AKShareAdapter._bond_yield_cache = 2.7
+            AKShareAdapter._bond_yield_ts = now
+            return 2.7

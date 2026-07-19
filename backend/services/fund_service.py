@@ -13,6 +13,7 @@ from backend.data_sources.base import guess_fund_type as _guess_fund_type
 from backend.models.fund import Fund
 from backend.schemas.fund import FundCreate, FundUpdate
 from backend.services.fund_theme_service import fetch_related_themes
+from backend.utils.concurrency import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ class FundService:
 
         # 仅当未手动填写标签时，自动抓取天天基金相关主题
         if not fund.tags:
-            themes = await asyncio.to_thread(fetch_related_themes, fund.code)
+            themes = await run_with_timeout(fetch_related_themes, fund.code, timeout=20.0)
             merged = _merge_tags(fund.tags, themes)
             if merged != fund.tags:
                 fund.tags = merged
@@ -216,7 +217,7 @@ class FundService:
                 try:
                     fund_obj = await self.get_fund_by_code(code)
                     if fund_obj and not fund_obj.tags:
-                        themes = await asyncio.to_thread(fetch_related_themes, code)
+                        themes = await run_with_timeout(fetch_related_themes, code, timeout=20.0)
                         if themes:
                             merged = _merge_tags(None, themes)
                             if merged != fund_obj.tags:
@@ -249,7 +250,7 @@ class FundService:
         if fund is None:
             return None
 
-        themes = await asyncio.to_thread(fetch_related_themes, fund.code)
+        themes = await run_with_timeout(fetch_related_themes, fund.code, timeout=20.0)
         merged = _merge_tags(fund.tags, themes)
         if merged != fund.tags:
             fund.tags = merged

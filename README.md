@@ -24,7 +24,8 @@ AI_Fund_Assistant/
 │   ├── llm/                    # AI 大模型接入（DeepSeek/智谱GLM/通义千问/OpenAI）
 │   ├── patch/                  # 东方财富反爬虫补丁
 │   ├── push/                   # 推送机器人（飞书等）
-│   └── scheduler/              # 定时任务调度（APScheduler）
+│   ├── scheduler/              # 定时任务调度（APScheduler）
+│   └── utils/                  # 通用工具（并发控制：线程池隔离 + 超时保护 + 信号量限流）
 ├── frontend/                   # React + TypeScript + MUI + Tailwind
 │   ├── src/pages/              # 11 个管理页面（含信号回测）
 │   ├── src/components/         # 图表组件（ECharts）、AI 对话、信号指示器等
@@ -59,6 +60,9 @@ AI_Fund_Assistant/
 - **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
 - **数据源连通性检测**：一键测试东方财富系列域名 + AI API 可达性，SSRF 防护，结果含延迟与状态汇总
 - **AI 开关可控**：顶栏 AI 开关一键启停，配置持久化至数据库
+- **并发控制架构**：独立线程池隔离（akshare 专用 16 workers，与 asyncio 默认线程池隔离）+ 全局信号量限流（并发 5）+ 强制超时保护（25s）+ asyncio.Lock 双重检查防止缓存穿透，根治 40-60 只基金批量分析时的线程池耗尽与超时堆积问题
+- **共享数据缓存复用**：国债收益率、沪深300基准、指数估值（PE/PB）、ETF 行情、基金名称等全市场共享数据类级缓存（1h TTL），51 只基金并发分析时只发 1 次网络请求，其余命中缓存
+- **批量并发获取**：分析流程与基金详情刷新均采用 `asyncio.gather` 并发获取（替代串行 for 循环），每只基金使用独立 DB session 避免并发冲突，51 只基金分析耗时从 15+ 分钟降至 2-4 分钟
 
 ---
 
@@ -223,6 +227,63 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 ---
 
+## 性能优化与并发控制
+
+针对 40-60 只基金批量分析时出现的线程池耗尽、超时堆积、调度计划严重延迟等问题，系统实现了完整的并发控制架构。
+
+### 核心组件：`backend/utils/concurrency.py`
+
+| 组件 | 作用 |
+|------|------|
+| `_AKSHARE_POOL` | akshare 专用独立线程池（16 workers），与 asyncio 默认线程池隔离，防止 akshare 卡死耗尽默认池 |
+| `_AKSHARE_SEM` | 全局信号量（并发 5），替代原全局时间戳串行限流，允许合理并发 |
+| `run_with_timeout()` | 强制超时保护（默认 25s），超时后释放线程槽位，防止死连接无限挂起 |
+| `run_batch_with_timeout()` | 批量并发执行 + 超时控制 |
+| `random_ua()` / `rotate_ua_for_akshare()` | User-Agent 轮换，降低反爬风险 |
+| `shutdown_pool()` | 应用关闭时清理线程池 |
+
+### 共享数据缓存（asyncio.Lock + 双重检查）
+
+以下全市场共享数据使用类级缓存 + asyncio.Lock 双重检查模式，51 只基金并发时只发 1 次网络请求：
+
+| 缓存项 | TTL | 锁粒度 | 说明 |
+|--------|-----|--------|------|
+| 基金名称（场外） | 1h | 全局锁 | `fund_open_fund_rank_em` 批量拉取，内存 + JSON 文件双重持久化 |
+| 基金名称（ETF） | 1h | 全局锁 | `fund_etf_spot_em` 批量拉取 |
+| 国债收益率 | 1h | 全局锁 | 复用 `_index_value_cache` 中的 000300 数据，0 次额外请求 |
+| 沪深300基准 | 1h | 全局锁 | `stock_zh_index_daily`，全市场共享基准 |
+| 指数估值（PE/PB） | 1h | 按 index_code 分锁 | `stock_zh_index_value_csindex`，同指数多 ETF 不重复请求 |
+
+### 批量并发获取
+
+- **分析流程**（`analysis_service.py`）：`asyncio.gather` 并发获取基金数据，季度数据加载 + 因子计算保持串行（AsyncSession 非并发安全）
+- **基金详情刷新**（`fund_refresh_task.py`）：`asyncio.gather` + `Semaphore(5)` 并发刷新，每只基金独立 `async_session_factory()` 避免 AsyncSession 并发冲突
+- **仪表盘资金流**（`market_service.py`）：信号量并发限流替代全局时间戳串行，超时从 45s 降至 25s
+
+### Docker 构建优化
+
+Dockerfile 使用阿里云镜像源加速依赖下载（apt + pip），构建时间从 20+ 分钟降至 2-3 分钟：
+
+```dockerfile
+# apt 镜像源替换
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+
+# pip 阿里云镜像源
+ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+    PIP_TRUSTED_HOST=mirrors.aliyun.com
+```
+
+### 性能基准（51 只基金）
+
+| 场景 | 优化前 | 优化后 |
+|------|--------|--------|
+| 仪表盘数据加载 | TimeoutError（线程池耗尽） | < 1s |
+| 基金详情批量刷新 | 严重延迟 / 无响应 | 60-90s |
+| 全量分析任务 | 15+ 分钟（含 229 次超时重试） | 2-4 分钟（0 次超时） |
+| 共享数据网络请求 | 51 次/项（缓存穿透） | 1 次/项 |
+
+---
+
 ## 关键设计原则
 
 1. **价值为主，动量辅助**：PE 低估 + 高 FED + 动量确认
@@ -234,3 +295,6 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 7. **配置不写死**：敏感信息通过 `.env`，运行时配置通过数据库存储
 8. **缓存优先展示**：仪表盘行情数据、基金阶段涨幅均持久化缓存，页面加载直接展示 + 时间戳，手动/定时触发刷新
 9. **安全加固**：连通性测试含 SSRF 防护（内网地址校验），反爬虫补丁自动加载
+10. **线程池隔离**：akshare 调用使用专用独立线程池，与 asyncio 默认线程池隔离，防止数据源卡死拖垮整个应用
+11. **共享数据复用**：全市场共享数据（国债收益率、基准指数、估值）类级缓存 + asyncio.Lock 双重检查，避免 N 只基金 N 次重复请求
+12. **强制超时保护**：所有外部数据调用均通过 `run_with_timeout` 包裹，超时后释放资源，永不无限挂起

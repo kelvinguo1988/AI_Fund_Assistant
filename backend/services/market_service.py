@@ -18,58 +18,43 @@ from backend.schemas.market import (
     SectorFlowItem,
     SectorFlowRanking,
 )
+from backend.utils.concurrency import run_with_timeout, random_ua, USER_AGENTS
 
 logger = logging.getLogger(__name__)
 
-# 限流：与 akshare_adapter 风格一致
-_last_call_time: float = 0.0
-_MIN_INTERVAL = 3.0
-
-
-_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-]
+# 市场数据单次调用超时（秒）
+_MARKET_TIMEOUT: float = 25.0
 
 
 async def _rate_limited_call(func, *args, **kwargs):
-    """限流 + UA 轮换 + 指数退避重试（最多2次）"""
-    import functools
+    """带超时 + UA 轮换 + 指数退避重试（最多2次）
 
-    # 轮换 UA
-    try:
-        session = getattr(ak, "_session", None)
-        if session is not None:
-            session.headers.update({"User-Agent": random.choice(_USER_AGENTS)})
-    except Exception:
-        pass
-
+    修复说明：
+    - 原实现使用全局 `_last_call_time` + `sleep(3)` 串行限流，导致 5+ 个市场数据
+      调用串行排队，每次 3s 限流 + 2-5s jitter = 5-8s/次，总计 30-60s 纯等待。
+    - 改为使用 `run_with_timeout` 内置的全局信号量（并发 5）限流，允许并发只限并发数。
+    - 移除成功后的 `sleep(jitter)`，保留失败后的指数退避重试。
+    - 超时从 45s 降为 25s（配合 patch 的 20s requests 超时），快速失败快速重试。
+    """
     last_exc = None
+    func_name = getattr(func, "__name__", repr(func))
     for attempt in range(1, 3):
-        global _last_call_time
-        now = time.time()
-        since_last = now - _last_call_time
-        if since_last < _MIN_INTERVAL:
-            await asyncio.sleep(_MIN_INTERVAL - since_last)
-        _last_call_time = time.time()
-
         try:
-            partial = functools.partial(func, *args, **kwargs)
-            result = await asyncio.wait_for(asyncio.to_thread(partial), timeout=45.0)
-            jitter = random.uniform(2.0, 5.0)
-            await asyncio.sleep(jitter)
+            result = await run_with_timeout(
+                func, *args, timeout=_MARKET_TIMEOUT, **kwargs
+            )
             return result
         except Exception as e:
             last_exc = e
-            _last_call_time = 0  # 失败时重置
             if attempt < 2:
-                delay = 5.0 + random.uniform(1, 3)
-                logger.debug(f"{func.__name__} 失败 (attempt {attempt}/2): {type(e).__name__}: {e}, {delay:.1f}s后重试")
+                delay = 3.0 + random.uniform(0, 2)
+                logger.debug(
+                    "%s 失败 (attempt %d/2): %s: %s, %.1fs后重试",
+                    func_name, attempt, type(e).__name__, e, delay,
+                )
                 await asyncio.sleep(delay)
 
-    logger.warning(f"{func.__name__} 重试2次后失败: {type(last_exc).__name__}: {last_exc}")
+    logger.warning("%s 重试2次后失败: %s: %s", func_name, type(last_exc).__name__, last_exc)
     raise last_exc
 
 
@@ -176,7 +161,7 @@ class MarketService:
                         "sortTypes": -1,
                     },
                     headers={
-                        "User-Agent": random.choice(_USER_AGENTS),
+                        "User-Agent": random_ua(),
                         "Referer": "https://data.eastmoney.com/",
                     },
                     timeout=15,
@@ -185,11 +170,11 @@ class MarketService:
                 items = r.json().get("result", {}).get("data", [])
                 return items[0] if items else {}
 
-            sh_data = await asyncio.wait_for(
-                asyncio.to_thread(_fetch_index_flow, "000001.SH"), timeout=20.0
+            sh_data = await run_with_timeout(
+                _fetch_index_flow, "000001.SH", timeout=20.0
             )
-            sz_data = await asyncio.wait_for(
-                asyncio.to_thread(_fetch_index_flow, "399001.SZ"), timeout=20.0
+            sz_data = await run_with_timeout(
+                _fetch_index_flow, "399001.SZ", timeout=20.0
             )
             if not sh_data:
                 return None
@@ -260,7 +245,7 @@ class MarketService:
                     "secid2": "0.399001",
                 },
                 headers={
-                    "User-Agent": random.choice(_USER_AGENTS),
+                    "User-Agent": random_ua(),
                     "Referer": "https://data.eastmoney.com/",
                 },
                 timeout=15,
@@ -273,8 +258,8 @@ class MarketService:
             return klines[0]
 
         try:
-            kline_str = await asyncio.wait_for(
-                asyncio.to_thread(_do_fetch), timeout=20.0
+            kline_str = await run_with_timeout(
+                _do_fetch, timeout=20.0
             )
             parts = kline_str.split(",")
             if len(parts) < 15:
@@ -313,7 +298,7 @@ class MarketService:
                     "fields": "f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
                 },
                 headers={
-                    "User-Agent": random.choice(_USER_AGENTS),
+                    "User-Agent": random_ua(),
                     "Referer": "https://data.eastmoney.com/",
                 },
                 timeout=15,
@@ -326,8 +311,8 @@ class MarketService:
             return items
 
         try:
-            items = await asyncio.wait_for(
-                asyncio.to_thread(_do_fetch), timeout=20.0
+            items = await run_with_timeout(
+                _do_fetch, timeout=20.0
             )
 
             YI = 100_000_000

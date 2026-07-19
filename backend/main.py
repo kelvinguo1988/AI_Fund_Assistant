@@ -60,6 +60,13 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──
     task_scheduler.shutdown()
 
+    # 关闭 akshare 独立线程池，避免孤儿线程残留
+    try:
+        from backend.utils.concurrency import shutdown_pool
+        shutdown_pool()
+    except Exception as e:
+        logger.warning(f"关闭线程池失败: {e}")
+
 
 app = FastAPI(
     title="基金量化交易系统",

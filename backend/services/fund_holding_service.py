@@ -14,11 +14,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.fund_holding import FundHolding
+from backend.utils.concurrency import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
-# 并发控制，避免触发反爬
-_SEMAPHORE = asyncio.Semaphore(3)
+# 单次持仓查询超时（秒）。akshare fund_portfolio_hold_em 实测 3-8s，
+# 25s 留足缓冲，避免网络波动误杀；超时后线程隔离不阻塞其他调用。
+_HOLDING_TIMEOUT: float = 25.0
 
 
 async def refresh_holdings(db: AsyncSession, fund_id: int, fund_code: str) -> list[FundHolding]:
@@ -28,8 +30,16 @@ async def refresh_holdings(db: AsyncSession, fund_id: int, fund_code: str) -> li
 
     for year in years:
         try:
-            async with _SEMAPHORE:
-                df = await asyncio.to_thread(ak.fund_portfolio_hold_em, symbol=fund_code, date=year)
+            # 使用独立线程池 + 强制超时，避免 akshare 卡住无限挂起
+            df = await run_with_timeout(
+                ak.fund_portfolio_hold_em,
+                symbol=fund_code,
+                date=year,
+                timeout=_HOLDING_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("获取基金 %s %s 年持仓超时（%ss），跳过", fund_code, year, _HOLDING_TIMEOUT)
+            continue
         except Exception as e:
             logger.warning("获取基金 %s %s 年持仓失败: %s", fund_code, year, e)
             continue

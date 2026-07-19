@@ -26,6 +26,8 @@ services:
       - ./backend:/app/backend
       # 数据持久化
       - ./data:/app/data
+      # 基金名称缓存文件（19699 只基金名称映射，避免容器启动时重新拉取）
+      - ./fund_name_cache.json:/app/fund_name_cache.json:ro
     ports:
       - "8000:8000"
     # 开发模式使用 --reload 热重载
