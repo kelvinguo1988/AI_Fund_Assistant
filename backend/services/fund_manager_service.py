@@ -1,11 +1,12 @@
 """基金经理服务 — 从 AKShare fund_manager_em 获取并存入数据库
 
 数据来源：AKShare 封装的东方财富全量基金经理数据。
-全量查询较慢（~10s），使用服务级全局缓存避免重复查询。
+全量查询较慢（~30s，9页数据），使用服务级全局缓存避免重复查询。
 """
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 import akshare as ak
@@ -17,20 +18,30 @@ from backend.utils.concurrency import run_with_timeout
 
 logger = logging.getLogger(__name__)
 
-# 全量经理数据缓存（服务启动后缓存一次，避免重复 10s 查询）
+# 全量经理数据缓存（服务启动后缓存一次，避免重复 ~30s 查询）
 _manager_cache: Optional[list[dict]] = None
 _cache_lock = asyncio.Lock()
 
-# 全量经理查询超时。fund_manager_em 返回全市场经理数据（~5MB），首次较慢，
-# 60s 留足缓冲；超时返回空列表，不阻塞调用方。
-_MANAGER_TIMEOUT: float = 60.0
+# 全量经理查询超时。fund_manager_em 返回全市场经理数据（~35000 条，9 页），
+# 实测 ~28s（含反爬 sleep）。Docker 网络可能更慢，120s 留足缓冲。
+_MANAGER_TIMEOUT: float = 120.0
+
+# 失败冷却时间（秒）。首次查询失败后，在冷却期内不再重试，
+# 避免 40-60 只基金 × 5 并发 = 200+ 次全量重试风暴。
+_FAIL_COOLDOWN: float = 60.0
+_last_fail_time: float = 0.0
 
 
 async def _get_all_managers() -> list[dict]:
-    """获取全量基金经理数据（带缓存）"""
-    global _manager_cache
+    """获取全量基金经理数据（带缓存 + 失败冷却）"""
+    global _manager_cache, _last_fail_time
+
     if _manager_cache is not None:
         return _manager_cache
+
+    # 失败冷却期内直接返回空列表，不重试
+    if _last_fail_time and time.time() - _last_fail_time < _FAIL_COOLDOWN:
+        return []
 
     async with _cache_lock:
         if _manager_cache is not None:
@@ -46,9 +57,12 @@ async def _get_all_managers() -> list[dict]:
                 logger.info("基金经理缓存已加载: %d 条", len(records))
                 return records
         except asyncio.TimeoutError:
-            logger.warning("获取全量基金经理超时（%ss），本次返回空列表", _MANAGER_TIMEOUT)
+            logger.warning("获取全量基金经理超时（%ss），%ss 内不重试", _MANAGER_TIMEOUT, _FAIL_COOLDOWN)
         except Exception as e:
-            logger.warning("获取全量基金经理失败: %s", e)
+            logger.warning("获取全量基金经理失败: %s，%ss 内不重试", e, _FAIL_COOLDOWN)
+
+        # 记录失败时间，冷却期内不重试
+        _last_fail_time = time.time()
         return []
 
 

@@ -24,20 +24,20 @@ _HOLDING_TIMEOUT: float = 25.0
 
 
 async def refresh_holdings(db: AsyncSession, fund_id: int, fund_code: str) -> list[FundHolding]:
-    """抓取基金近2年持仓并存入数据库
+    """抓取基金近3年持仓并存入数据库
 
     关键改进：
-    - 跳过当前年份（数据通常未发布，akshare 收到非 JSON 响应导致 decode 错误）
-    - 从去年开始往前查询，数据存在性由近及远递减
-    - JSON 解码错误单独处理（"Can not decode value starting with ';'"），
-      视为数据不可用跳过而非异常，减少日志噪音
+    - 查询当年 + 前2年（共3年），确保有足够季度数据供 compute_holding_changes 使用
+    - 当年 Q2/Q3/Q4 数据可能未发布，JSONDecodeError 被捕获跳过（正常行为）
+    - eastmoney_patch 已为 fundf10.eastmoney.com 注入 Referer 头，修复了
+      之前所有年份都 404 → JSONDecodeError 的问题
     """
     from json.decoder import JSONDecodeError
 
     current_year = datetime.now().year
-    # 跳过当前年份 — Q2 数据通常在 7 月底 / 8 月才发布，
-    # 之前请求当年数据 akshare 会收到 JS 脚本而非 JSON，触发解码错误
-    years = [str(current_year - 1)]  # 只查去年
+    # 查询当年 + 前2年。当年部分季度可能未发布（正常跳过），
+    # 前2年确保至少有 4-8 个季度的历史数据。
+    years = [str(current_year), str(current_year - 1), str(current_year - 2)]
 
     for year in years:
         try:

@@ -1,9 +1,10 @@
-"""东方财富反爬虫补丁 — NID 授权 + User-Agent 轮换
+"""东方财富反爬虫补丁 — NID 授权 + User-Agent 轮换 + Referer 注入
 
 通过拦截 requests.Session.request，对东方财富域名的请求注入：
 1. 随机 User-Agent（从预置池选取）
 2. NID 授权令牌（从 anonflow2 接口获取，20s 缓存）
-3. 随机休眠（1~4s）降低请求频率
+3. Referer 头（fundf10.eastmoney.com 专用，缺失则 404）
+4. 随机休眠（1~4s）降低请求频率
 """
 
 import hashlib
@@ -34,6 +35,7 @@ _USER_AGENTS = [
 
 _TARGET_DOMAINS = [
     "fund.eastmoney.com",
+    "fundf10.eastmoney.com",  # 基金详情页（持仓/经理/规模）— 需 Referer 否则 404
     "push2.eastmoney.com",
     "push2his.eastmoney.com",
     "datacenter-web.eastmoney.com",
@@ -132,8 +134,15 @@ def apply_patch():
             return original_request(self, method, url, **kwargs)
 
         user_agent = random.choice(_USER_AGENTS)
-        headers = kwargs.get("headers", {})
+        headers = kwargs.get("headers", {}) or {}
         headers["User-Agent"] = user_agent
+
+        # fundf10.eastmoney.com 的 FundArchivesDatas.aspx 接口要求 Referer 头，
+        # 否则返回 404 HTML 页面 → akshare demjson 解析失败（"Can not decode ';'"）
+        # → fund_portfolio_hold_em 对所有年份都报 JSONDecodeError → 持仓数据全空
+        if "fundf10.eastmoney.com" in (url or ""):
+            headers.setdefault("Referer", "https://fundf10.eastmoney.com/")
+
         nid = _get_nid(user_agent)
         if nid:
             headers["Cookie"] = f"nid18={nid}"
