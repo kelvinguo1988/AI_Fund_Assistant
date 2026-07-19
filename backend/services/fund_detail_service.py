@@ -3,11 +3,17 @@
 从基金详情页数据文件 pingzhongdata/{code}.js 中提取时段收益率、
 累计收益走势、规模变动、持有人结构、资产配置等数据。
 持仓和经理详情需通过 AKShare（fund_holding_service / fund_manager_service）获取。
+
+并发控制：
+- pingzhongdata JS 下载是轻量级 HTTP GET（几 KB 文件），使用专用 Semaphore(8)
+- 与大重量 akshare 接口（fund_portfolio_hold_em 等）共享的全局 Semaphore(5) 分离
+- 单只基金 JS 获取超时 30s，内部 requests 超时 25s（先于 asyncio 触发）
 """
 
 import asyncio
 import json
 import logging
+import random
 import re
 from typing import Any, Optional
 
@@ -20,8 +26,21 @@ logger = logging.getLogger(__name__)
 # 天天基金详情数据 JS 文件 URL 模板
 _PINGZHONG_URL = "https://fund.eastmoney.com/pingzhongdata/{code}.js"
 
-# 单只基金 JS 获取超时（秒）
-_JS_TIMEOUT: float = 20.0
+# 单只基金 JS 获取超时（秒）— asyncio.wait_for 层
+_JS_TIMEOUT: float = 30.0
+
+# requests 层超时 — 必须小于 _JS_TIMEOUT，确保超时时获得干净的 requests.Timeout
+# 而非 asyncio.TimeoutError（asyncio 超时无法区分是网络慢还是线程池耗尽）
+_JS_REQUESTS_TIMEOUT: float = 25.0
+
+# pingzhongdata 专用并发信号量（8 并发）— JS 文件下载极轻量，不应与大重量
+# akshare 接口共享全局 Semaphore(5)，否则 40-60 只基金 × 全局 5 并发 =
+# 大量排队等 slot，导致 _fetch_js 超时堆积。
+_PINGZHONG_SEM = asyncio.Semaphore(8)
+
+# _fetch_js 失败重试配置
+_MAX_RETRIES = 1  # 超时/网络错误重试 1 次
+_RETRY_DELAY_BASE = 1.5  # 重试基础等待秒数（加 jitter 避免惊群）
 
 # 正则提取 syl_ 变量值
 _RETURN_PATTERNS: dict[str, re.Pattern] = {
@@ -129,23 +148,55 @@ def _parse_fund_name(js_text: str) -> str:
 
 
 def _fetch_js(code: str) -> Optional[str]:
-    """同步获取单只基金的 pingzhongdata JS 文本（由 to_thread 调用）"""
+    """同步获取单只基金的 pingzhongdata JS 文本（由 run_with_timeout 在线程池调用）
+
+    关键设计：
+    - requests 超时 25s < asyncio 超时 30s，确保网络层面先超时释放线程
+    - 东财补丁会注入 NID + UA 轮换 + 1-4s jitter sleep
+    - 超时 / 连接错误时自动重试 1 次（带 jitter 延迟避免惊群）
+    """
+    import time as _time
+
     url = _PINGZHONG_URL.format(code=code)
-    try:
-        resp = requests.get(url, headers={"Referer": "https://fund.eastmoney.com"}, timeout=30)
-        resp.encoding = "utf-8"
-        if resp.status_code != 200:
-            logger.debug("获取 %s 数据失败, status=%d", code, resp.status_code)
+    last_error = None
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                url,
+                headers={"Referer": "https://fund.eastmoney.com"},
+                timeout=_JS_REQUESTS_TIMEOUT,
+            )
+            resp.encoding = "utf-8"
+            if resp.status_code != 200:
+                logger.debug("获取 %s 数据失败, status=%d", code, resp.status_code)
+                return None
+            return resp.text
+        except requests.Timeout as e:
+            last_error = e
+            if attempt < _MAX_RETRIES:
+                jitter = _RETRY_DELAY_BASE + random.uniform(0, 2)
+                logger.debug("获取 %s 超时(attempt %d/%d)，%0.1fs 后重试", code, attempt + 1, _MAX_RETRIES + 1, jitter)
+                _time.sleep(jitter)
+        except requests.ConnectionError as e:
+            last_error = e
+            if attempt < _MAX_RETRIES:
+                jitter = _RETRY_DELAY_BASE + random.uniform(0, 2)
+                logger.debug("获取 %s 连接错误(attempt %d/%d)，%0.1fs 后重试", code, attempt + 1, _MAX_RETRIES + 1, jitter)
+                _time.sleep(jitter)
+        except Exception as e:
+            logger.debug("获取基金 %s 数据异常: %s", code, e)
             return None
-        return resp.text
-    except Exception as e:
-        logger.debug("获取基金 %s 数据异常: %s", code, e)
-        return None
+
+    logger.debug("获取 %s 重试 %d 次仍失败: %s", code, _MAX_RETRIES, last_error)
+    return None
 
 
 async def fetch_fund_detail(code: str) -> dict[str, Any]:
     """一站式获取单只基金基础数据"""
-    js_text = await run_with_timeout(_fetch_js, code, timeout=_JS_TIMEOUT)
+    js_text = await run_with_timeout(
+        _fetch_js, code, timeout=_JS_TIMEOUT, semaphore=_PINGZHONG_SEM,
+    )
     if not js_text:
         return {"period_returns": {}, "fund_name": "", "extended_data": {}}
 
@@ -159,15 +210,17 @@ async def fetch_fund_detail(code: str) -> dict[str, Any]:
 async def fetch_all_js_texts(codes: list[str]) -> dict[str, str]:
     """并发批量获取多只基金的 pingzhongdata JS 文本
 
-    修复：原实现使用 `asyncio.to_thread` 走默认线程池，孤儿线程堆积会耗尽池子。
-    改为使用 `run_with_timeout` 走独立 akshare 线程池 + 强制超时。
+    使用专用信号量（8 并发）—— pingzhongdata 是轻量级 JS 文件下载，
+    与大重量 akshare 接口分离，避免共享全局 Semaphore(5) 导致排队超时。
     """
     if not codes:
         return {}
 
     async def fetch_one(code: str) -> tuple[str, Optional[str]]:
         try:
-            text = await run_with_timeout(_fetch_js, code, timeout=_JS_TIMEOUT)
+            text = await run_with_timeout(
+                _fetch_js, code, timeout=_JS_TIMEOUT, semaphore=_PINGZHONG_SEM,
+            )
             return code, text
         except Exception as e:
             logger.debug("批量抓取基金 %s 数据异常: %s", code, e)
