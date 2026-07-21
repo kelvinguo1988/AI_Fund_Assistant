@@ -39,9 +39,12 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideRetrofit(client: OkHttpClient): Retrofit {
-        // 初始 Base URL — 会被 DynamicBaseUrlInterceptor 覆盖
+        // 初始 Base URL — 会被 DynamicBaseUrlInterceptor 覆盖 host/port。
+        // 必须以 /api/ 结尾，这样 Retrofit 把 "funds" 解析为 "/api/funds"，
+        // 拦截器才能识别 /api 前缀并正确替换服务器地址；
+        // 而 "/health"（带前导斜杠）会解析为根路径 /health，匹配后端根路由。
         return Retrofit.Builder()
-            .baseUrl("http://localhost:8000/")
+            .baseUrl("http://localhost:8000/api/")
             .client(client)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

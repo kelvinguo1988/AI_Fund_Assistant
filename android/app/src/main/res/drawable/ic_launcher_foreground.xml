@@ -1,0 +1,31 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 上升柱状图 + 趋势线 — 基金量化主题 -->
+    <!-- 柱1 -->
+    <path
+        android:fillColor="#4A90D9"
+        android:pathData="M26,74 L26,58 L40,58 L40,74 Z" />
+    <!-- 柱2 -->
+    <path
+        android:fillColor="#00D2A0"
+        android:pathData="M44,74 L44,46 L58,46 L58,74 Z" />
+    <!-- 柱3 -->
+    <path
+        android:fillColor="#F39C12"
+        android:pathData="M62,74 L62,34 L76,34 L76,74 Z" />
+    <!-- 趋势线（上行） -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#E8ECF1"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M24,66 L37,56 L51,48 L66,40 L80,30" />
+    <!-- 趋势线箭头 -->
+    <path
+        android:fillColor="#E8ECF1"
+        android:pathData="M80,30 L73,30 L80,37 Z" />
+</vector>
