@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Splash 主题 -->
+    <style name="Theme.FundQuant.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#1A1A2E</item>
+        <item name="postSplashScreenTheme">@style/Theme.FundQuant</item>
+    </style>
+
+    <!-- 主主题：深色金融风 -->
+    <style name="Theme.FundQuant" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorBackground">#1A1A2E</item>
+        <item name="android:statusBarColor">#0D0D1A</item>
+        <item name="android:navigationBarColor">#0D0D1A</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

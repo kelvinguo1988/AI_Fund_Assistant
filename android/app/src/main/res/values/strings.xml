@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">基金量化助手</string>
+    <string name="server_config_title">服务器设置</string>
+    <string name="server_url_hint">请输入服务器地址，如 http://192.168.1.100:8000/api</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+    <string name="confirm">确认</string>
+    <string name="test_connection">测试连接</string>
+    <string name="connection_success">连接成功</string>
+    <string name="connection_failed">连接失败</string>
+    <string name="connecting">连接中…</string>
+    <string name="refresh">刷新</string>
+    <string name="loading">加载中…</string>
+    <string name="error_network">网络错误，请检查服务器地址</string>
+    <string name="server_not_configured">请先配置服务器地址</string>
+
+    <!-- 导航 -->
+    <string name="nav_dashboard">仪表盘</string>
+    <string name="nav_funds">基金池</string>
+    <string name="nav_fund_detail">基金详情</string>
+    <string name="nav_factors">因子管理</string>
+    <string name="nav_push">推送配置</string>
+    <string name="nav_report">报告配置</string>
+    <string name="nav_schedule">调度计划</string>
+    <string name="nav_scoring">评分配置</string>
+    <string name="nav_quality">质量过滤</string>
+    <string name="nav_history">历史报告</string>
+    <string name="nav_backtest">信号回测</string>
+    <string name="nav_system">系统设置</string>
+    <string name="nav_server">服务器配置</string>
+    <string name="nav_ai_chat">AI助手</string>
+</resources>
