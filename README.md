@@ -224,6 +224,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 - 系统设置页提供可视化配置卡片，支持预设模型快速切换
 - 评分阈值（`scoring_thresholds`，五档对称阈值 JSON）
 - 质量过滤参数（`quality_filter_config`，32 个数值参数，覆盖棺材钉 / 心电图 / 清盘 / 因子修正 / 动态阈值 / 固定偏置 6 组）
+- ⚠️ **关键约束**：`quality_filter_config.base_sell_threshold` 必须等于五档阈值的中性下界 **-1.5**（对应「适度减仓 / 卖出」）。若写成 `-3.0`，`(-3.0, -1.5]` 整个区间会被错归「观望」，导致**永久不出现卖出信号**。当前正确值：`{"base_buy_threshold": 1.5, "base_sell_threshold": -1.5}`（详见文末「修复记录」）。
 
 ---
 
@@ -298,3 +299,23 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 10. **线程池隔离**：akshare 调用使用专用独立线程池，与 asyncio 默认线程池隔离，防止数据源卡死拖垮整个应用
 11. **共享数据复用**：全市场共享数据（国债收益率、基准指数、估值）类级缓存 + asyncio.Lock 双重检查，避免 N 只基金 N 次重复请求
 12. **强制超时保护**：所有外部数据调用均通过 `run_with_timeout` 包裹，超时后释放资源，永不无限挂起
+
+---
+
+## 修复记录（2026-07-22）
+
+### 1. 信号永远无卖出（已修复）
+
+- **根因**：`backend/engines/quality_filter.py` 中 `QUALITY_CONFIG["base_sell_threshold"] = -3.0` 与五档阈值的「适度减仓」边界 `-1.5` 不一致，导致 `determine_signal` 要求 `score <= -3.0` 才卖出；而实测最低分仅 `-2.3`，整个 `(-3.0, -1.5]` 区间被错归「观望」，永久不出现卖出信号。
+- **修复**：代码默认值改为 `-1.5`（commit `caf53a5`），并**固化进数据库** `system_config.quality_filter_config = {"base_buy_threshold": 1.5, "base_sell_threshold": -1.5}`，使前后台一致、防止前台「保存」覆盖回旧值。
+- **验证**：修复后 025657（国金智远量化选股混合A）等 `score <= -1.5` 的基金正确判为「适度减仓 / 卖出」。
+
+### 2. 历史报告导出接口 500（已修复）
+
+- **根因**：`backend/routers/analysis.py` 的 `export_analysis` 调用 `payload.model_dump_json(indent=2, ensure_ascii=False)`。Pydantic v2 的 `model_dump_json()` 不接受 `ensure_ascii` 参数（`ensure_ascii` 是 `json.dumps` 的参数），抛 `TypeError` → `GET /api/analysis/export` 返回 500。
+- **修复**：改为 `json.dumps(payload.model_dump(), ensure_ascii=False, indent=2)`（commit `27e0990`）。
+
+### 已知问题（待优化，非阻塞）
+
+- **因子标准化不一致**：落库的因子分值与使用存储 `raw_value` 重新跑引擎 `apply_cross_sectional_zscore` 的结果存在偏差（short_momentum 18/22、mid_momentum 8/22 不一致），疑似 `run_analysis` 中 `normalize_cross_sectional` 的截面 cohort 或因子 `normalization` 标志传入不一致，需专项排查后最小化修改。取数与因子配置值本身均正常。
+- **部分基金因子塌缩**：实时批量分析时少数基金（价格历史不足或 akshare 抓取超时）多因子 `raw=0.0`（计算器的「数据不足」哨兵值），因子归中性 → 偏观望，属数据完整性问题。
