@@ -36,7 +36,9 @@ async def export_analysis(db: AsyncSession = Depends(get_db)):
     from backend.services.analysis_service import AnalysisService
     svc = AnalysisService(db)
     payload = await svc.export_analysis()
-    data = payload.model_dump_json(indent=2, ensure_ascii=False)
+    # 注意：Pydantic v2 的 model_dump_json() 不接受 ensure_ascii 参数，
+    # 该参数属于 json.dumps()。改用 model_dump() + json.dumps 保留中文可读。
+    data = json.dumps(payload.model_dump(), ensure_ascii=False, indent=2)
     return Response(
         content=data,
         media_type="application/json",
