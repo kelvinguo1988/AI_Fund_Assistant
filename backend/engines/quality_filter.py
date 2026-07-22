@@ -55,7 +55,11 @@ QUALITY_CONFIG = {
 
     # ── 动态阈值（在实际加权评分尺度上，默认总权重6.0） ──
     "base_buy_threshold": 1.5,                # 基础买入阈值（对应"适度加仓"）
-    "base_sell_threshold": -3.0,              # 基础卖出阈值（对应"适度减仓"）
+    # 卖出阈值必须与 5 档阈值（scoring_thresholds / DEFAULT_THRESHOLDS）的
+    # "中性/观望"下界 -1.5 对齐。若写成 -3.0，determine_signal 会要求
+    # score <= -3.0 才卖出，导致整个 (-3.0, -1.5] moderate_sell 区间被错归 HOLD，
+    # 实际结果永远不出现卖出信号（根因：2026-07-19 实测 买5/观望28/卖0）。
+    "base_sell_threshold": -1.5,              # 基础卖出阈值（对应"适度减仓"，与 5 档阈值一致）
     "size_shock_buy_increment": 1.0,          # 规模冲击：买入阈值上调量
     "size_shock_growth_pct": 0.50,            # 规模冲击：环比增长 > 50%
     "size_shock_min_size": 1e8,               # 规模冲击：最新规模 ≥ 1亿元
