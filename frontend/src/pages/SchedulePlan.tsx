@@ -170,7 +170,7 @@ const SchedulePlan: React.FC = () => {
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
           <TextField label="调度名称" value={formName} onChange={(e) => setFormName(e.target.value)} />
           <TextField label="固定时间(HH:MM)" value={formTimePoint} onChange={(e) => setFormTimePoint(e.target.value)} placeholder="14:50" />
-          <TextField label="Cron表达式(可选)" value={formCronExpr} onChange={(e) => setFormCronExpr(e.target.value)} placeholder="0 50 14 * * mon-fri" />
+          <TextField label="Cron表达式(可选)" value={formCronExpr} onChange={(e) => setFormCronExpr(e.target.value)} placeholder="50 14 * * mon-fri" />
           <TextField label="推送渠道" value={formChannelId ?? ''} onChange={(e) => setFormChannelId(e.target.value ? parseInt(e.target.value) : null)} select>
             <MenuItem value="">不推送</MenuItem>
             {channels.map((ch) => <MenuItem key={ch.id} value={ch.id}>{ch.name} ({ch.channel_type})</MenuItem>)}
