@@ -11,6 +11,7 @@ from backend.routers.analysis import router as analysis_router
 from backend.routers.system_config import router as system_config_router
 from backend.routers.ai_chat import router as ai_chat_router
 from backend.routers.backtest import router as backtest_router
+from backend.routers.holiday import router as holiday_router
 
 router = APIRouter()
 
@@ -23,3 +24,4 @@ router.include_router(analysis_router, prefix="/analysis", tags=["分析结果"]
 router.include_router(ai_chat_router, prefix="/ai", tags=["AI 对话"])
 router.include_router(system_config_router, prefix="/system", tags=["系统配置"])
 router.include_router(backtest_router, prefix="/backtest", tags=["信号回测"])
+router.include_router(holiday_router, prefix="/holiday", tags=["调休同步"])

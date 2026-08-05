@@ -32,6 +32,8 @@ class TaskScheduler:
         # 启动后加载任务
         import asyncio
         asyncio.create_task(self.reload_jobs())
+        # 注册调休自动同步任务（每日检查一次，同步成功后自动停用）
+        asyncio.create_task(self._register_holiday_sync())
 
     def shutdown(self) -> None:
         """停止调度器"""
@@ -146,6 +148,44 @@ class TaskScheduler:
             logger.info(f"调度任务完成: schedule_id={schedule_id}")
         except Exception as e:
             logger.error(f"调度任务执行失败 schedule_id={schedule_id}: {e}")
+
+
+    async def _register_holiday_sync(self) -> None:
+        """注册调休自动同步任务（每日在 holiday_auto_sync_time 触发一次）"""
+        try:
+            from sqlalchemy import select
+
+            from backend.models.system_config import SystemConfig
+
+            async with async_session_factory() as session:
+                row = (await session.execute(
+                    select(SystemConfig).where(SystemConfig.config_key == "holiday_auto_sync_time")
+                )).scalars().first()
+                tmpl = row.config_value if row else "03:00"
+            hh, mm = tmpl.split(":")
+            trigger = CronTrigger(
+                hour=int(hh), minute=int(mm), day_of_week="*", timezone="Asia/Shanghai"
+            )
+            self._scheduler.add_job(
+                self._run_holiday_auto_sync,
+                trigger=trigger,
+                id="holiday_auto_sync",
+                replace_existing=True,
+            )
+            logger.info(f"已注册调休自动同步任务 (每日 {tmpl})")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"注册调休自动同步任务失败: {e}")
+
+    async def _run_holiday_auto_sync(self) -> None:
+        """执行调休自动同步（受 holiday_auto_sync_enabled 开关控制，成功后停用）"""
+        try:
+            from backend.services.holiday_sync_service import auto_sync_if_enabled
+
+            async with async_session_factory() as session:
+                summary = await auto_sync_if_enabled(session)
+            logger.info(f"调休自动同步执行完成: {summary}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"调休自动同步执行失败: {e}")
 
 
 # 全局实例

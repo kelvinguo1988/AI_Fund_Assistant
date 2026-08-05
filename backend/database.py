@@ -62,6 +62,7 @@ async def init_db() -> None:
         AIConversation,
         SystemConfig,
         FundQuarterly,
+        HolidayCalendar,
     )
 
     # 建表
@@ -288,6 +289,30 @@ async def init_db() -> None:
                     logger.info(f"已修复评分阈值：去重 {len(data)}→{len(deduped)} 档，末档 min_score=-6.4")
             except Exception as e:
                 logger.warning(f"评分阈值修复失败: {e}")
+
+    # ── 调休日历同步配置默认值（已有库增量添加，空库跳过）──
+    async with async_session_factory() as session:
+        from sqlalchemy import select
+
+        holiday_defaults = [
+            ("holiday_sync_url", "https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json",
+             "调休/节假日同步数据源地址，{year} 占位符替换为年份（默认 NateScarlet/holiday-cn，溯源 gov.cn 国务院放假安排）"),
+            ("holiday_auto_sync_time", "03:00",
+             "调休自动同步时间 HH:MM，每日该时刻检查一次，同步成功后自动停用"),
+            ("holiday_auto_sync_enabled", "true",
+             "调休自动同步开关，同步成功后自动置 false（只同步一次），后期可在后台手动开启"),
+            ("holiday_last_sync_at", "",
+             "最近一次成功同步时间（ISO）"),
+        ]
+        for key, val, desc in holiday_defaults:
+            exists = (await session.execute(
+                select(SystemConfig).where(SystemConfig.config_key == key)
+            )).scalars().first()
+            if not exists:
+                session.add(SystemConfig(
+                    config_key=key, config_value=val, description=desc, updated_at=datetime.now()
+                ))
+        await session.commit()
 
     # 插入初始数据（空库时）
     async with async_session_factory() as session:
