@@ -63,6 +63,7 @@ AI_Fund_Assistant/
 - **并发控制架构**：独立线程池隔离（akshare 专用 16 workers，与 asyncio 默认线程池隔离）+ 全局信号量限流（并发 5）+ 强制超时保护（25s）+ asyncio.Lock 双重检查防止缓存穿透，根治 40-60 只基金批量分析时的线程池耗尽与超时堆积问题
 - **共享数据缓存复用**：国债收益率、沪深300基准、指数估值（PE/PB）、ETF 行情、基金名称等全市场共享数据类级缓存（1h TTL），51 只基金并发分析时只发 1 次网络请求，其余命中缓存
 - **批量并发获取**：分析流程与基金详情刷新均采用 `asyncio.gather` 并发获取（替代串行 for 循环），每只基金使用独立 DB session 避免并发冲突，51 只基金分析耗时从 15+ 分钟降至 2-4 分钟
+- **调休/节假日日历自动同步**：从互联网官方通知源（默认 NateScarlet/holiday-cn，溯源国务院放假安排 gov.cn）同步当年+次年调休日历到 `holiday_calendar` 表。后台可配置同步地址、自动同步时间、开关；首次自动同步成功后自动停用（只同步一次），亦支持后台手动触发同步。后端 API 配置（暂无独立前端页面）
 
 ---
 
@@ -173,6 +174,9 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
 | `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（32 个参数分 6 组，含前置否决 / 因子修正 / 动态阈值 / 固定偏置） |
 | `/api/system/connectivity` | GET | 数据源连通性测试 |
+| `/api/holiday` | GET | 查看已同步的调休/节假日日历（`?year=2026`） |
+| `/api/holiday/config` | GET/PUT | 调休同步配置（同步地址 / 自动同步时间 / 开关 / 最近同步时间） |
+| `/api/holiday/sync` | POST | 后台手动同步调休日历（不受自动开关限制，可指定 year/url） |
 | `/health` | GET | 健康检查 |
 
 ---
@@ -225,6 +229,12 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 - 评分阈值（`scoring_thresholds`，五档对称阈值 JSON）
 - 质量过滤参数（`quality_filter_config`，32 个数值参数，覆盖棺材钉 / 心电图 / 清盘 / 因子修正 / 动态阈值 / 固定偏置 6 组）
 - ⚠️ **关键约束**：`quality_filter_config.base_sell_threshold` 必须等于五档阈值的中性下界 **-1.5**（对应「适度减仓 / 卖出」）。若写成 `-3.0`，`(-3.0, -1.5]` 整个区间会被错归「观望」，导致**永久不出现卖出信号**。当前正确值：`{"base_buy_threshold": 1.5, "base_sell_threshold": -1.5}`（详见文末「修复记录」）。
+- 调休/节假日同步配置（键名 → 默认值）：
+  - `holiday_sync_url` → `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json`（数据源地址，`{year}` 占位符在抓取时替换为年份；可选 timor.tech 等兼容格式）
+  - `holiday_auto_sync_time` → `03:00`（每日自动检查时间，HH:MM）
+  - `holiday_auto_sync_enabled` → `true`（自动同步开关；首次同步成功后自动置 `false`，只同步一次）
+  - `holiday_last_sync_at` → 空（最近一次同步时间，ISO 时间戳）
+  - 同步数据落 `holiday_calendar` 表（`holiday_date` 唯一，`is_off_day` 表示休市/补班开市），通过 `GET/PUT /api/holiday/config` 与 `POST /api/holiday/sync` 管理。
 
 ---
 
@@ -319,3 +329,25 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 
 - **因子标准化不一致**：落库的因子分值与使用存储 `raw_value` 重新跑引擎 `apply_cross_sectional_zscore` 的结果存在偏差（short_momentum 18/22、mid_momentum 8/22 不一致），疑似 `run_analysis` 中 `normalize_cross_sectional` 的截面 cohort 或因子 `normalization` 标志传入不一致，需专项排查后最小化修改。取数与因子配置值本身均正常。
 - **部分基金因子塌缩**：实时批量分析时少数基金（价格历史不足或 akshare 抓取超时）多因子 `raw=0.0`（计算器的「数据不足」哨兵值），因子归中性 → 偏观望，属数据完整性问题。
+
+---
+
+## 修复记录（2026-08-05）
+
+### 1. 定时推送周一不触发（已修复）
+
+- **根因**：`backend/scheduler/task_scheduler.py` 的推送闸门用 `is_trading_day()`（内部 `chinese_calendar.is_workday`）判断，该方法会**额外跳过调休休息日**（如 2026-02-16、02-23、04-06、05-04、10-05 等调休周一），导致「调度计划填写 mon-fri 但每周一都没推送」。
+- **修复**：推送闸门改为仅跳过周末（`if date.today().weekday() >= 5: return`），用户的 mon-fri 星期计划被如实尊重；调休周一虽非交易日，但属用户显式配置的工作日，照常推送（commit `0018a4c`）。
+- **前端配套**：`frontend/src/pages/SchedulePlan.tsx` 的 cron 占位符从 `0 50 14 * * mon-fri`（6 字段非法）修正为 `50 14 * * mon-fri`（5 字段标准 APScheduler cron）。
+
+### 2. 新增调休/节假日日历自动同步（新功能）
+
+- **需求**：27 年调休无法预测，需从互联网官方通知源读取调休安排，后台可配置自动同步时间及地址，同步成功后不再自动同步，后期可手动触发。
+- **实现**（commit `32dce80`）：
+  - 新增 `backend/models/holiday_calendar.py`：`holiday_calendar` 表（`holiday_date` 唯一，`is_off_day` 区分休市/补班开市，`holiday_name`/`source`/`synced_at`）。
+  - 新增 `backend/services/holiday_sync_service.py`：抓取并解析 NateScarlet/holiday-cn（默认，溯源 gov.cn）与 timor.tech 两种 JSON 格式；`sync_holiday_calendar` 幂等 upsert 当年+次年；`auto_sync_if_enabled` 仅在开关开启时执行，同步成功后自动置 `enabled=false`（只同步一次）。
+  - 新增 `backend/routers/holiday.py`：`GET /api/holiday`（查看）、`GET/PUT /api/holiday/config`（配置）、`POST /api/holiday/sync`（手动同步，绕过开关）。
+  - `backend/scheduler/task_scheduler.py` 注册 `holiday_auto_sync` 每日任务（在 `holiday_auto_sync_time` 触发）。
+  - `backend/database.py` 迁移写入默认配置（`holiday_sync_url` / `holiday_auto_sync_time=03:00` / `holiday_auto_sync_enabled=true` / `holiday_last_sync_at`）。
+- **验证**：py_compile + 导入冒烟 + upsert 幂等 + 自动同步成功后开关置 false 均通过；真实网络抓取受沙箱代理限制未实跑（生产环境按默认地址可达）。
+- **说明**：当前推送闸门仍为「仅跳过周末」；`holiday_calendar` 数据尚未回接到推送闸门（如需「调休周一补班开市也推送 / 调休周六休市不推送」可后续接线，本次未改动用户既定行为）。
