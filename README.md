@@ -314,11 +314,14 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 
 ## 修复记录（2026-07-22）
 
-### 1. 信号永远无卖出（已修复）
+### 1. 信号永远无卖出（已修复，两次根因）
 
-- **根因**：`backend/engines/quality_filter.py` 中 `QUALITY_CONFIG["base_sell_threshold"] = -3.0` 与五档阈值的「适度减仓」边界 `-1.5` 不一致，导致 `determine_signal` 要求 `score <= -3.0` 才卖出；而实测最低分仅 `-2.3`，整个 `(-3.0, -1.5]` 区间被错归「观望」，永久不出现卖出信号。
-- **修复**：代码默认值改为 `-1.5`（commit `caf53a5`），并**固化进数据库** `system_config.quality_filter_config = {"base_buy_threshold": 1.5, "base_sell_threshold": -1.5}`，使前后台一致、防止前台「保存」覆盖回旧值。
+- **一次根因（2026-07-19）**：`backend/engines/quality_filter.py` 中 `QUALITY_CONFIG["base_sell_threshold"] = -3.0` 与五档阈值的「适度减仓」边界 `-1.5` 不一致，导致 `determine_signal` 要求 `score <= -3.0` 才卖出；实测最低分仅 `-2.3`，整个 `(-3.0, -1.5]` 区间被错归「观望」，永久不出现卖出信号。
+- **一次修复**：代码默认值改为 `-1.5`（commit `caf53a5`），并**固化进数据库** `system_config.quality_filter_config = {"base_buy_threshold": 1.5, "base_sell_threshold": -1.5}`，使前后台一致、防止前台「保存」覆盖回旧值。
 - **验证**：修复后 025657（国金智远量化选股混合A）等 `score <= -1.5` 的基金正确判为「适度减仓 / 卖出」。
+- **二次根因（2026-08-15 复现）**：阈值改回 -1.5 后**仍 0 卖出**。因子计算与数据获取完全正常（数据非瓶颈），但当时激活的 7 因子中 6 个是截面相对 z-score（同一基金池内互相抵消≈0），唯一绝对因子 `drawdown_recovery` 在普涨市恒为 +1.0（白送 +0.8 地板），`trend_consistency`(权重0.5) 是唯一可负项（最差 -0.5）。理论最低加权分≈-0.5，远低于卖出阈值 -1.5 → 卖出在数学上不可达。
+- **二次修复**：激活因子集须含「双向绝对因子」。已在 `backend/database.py` 的因子种子（`new_factors_config` 迁移块 + 空库初始化块）中补齐 `macd_signal`（金叉+1.0 / 死叉-1.0，权重 0.5，normalization=none）。`init_db` 的迁移块对已有库「缺失则补齐」——自动激活该因子且**不破坏用户已调的权重/启用状态**；新库亦默认含之。走弱基金（死叉 + 相对池最弱）加权分可落到 -1.5 以下，卖出信号恢复。
+- **验证**：因子集含 macd_signal 后，普涨市仍 0 卖出（正确，不该卖）；分化市中走弱的基金能被正确判为「适度减仓 / 卖出」。
 
 ### 2. 历史报告导出接口 500（已修复）
 

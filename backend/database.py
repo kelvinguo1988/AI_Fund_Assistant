@@ -133,7 +133,7 @@ async def init_db() -> None:
             # 2. 禁用引擎内置因子（如尚存在），已由用户自定义 7 因子替代
             engine_old_codes = [
                 "pe_percentile", "fed_model", "momentum_6m",
-                "info_ratio", "macd_signal", "max_drawdown", "size_stability",
+                "info_ratio", "max_drawdown", "size_stability",
             ]
             for old_code in engine_old_codes:
                 result = await session.execute(
@@ -240,6 +240,18 @@ async def init_db() -> None:
                     "normalization": "cross_sectional_zscore",
                     "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
                 },
+                {
+                    # 双向绝对因子：独立于截面相对位置，金叉+1.0 / 死叉-1.0。
+                    # 关键作用：穿透普涨市，把真正走弱的基金打负，使加权分
+                    # 能落到 quality_filter 的 sell_threshold(-1.5) 以下，产出卖出信号。
+                    "name": "MACD信号", "code": "macd_signal", "direction": "positive",
+                    "weight": 0.5, "sort_order": 8,
+                    "params": json.dumps({"fast": 12, "slow": 26, "signal": 9}),
+                    "formula": "DIF=EMA(12)-EMA(26); DEA=EMA(DIF,9); 金叉+1.0/死叉-1.0",
+                    "window": 26, "window_unit": "day",
+                    "signal_rules": json.dumps([]),
+                    "normalization": "none",
+                },
             ]
             for cfg in new_factors_config:
                 result = await session.execute(select(Factor).where(Factor.code == cfg["code"]))
@@ -258,6 +270,13 @@ async def init_db() -> None:
                         created_at=now, updated_at=now,
                     ))
                     logger.info(f"已添加新因子: {cfg['name']} ({cfg['code']})")
+                elif existing.status != "active":
+                    # 曾被迁移禁用的关键因子（如 macd_signal）重新激活，
+                    # 保证卖出信号所需的双向绝对因子生效；权重同步为最新配置。
+                    existing.status = "active"
+                    existing.weight = cfg["weight"]
+                    existing.updated_at = now
+                    logger.info(f"已重新激活因子: {cfg['name']} ({cfg['code']})")
 
             await session.commit()
 
@@ -427,6 +446,19 @@ async def init_db() -> None:
                     ]),
                     normalization="cross_sectional_zscore",
                     normalization_config=json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
+                    status="active", created_at=now, updated_at=now,
+                ),
+                Factor(
+                    # 双向绝对因子：独立于截面相对位置，金叉+1.0 / 死叉-1.0。
+                    # 穿透普涨市把走弱基金打负，使加权分能落到 sell_threshold(-1.5) 以下。
+                    name="MACD信号", code="macd_signal", direction="positive",
+                    data_fields=json.dumps(["nav"]),
+                    weight=0.5, sort_order=8,
+                    params=json.dumps({"fast": 12, "slow": 26, "signal": 9}),
+                    formula="DIF=EMA(12)-EMA(26); DEA=EMA(DIF,9); 金叉+1.0/死叉-1.0",
+                    window=26, window_unit="day",
+                    signal_rules=json.dumps([]),
+                    normalization="none",
                     status="active", created_at=now, updated_at=now,
                 ),
             ]
