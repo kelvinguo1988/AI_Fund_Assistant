@@ -2,7 +2,7 @@
  * 基金池管理页面
  */
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo, Fragment } from 'react';
 import {
   Box,
   Typography,
@@ -26,7 +26,7 @@ import {
   Snackbar,
   Alert,
 } from '@mui/material';
-import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Upload as UploadIcon, Download as DownloadIcon, Refresh as RefreshIcon } from '@mui/icons-material';
+import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon, Upload as UploadIcon, Download as DownloadIcon, Refresh as RefreshIcon, Star as StarIcon, StarBorder as StarBorderIcon } from '@mui/icons-material';
 import { fundApi } from '../api/fund';
 import type { FundOut, FundCreate, FundUpdate } from '../types';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -52,6 +52,70 @@ const FUND_TYPES = [
   { value: 'otc', label: '场外基金' },
 ];
 
+/** 取基金主标签（逗号分隔标签中的第一个，作为分类依据） */
+const primaryTag = (tags?: string | null): string | null => {
+  if (!tags) return null;
+  const parts = tags.split(',').map((t) => t.trim()).filter(Boolean);
+  return parts[0] ?? null;
+};
+
+/**
+ * 按标签分类分组（与后端 classify_and_sort_funds 同序）：
+ * - 主标签出现频率降序（同类多的分类在前），「未分类」永远最后；
+ * - 同类内按名称升序；
+ * - pinStarred=true 时把星标基金整体置顶为「已星标」分组。
+ */
+const groupByClassification = (funds: FundOut[], pinStarred: boolean) => {
+  const freq = new Map<string, number>();
+  funds.forEach((f) => {
+    const t = primaryTag(f.tags);
+    if (t) freq.set(t, (freq.get(t) ?? 0) + 1);
+  });
+  const byName = (a: FundOut, b: FundOut) =>
+    (a.name || '').localeCompare(b.name || '', 'zh') ||
+    (a.code || '').localeCompare(b.code || '');
+
+  const sorted = [...funds].sort((a, b) => {
+    const sa = pinStarred && a.starred ? 0 : 1;
+    const sb = pinStarred && b.starred ? 0 : 1;
+    if (sa !== sb) return sa - sb;
+    const ta = primaryTag(a.tags);
+    const tb = primaryTag(b.tags);
+    const rankA: [number, number, string] = ta === null ? [1, 0, ''] : [0, -(freq.get(ta) ?? 0), ta];
+    const rankB: [number, number, string] = tb === null ? [1, 0, ''] : [0, -(freq.get(tb) ?? 0), tb];
+    for (let i = 0; i < 3; i++) {
+      if (rankA[i] !== rankB[i]) {
+        return i === 2
+          ? (rankA[i] as string).localeCompare(rankB[i] as string, 'zh')
+          : (rankA[i] as number) - (rankB[i] as number);
+      }
+    }
+    return byName(a, b);
+  });
+
+  const starred = pinStarred ? sorted.filter((f) => f.starred) : [];
+  const rest = pinStarred ? sorted.filter((f) => !f.starred) : sorted;
+  const groups: { tag: string | null; funds: FundOut[] }[] = [];
+  const seen = new Set<string | null>();
+  rest.forEach((f) => {
+    const t = primaryTag(f.tags);
+    if (!seen.has(t)) {
+      seen.add(t);
+      groups.push({ tag: t, funds: [] });
+    }
+    groups.find((g) => g.tag === t)!.funds.push(f);
+  });
+  return { starred, groups };
+};
+
+/** 分类分组表头样式 */
+const groupHeaderSx = {
+  backgroundColor: '#f0f4ff',
+  fontWeight: 700,
+  color: '#1976D2',
+  fontSize: '0.8rem',
+};
+
 const FundPool: React.FC = () => {
   const [funds, setFunds] = useState<FundOut[]>([]);
   const [_loading, setLoading] = useState(false);
@@ -59,7 +123,7 @@ const FundPool: React.FC = () => {
   const [editFund, setEditFund] = useState<FundOut | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FundOut | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'warning' | 'info' });
 
   // 批量导入状态
   const [importOpen, setImportOpen] = useState(false);
@@ -67,6 +131,7 @@ const FundPool: React.FC = () => {
   const [_importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ total: number; created: number; skipped: string[]; errors: string[] } | null>(null);
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
   // 表单状态
@@ -109,6 +174,90 @@ const FundPool: React.FC = () => {
     setFormTags(fund.tags || '');
     setDialogOpen(true);
   };
+
+  /** 根据代码查询名称与类型（优先缓存，必要时走网络） */
+  const doLookupName = async (code: string) => {
+    if (!/^\d{6}$/.test(code)) return;
+    setLookupLoading(true);
+    try {
+      const res = await fundApi.lookupName(code);
+      const d = res.data;
+      if (d?.name) {
+        setFormName(d.name);
+        if (d.fund_type) setFormType(d.fund_type as 'etf' | 'otc');
+        setSnackbar({
+          open: true,
+          message: `已自动填充名称${d.fund_type ? `（${d.fund_type === 'etf' ? 'ETF' : '场外'}）` : ''}`,
+          severity: 'success',
+        });
+      } else {
+        setSnackbar({ open: true, message: '未找到该代码名称，请手动填写', severity: 'warning' });
+      }
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err?.message || '获取名称失败', severity: 'error' });
+    } finally {
+      setLookupLoading(false);
+    }
+  };
+
+  const handleLookupName = () => doLookupName(formCode);
+  const handleCodeBlur = () => {
+    if (!formName && /^\d{6}$/.test(formCode)) doLookupName(formCode);
+  };
+
+  /** 渲染单行基金（含新增的星标列） */
+  const renderFundRow = (fund: FundOut) => (
+    <TableRow key={fund.id} hover>
+      <TableCell padding="checkbox">
+        <Checkbox checked={selected.includes(fund.id)} onChange={() => toggleSelect(fund.id)} size="small" />
+      </TableCell>
+      <TableCell>{fund.code}</TableCell>
+      <TableCell>{fund.name}</TableCell>
+      <TableCell>{fund.fund_type === 'etf' ? 'ETF' : '场外'}</TableCell>
+      <TableCell>
+        {(fund.tags || '').split(',').filter(Boolean).map((tag) => (
+          <Chip key={tag} label={tag} size="small"
+            sx={{ backgroundColor: getThemeColor(tag), color: '#fff', mr: 0.5, mb: 0.3 }} />
+        ))}
+      </TableCell>
+      <TableCell>
+        <Chip label={fund.status === 'active' ? '启用' : '停用'} size="small"
+          color={fund.status === 'active' ? 'success' : 'default'} />
+      </TableCell>
+      <TableCell>
+        <IconButton size="small" title={fund.starred ? '取消星标' : '设为星标'}
+          onClick={async () => {
+            try {
+              await fundApi.update(fund.id, { starred: !fund.starred });
+              setSnackbar({ open: true, message: !fund.starred ? '已设为星标' : '已取消星标', severity: 'success' });
+              loadFunds();
+            } catch {
+              setSnackbar({ open: true, message: '星标操作失败', severity: 'error' });
+            }
+          }}>
+          {fund.starred
+            ? <StarIcon fontSize="small" sx={{ color: '#F57C00' }} />
+            : <StarBorderIcon fontSize="small" />}
+        </IconButton>
+      </TableCell>
+      <TableCell>
+        <IconButton size="small" title="刷新主题" disabled={refreshingId === fund.id}
+          onClick={async () => {
+            setRefreshingId(fund.id);
+            try {
+              await fundApi.refreshThemes(fund.id);
+              setSnackbar({ open: true, message: '主题刷新成功', severity: 'success' });
+              loadFunds();
+            } catch { setSnackbar({ open: true, message: '主题刷新失败', severity: 'error' }); }
+            finally { setRefreshingId(null); }
+          }}>
+          <RefreshIcon fontSize="small" />
+        </IconButton>
+        <IconButton size="small" onClick={() => handleOpenEdit(fund)}><EditIcon fontSize="small" /></IconButton>
+        <IconButton size="small" color="error" onClick={() => setDeleteTarget(fund)}><DeleteIcon fontSize="small" /></IconButton>
+      </TableCell>
+    </TableRow>
+  );
 
   const handleSave = async () => {
     try {
@@ -188,6 +337,11 @@ const FundPool: React.FC = () => {
     }
   };
 
+  const { starred, groups } = useMemo(
+    () => groupByClassification(funds, true),
+    [funds],
+  );
+
   return (
     <Box sx={{ p: 3 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -224,48 +378,34 @@ const FundPool: React.FC = () => {
               <TableCell>类型</TableCell>
               <TableCell>标签</TableCell>
               <TableCell>状态</TableCell>
+              <TableCell>星标</TableCell>
               <TableCell>操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
-            {funds.map((fund) => (
-              <TableRow key={fund.id} hover>
-                <TableCell padding="checkbox">
-                  <Checkbox checked={selected.includes(fund.id)} onChange={() => toggleSelect(fund.id)} size="small" />
-                </TableCell>
-                <TableCell>{fund.code}</TableCell>
-                <TableCell>{fund.name}</TableCell>
-                <TableCell>{fund.fund_type === 'etf' ? 'ETF' : '场外'}</TableCell>
-                <TableCell>
-                  {(fund.tags || '').split(',').filter(Boolean).map((tag) => (
-                    <Chip key={tag} label={tag} size="small"
-                      sx={{ backgroundColor: getThemeColor(tag), color: '#fff', mr: 0.5, mb: 0.3 }} />
-                  ))}
-                </TableCell>
-                <TableCell>
-                  <Chip label={fund.status === 'active' ? '启用' : '停用'} size="small"
-                    color={fund.status === 'active' ? 'success' : 'default'} />
-                </TableCell>
-                <TableCell>
-                  <IconButton size="small" title="刷新主题" disabled={refreshingId === fund.id}
-                    onClick={async () => {
-                      setRefreshingId(fund.id);
-                      try {
-                        await fundApi.refreshThemes(fund.id);
-                        setSnackbar({ open: true, message: '主题刷新成功', severity: 'success' });
-                        loadFunds();
-                      } catch { setSnackbar({ open: true, message: '主题刷新失败', severity: 'error' }); }
-                      finally { setRefreshingId(null); }
-                    }}>
-                    <RefreshIcon fontSize="small" />
-                  </IconButton>
-                  <IconButton size="small" onClick={() => handleOpenEdit(fund)}><EditIcon fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error" onClick={() => setDeleteTarget(fund)}><DeleteIcon fontSize="small" /></IconButton>
-                </TableCell>
-              </TableRow>
-            ))}
-            {funds.length === 0 && (
-              <TableRow><TableCell colSpan={7} align="center">暂无基金数据</TableCell></TableRow>
+            {funds.length === 0 ? (
+              <TableRow><TableCell colSpan={8} align="center">暂无基金数据</TableCell></TableRow>
+            ) : (
+              <Fragment>
+                {starred.length > 0 && (
+                  <Fragment key="starred">
+                    <TableRow>
+                      <TableCell colSpan={8} sx={groupHeaderSx}>★ 已星标（{starred.length}）</TableCell>
+                    </TableRow>
+                    {starred.map((fund) => renderFundRow(fund))}
+                  </Fragment>
+                )}
+                {groups.map((g) => (
+                  <Fragment key={g.tag ?? '__none__'}>
+                    <TableRow>
+                      <TableCell colSpan={8} sx={groupHeaderSx}>
+                        {g.tag ? `标签分类：${g.tag}` : '未分类'}（{g.funds.length}）
+                      </TableCell>
+                    </TableRow>
+                    {g.funds.map((fund) => renderFundRow(fund))}
+                  </Fragment>
+                ))}
+              </Fragment>
             )}
           </TableBody>
         </Table>
@@ -275,8 +415,16 @@ const FundPool: React.FC = () => {
       <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>{editFund ? '编辑基金' : '新增基金'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
-          <TextField label="基金代码" value={formCode} onChange={(e) => setFormCode(e.target.value)}
-            disabled={!!editFund} placeholder="6位数字代码如510300" />
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+            <TextField label="基金代码" value={formCode} onChange={(e) => setFormCode(e.target.value)}
+              onBlur={handleCodeBlur} disabled={!!editFund} placeholder="6位数字代码如510300" sx={{ flexGrow: 1 }} />
+            {!editFund && (
+              <Button variant="outlined" onClick={handleLookupName}
+                disabled={lookupLoading || !/^\d{6}$/.test(formCode)} sx={{ mt: 0.5, whiteSpace: 'nowrap' }}>
+                {lookupLoading ? '获取中…' : '获取名称'}
+              </Button>
+            )}
+          </Box>
           <TextField label="基金名称" value={formName} onChange={(e) => setFormName(e.target.value)} />
           <TextField label="基金类型" value={formType} onChange={(e) => setFormType(e.target.value as any)} select>
             {FUND_TYPES.map((t) => <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>)}

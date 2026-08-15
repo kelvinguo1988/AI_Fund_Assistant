@@ -271,3 +271,43 @@ class FundService:
         stmt = update(Fund).where(Fund.id.in_(ids)).values(status=action)
         await self.db.execute(stmt)
         await self.db.commit()
+
+
+def _primary_tag(tags: Optional[str]) -> Optional[str]:
+    """取基金的主标签（逗号分隔标签中的第一个，作为分类依据）"""
+    if not tags:
+        return None
+    parts = [t.strip() for t in tags.split(",") if t.strip()]
+    return parts[0] if parts else None
+
+
+def classify_and_sort_funds(funds: list, pin_starred: bool = False) -> list:
+    """按标签分类排序（基金池与基金详情共享同一套顺序规则）
+
+    规则：
+    1. 主标签 = 逗号分隔标签中的第一个；无标签归为「未分类」。
+    2. 分类分组顺序 = 主标签出现频率降序（同类基金多的分类排前面），
+       「未分类」永远排在最后；频率相同则按标签名升序。
+    3. 同一分类内按基金名称升序（名称相同再按代码升序）。
+    4. pin_starred=True 时，星标基金整体置顶，作为独立的「已星标」分组
+       （基金池使用）；基金详情传 False，仅按分类排序、不置顶星标。
+
+    Args:
+        funds: Fund ORM 对象列表（需含 tags / starred 属性）
+        pin_starred: 是否将星标基金置顶
+
+    Returns:
+        排序后的 Fund 列表
+    """
+    from collections import Counter
+
+    freq = Counter(_primary_tag(f.tags) for f in funds if _primary_tag(f.tags))
+
+    def sort_key(f):
+        star = 0 if (pin_starred and bool(getattr(f, "starred", False))) else 1
+        tag = _primary_tag(f.tags)
+        # 分类排序键：(0, -频率, 标签名) 表示有标签；无标签用 (1, 0, "") 永远最后
+        cat = (1, 0, "") if tag is None else (0, -freq[tag], tag)
+        return (star, cat, (f.name or "", f.code or ""))
+
+    return sorted(funds, key=sort_key)

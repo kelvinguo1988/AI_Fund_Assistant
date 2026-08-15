@@ -76,6 +76,11 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE analysis_results ADD COLUMN equity_ratio FLOAT NOT NULL DEFAULT 0.5"))
         except Exception:
             pass
+        # funds 表 starred 列（星标收藏）
+        try:
+            await conn.execute(text("ALTER TABLE funds ADD COLUMN starred BOOLEAN NOT NULL DEFAULT 0"))
+        except Exception:
+            pass
         # factor 表新列
         for col_sql in [
             "ALTER TABLE factors ADD COLUMN data_fields TEXT",

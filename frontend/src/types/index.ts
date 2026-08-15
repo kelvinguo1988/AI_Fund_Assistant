@@ -30,6 +30,7 @@ export interface FundUpdate {
   name?: string | null;
   fund_type?: 'etf' | 'otc' | null;
   tags?: string | null;
+  starred?: boolean | null;
   status?: 'active' | 'disabled' | null;
 }
 
@@ -39,6 +40,7 @@ export interface FundOut {
   name: string;
   fund_type: string;
   tags: string | null;
+  starred: boolean;
   status: string;
   created_at: string;
   updated_at: string;

@@ -19,6 +19,7 @@ class FundUpdate(BaseModel):
     name: Optional[str] = None
     fund_type: Optional[Literal['etf', 'otc']] = None
     tags: Optional[str] = None
+    starred: Optional[bool] = None
     status: Optional[Literal['active', 'disabled']] = None
 
 
@@ -29,6 +30,7 @@ class FundOut(BaseModel):
     name: str
     fund_type: str
     tags: Optional[str]
+    starred: bool = False
     status: str
     created_at: datetime
     updated_at: datetime

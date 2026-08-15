@@ -4,7 +4,7 @@ from typing import Optional
 
 from datetime import datetime
 
-from sqlalchemy import String, DateTime
+from sqlalchemy import String, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -22,6 +22,9 @@ class Fund(Base):
         String(20), nullable=False, default="etf", comment="etf / otc(场外)"
     )
     tags: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="标签 逗号分隔 如 宽基,大盘")
+    starred: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, comment="是否星标收藏（基金池置顶 + 橙黄色展示）"
+    )
     status: Mapped[str] = mapped_column(
         String(10), nullable=False, default="active", comment="active / disabled"
     )

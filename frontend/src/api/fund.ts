@@ -8,8 +8,22 @@ import type { ApiResponse, FundCreate, FundUpdate, FundOut, FundHoldingOut, Fund
 const BASE = '/api/funds';
 
 export const fundApi = {
-  list: (status?: string) =>
-    apiClient.get<ApiResponse<FundOut[]>>(BASE, { params: { status } }).then((r) => r.data),
+  list: (status?: string, order?: string) => {
+    const params: Record<string, string> = {};
+    if (status) params.status = status;
+    if (order) params.order = order;
+    return apiClient
+      .get<ApiResponse<FundOut[]>>(BASE, { params })
+      .then((r) => r.data);
+  },
+
+  lookupName: (code: string) =>
+    apiClient
+      .get<ApiResponse<{ code: string; name: string | null; fund_type: string | null }>>(
+        `${BASE}/lookup-name`,
+        { params: { code } },
+      )
+      .then((r) => r.data),
 
   exportFunds: () =>
     apiClient.get(`${BASE}/export`, { responseType: 'blob' }).then((r) => {

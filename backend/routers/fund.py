@@ -30,7 +30,7 @@ from backend.services.fund_detail_service import fetch_period_returns
 from backend.services.fund_holding_service import get_latest_holdings, refresh_holdings
 from backend.services.fund_manager_service import get_current_managers, refresh_managers
 from backend.services.fund_change_detector import get_fund_changes
-from backend.services.fund_service import FundService
+from backend.services.fund_service import FundService, classify_and_sort_funds
 from backend.services.fund_refresh_task import get_refresh_state, run_refresh_all_details
 
 router = APIRouter()
@@ -59,12 +59,50 @@ async def export_funds(db: AsyncSession = Depends(get_db)):
 @router.get("", response_model=ApiResponse[list[FundOut]])
 async def list_funds(
     status: Optional[str] = None,
+    order: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """获取基金列表（支持 ?status=active 筛选）"""
+    """获取基金列表（支持 ?status=active 筛选、?order=classification 按标签分类排序）"""
     svc = FundService(db)
     funds = await svc.list_funds(status=status)
+    if order == "classification":
+        funds = classify_and_sort_funds(funds, pin_starred=False)
     return ApiResponse(data=[FundOut.model_validate(f) for f in funds])
+
+
+@router.get("/lookup-name", response_model=ApiResponse[dict])
+async def lookup_fund_name(
+    code: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """根据基金代码查询名称与类型
+
+    优先使用内存/文件缓存的基金名称映射（fund_open_fund_rank_em），
+    命中即返回；未命中（多为 ETF，场外排行表不含）再尝试 ETF 行情表兜底。
+    网络仅首次触发，后续复用缓存。
+    """
+    from backend.data_sources.akshare_adapter import AKShareAdapter
+    from backend.data_sources.base import guess_fund_type
+
+    adapter = AKShareAdapter()
+    name = await adapter._get_cached_fund_name(code)
+
+    if not name:
+        # 场外排行表不含 ETF，用 ETF 行情表兜底
+        try:
+            import akshare as ak
+            from backend.utils.concurrency import run_with_timeout
+
+            df = await run_with_timeout(adapter._call, ak.fund_etf_spot_em, timeout=25.0)
+            if df is not None and not df.empty:
+                match = df[df["代码"] == code]
+                if not match.empty:
+                    name = str(match.iloc[0]["名称"])
+        except Exception as e:
+            logger.debug("ETF 名称查询失败 code=%s: %s", code, e)
+
+    fund_type = guess_fund_type(code) if name else None
+    return ApiResponse(data={"code": code, "name": name, "fund_type": fund_type})
 
 
 @router.post("", response_model=ApiResponse[FundOut])
@@ -224,23 +262,35 @@ async def get_funds_detail(
 
     返回 cached=true 时表示是缓存数据，updated_at 为缓存时间。
     前端应显示缓存数据，再在后台调用 POST refresh-details 刷新。
+
+    返回顺序：按标签分类排序（与基金池一致，但详情页不展示分类表头）。
     """
     svc = FundService(db)
     funds = await svc.list_funds(status="active")
     if not funds:
         return ApiResponse(data=FundDetailResponse())
 
+    # 按标签分类排序（星标不置顶，仅分类顺序）
+    ordered = classify_and_sort_funds(funds, pin_starred=False)
+    ordered_codes = [f.code for f in ordered]
+    ordered_set = set(ordered_codes)
+
     # 尝试从缓存读取
     cached_data, updated_at = await get_cached_period_returns(db)
     if cached_data:
+        cached_by_code = {item.get("code"): item for item in cached_data}
+        ordered_items = [cached_by_code[c] for c in ordered_codes if c in cached_by_code]
+        # 兜底：缓存中存在但当前活跃列表缺失的项（如刚停用）追加在末尾
+        extra = [item for item in cached_data if item.get("code") not in ordered_set]
+        ordered_items.extend(extra)
         return ApiResponse(data=FundDetailResponse(
-            funds=[FundPeriodReturn(**item) for item in cached_data],
+            funds=[FundPeriodReturn(**item) for item in ordered_items],
             updated_at=updated_at,
         ))
 
-    # 无缓存时直接抓取
-    codes = [f.code for f in funds]
-    name_map = {f.code: f.name for f in funds}
+    # 无缓存时直接抓取（按分类顺序）
+    codes = ordered_codes
+    name_map = {f.code: f.name for f in ordered}
     returns = await fetch_period_returns(codes)
 
     data = [

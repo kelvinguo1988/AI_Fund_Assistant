@@ -511,7 +511,7 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
 
     try {
       const [listRes, changeRes] = await Promise.all([
-        fundApi.list('active'),
+        fundApi.list('active', 'classification'),
         fundApi.getChangeSummary(),
       ]);
       const fundList: FundItem[] = (listRes.data || []).map((f: any) => ({ id: f.id, code: f.code, name: f.name }));
