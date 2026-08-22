@@ -35,6 +35,45 @@ def is_trading_day(target_date: date | None = None) -> bool:
         return target_date.weekday() < 5
 
 
+async def is_a_share_trading_day_async(session, target_date: date | None = None) -> bool:
+    """严格 A 股交易日判定（用于定时推送闸门）。
+
+    规则：
+      - 周末（周六/周日）一律休市 → 非交易日；
+      - 若 holiday_calendar 表有该日记录且 is_off_day=True
+        （法定节假日 或 调休休息日，如 2026-05-04 周一）→ 非交易日；
+      - 表中无记录且为工作日 → 视为正常交易日；
+      - 若表为空（尚未同步）→ 回退 chinese_calendar.is_workday 判断。
+
+    说明：holiday_calendar 中 is_off_day=False 仅表示「调休补班工作日」
+    （多为周末），周末已在第一步排除，故不会误判为开市。
+    """
+    if target_date is None:
+        target_date = date.today()
+    # 周末一律休市（含调休补班周六/周日，股市实际不开市）
+    if target_date.weekday() >= 5:
+        return False
+    try:
+        from sqlalchemy import select
+
+        from backend.models.holiday_calendar import HolidayCalendar
+
+        row = (
+            await session.execute(
+                select(HolidayCalendar).where(
+                    HolidayCalendar.holiday_date == target_date.isoformat()
+                )
+            )
+        ).scalars().first()
+        if row is not None:
+            return not row.is_off_day
+        # 表无记录 → 回退 chinese_calendar（仅工作日且无特殊记录时视为交易日）
+        return is_trading_day(target_date)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"holiday_calendar 查询失败，回退 chinese_calendar: {e}")
+        return is_trading_day(target_date)
+
+
 def get_latest_trading_day(target_date: date | None = None) -> date:
     """获取最近的交易日（向前回溯，最多 10 天）
 

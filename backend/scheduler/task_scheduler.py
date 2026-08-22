@@ -109,17 +109,22 @@ class TaskScheduler:
 
         try:
             from backend.services.analysis_service import AnalysisService
+            from backend.data_sources.trading_calendar import (
+                is_a_share_trading_day_async,
+            )
             from datetime import date as date_type
 
-            # 仅跳过周末(Sat/Sun)。用户的 mon-fri 等星期计划必须被尊重：
-            # 原 is_trading_day()(chinese_calendar.is_workday) 会额外跳过调休休息日的周一,
-            # 导致"配置了 mon-fri 但周一不推送"(如 2026-05-04 等调休周一)。
-            # 调休周一虽非交易日,但属用户显式计划的工作日,按配置照常推送。
-            if date_type.today().weekday() >= 5:
-                logger.info(f"今天是周末，跳过调度 schedule_id={schedule_id}")
-                return
-
+            # 严格 A 股交易日闸门：周末 + 法定休市日（含调休休息日）一律不推送。
+            # 数据源优先级：holiday_calendar 表（已同步国务院放假安排，含调休）
+            #   → 缺失时回退 chinese_calendar。
             async with async_session_factory() as session:
+                if not await is_a_share_trading_day_async(session, date_type.today()):
+                    logger.info(
+                        f"今天({date_type.today()})非 A 股交易日，跳过调度 "
+                        f"schedule_id={schedule_id}"
+                    )
+                    return
+
                 # 更新上次运行时间
                 result = await session.execute(
                     select(Schedule).where(Schedule.id == schedule_id)
