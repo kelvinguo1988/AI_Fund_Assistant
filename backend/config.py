@@ -36,9 +36,11 @@ class Settings:
     ).split(",")
 
     # AI 默认配置（首次启动写入 system_config 表）
+    # 2026-08-22 审计修复：删除 DEFAULT_AI_API_KEY 死代码（不读 .env，
+    # 实际 ai_service.py 从 system_config 表的 ai_api_key 字段读取）。
+    # .env.example 中的 DEFAULT_AI_API_KEY 同步移除，避免误导用户配置不生效。
     DEFAULT_AI_ENABLED: bool = True
     DEFAULT_AI_MODEL: str = "deepseek"
-    DEFAULT_AI_API_KEY: str = ""
     DEFAULT_AI_BASE_URL: str = "https://api.deepseek.com/v1"
 
     # 数据源

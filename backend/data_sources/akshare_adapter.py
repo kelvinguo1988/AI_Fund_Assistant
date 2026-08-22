@@ -293,9 +293,9 @@ class AKShareAdapter(BaseDataSource):
         end_date = date.today().isoformat()
         start_date = (date.today() - timedelta(days=period * 2)).isoformat()
 
-        url = "http://api.fund.eastmoney.com/f10/lsjz"
+        url = "https://api.fund.eastmoney.com/f10/lsjz"
         headers = {
-            "Referer": f"http://fund.eastmoney.com/f10/jjjz_{code}.html",
+            "Referer": f"https://fund.eastmoney.com/f10/jjjz_{code}.html",
             "User-Agent": random.choice(_USER_AGENTS),
         }
         params = {
@@ -720,8 +720,7 @@ class AKShareAdapter(BaseDataSource):
             except Exception as e:
                 logger.debug(f"国债收益率历史接口获取失败: {e}")
 
-            # 回退：使用常见值 2.7%（近年 10Y 国债收益率中枢）
-            logger.info("国债收益率实时接口不可用，使用回退值 2.7%")
-            AKShareAdapter._bond_yield_cache = 2.7
-            AKShareAdapter._bond_yield_ts = now
-            return 2.7
+            # 回退：不再硬编码 2.7% 假数据，返回 None 由引擎层显式降级
+            # （与 factor_engine.py 的 2.5% 默认值叠加会基于过时利率假设产生信号）
+            logger.warning("国债收益率实时接口不可用，返回 None 由引擎降级")
+            return None

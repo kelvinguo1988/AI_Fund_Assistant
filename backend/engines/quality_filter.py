@@ -630,15 +630,18 @@ def apply_factor_corrections(
             f"波动率倒数修正: {original_score:.4f} × {multiplier:.4f} = {new_score:.4f}"
         )
 
-    # 修正2: 趋势一致性权重临时调整
+    # 修正2: 趋势一致性权重提升（仅取用户配置与 boost 的较大值，不覆盖更高配置）
+    # 2026-08-22 审计修复：原 corrected_weights[trend_idx] = cfg[boost] 固定 0.8
+    # 会把用户配置的 1.5 反向降到 0.8；改为 max(original, boost) 保留用户更高配置
     if trend_idx is not None and excess_persistence == 1:
         trend_score = corrected_scores[trend_idx].score
         # 仅当趋势一致性信号为正向（score == 1.0）时提升权重
         if trend_score >= 1.0:
             original_weight = corrected_weights[trend_idx]
-            corrected_weights[trend_idx] = cfg["trend_consistency_boost_weight"]
+            boost_weight = cfg["trend_consistency_boost_weight"]
+            corrected_weights[trend_idx] = max(original_weight, boost_weight)
             logger.info(
-                f"趋势一致性权重提升: {original_weight} → {cfg['trend_consistency_boost_weight']}"
+                f"趋势一致性权重提升: {original_weight} → {max(original_weight, boost_weight)}"
             )
 
     return corrected_scores, corrected_weights
@@ -960,7 +963,10 @@ async def merge_quality_config(db) -> dict:
             overrides = _json.loads(config_row.config_value)
             if isinstance(overrides, dict):
                 for k, v in overrides.items():
-                    if k in merged and isinstance(v, (int, float)):
+                    # 2026-08-22 审计修复：放宽类型校验，支持 list/str/int/float
+                    # 原校验 isinstance(v, (int, float)) 导致 excess_windows_days(list)
+                    # 和 vol_adjust_formula(str) 无法从 DB 覆盖
+                    if k in merged:
                         merged[k] = v
         except (ValueError, TypeError):
             logger.warning("质量过滤配置 JSON 解析失败，使用默认值")

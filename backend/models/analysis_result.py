@@ -35,7 +35,7 @@ class AnalysisResult(Base):
     operation_advice: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="操作建议文本")
     equity_ratio: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, comment="建议权益仓位比例 0.0-1.0")
     factor_scores: Mapped[str] = mapped_column(
-        Text, nullable=False, comment='JSON: {"pe_percentile": 4.2, "fed": 3.8, ...}'
+        Text, nullable=False, comment='JSON: {"price_percentile": 4.2, "fed": 3.8, ...}'
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now

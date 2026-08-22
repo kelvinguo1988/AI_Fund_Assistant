@@ -1,7 +1,7 @@
 """因子计算引擎 — 8 因子 + 信号规则 + 截面标准化
 
 因子列表（来自 README_1.md 配置体系）：
-1. PE百分位 (pe_percentile)      — 负向, 权重 1.2
+1. 价格百分位 (price_percentile)  — 负向, 权重 1.2
 2. 股债性价比FED (fed_model)      — 正向, 权重 1.2
 3. 动量因子 (momentum_6m)        — 正向, 权重 1.0
 4. 波动率倒数 (inv_volatility)    — 正向, 权重 0.8
@@ -187,9 +187,12 @@ def apply_cross_sectional_zscore(
 # 7 个因子计算函数
 # ═══════════════════════════════════════════════════════════════════════
 
-def calculate_pe_percentile(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
-    """PE 百分位 — 负向（低估值得分高）
+def calculate_price_percentile(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """价格百分位 — 负向（低估值得分高）
 
+    2026-08-22 审计修复：原名 pe_percentile 名实不符（实际用 close_history 算价格
+    百分位，非 PE 百分位）。改为 price_percentile 消除歧义。基金场景"净值低位
+    ≈便宜"勉强成立，但牛市中净值新高≠高估，需结合其他因子判断。
     用当前价格对比历史价格序列，近似判断估值高低：
     价格处于历史低位 → 大概率低估 → 高分。
     公式: percentile_rank(close, close_history)
@@ -199,8 +202,8 @@ def calculate_pe_percentile(fund_data: FundData, params: Optional[dict] = None) 
 
     current_close = fund_data.close or fund_data.pe
     if current_close is None:
-        logger.warning(f"PE百分位数据不足 code={fund_data.code}")
-        return FactorScoreResult("pe_percentile", "PE百分位", 0.0, 0.0, "negative")
+        logger.warning(f"价格百分位数据不足 code={fund_data.code}")
+        return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative")
 
     history = np.array(fund_data.close_history[-window:]) if fund_data.close_history else np.array([current_close])
     pct = percentile_rank(current_close, history)
@@ -213,7 +216,7 @@ def calculate_pe_percentile(fund_data: FundData, params: Optional[dict] = None) 
         {"condition": "> 0.8", "score": -1.0},
     ]
     score = evaluate_signal_rules(pct, rules)
-    return FactorScoreResult("pe_percentile", "PE百分位", round(pct, 4), score, "negative")
+    return FactorScoreResult("price_percentile", "价格百分位", round(pct, 4), score, "negative")
 
 
 def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
@@ -595,7 +598,7 @@ def calculate_trend_consistency(fund_data: FundData, params: Optional[dict] = No
 
 FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreResult]] = {
     # 核心 8 因子（兼容）
-    "pe_percentile": calculate_pe_percentile,
+    "price_percentile": calculate_price_percentile,
     "fed_model": calculate_fed_model,
     "momentum_6m": calculate_momentum_6m,
     "inv_volatility": calculate_inv_volatility,

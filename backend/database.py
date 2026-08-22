@@ -147,7 +147,7 @@ async def init_db() -> None:
 
             # 2. 禁用引擎内置因子（如尚存在），已由用户自定义 7 因子替代
             engine_old_codes = [
-                "pe_percentile", "fed_model", "momentum_6m",
+                "price_percentile", "fed_model", "momentum_6m",
                 "info_ratio", "max_drawdown", "size_stability",
             ]
             for old_code in engine_old_codes:

@@ -36,6 +36,7 @@ _USER_AGENTS = [
 _TARGET_DOMAINS = [
     "fund.eastmoney.com",
     "fundf10.eastmoney.com",  # 基金详情页（持仓/经理/规模）— 需 Referer 否则 404
+    "api.fund.eastmoney.com",  # 场外净值降级接口 lsjz — 缺此域则 UA/NID/Referer 全不注入
     "push2.eastmoney.com",
     "push2his.eastmoney.com",
     "datacenter-web.eastmoney.com",

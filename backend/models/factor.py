@@ -16,8 +16,8 @@ class Factor(Base):
     __tablename__ = "factors"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(50), nullable=False, comment="因子名称 如 PE百分位")
-    code: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, comment="因子代码 如 pe_percentile")
+    name: Mapped[str] = mapped_column(String(50), nullable=False, comment="因子名称 如 价格百分位")
+    code: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, comment="因子代码 如 price_percentile")
     data_field: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, comment="(旧)数据源字段标识")
     data_fields: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="JSON 数组，所需数据字段列表")
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0, comment="权重")

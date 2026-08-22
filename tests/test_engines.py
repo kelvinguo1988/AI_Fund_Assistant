@@ -11,7 +11,7 @@ from backend.data_sources.base import FundData
 from backend.engines.factor_engine import (
     FactorEngine,
     FactorScoreResult,
-    calculate_pe_percentile,
+    calculate_price_percentile,
     calculate_fed_model,
     calculate_macd_signal,
     calculate_momentum_6m,
@@ -67,22 +67,22 @@ def make_fund_data(
     )
 
 
-# ── PE 百分位因子测试 ──────────────────────────────────────────────
+# ── 价格百分位因子测试 ──────────────────────────────────────────────
 
-class TestPEPercentile:
+class TestPricePercentile:
     def test_returns_score_in_range(self):
         fd = make_fund_data()
-        result = calculate_pe_percentile(fd)
+        result = calculate_price_percentile(fd)
         assert -1 <= result.score <= 1, f"评分 {result.score} 超出 -1~+1 范围"
 
     def test_data_missing_returns_neutral(self):
         fd = FundData(code="000001", pe=None, close_history=[])
-        result = calculate_pe_percentile(fd)
+        result = calculate_price_percentile(fd)
         assert result.score == 0.0
 
     def test_direction_is_negative(self):
         fd = make_fund_data()
-        result = calculate_pe_percentile(fd)
+        result = calculate_price_percentile(fd)
         assert result.direction == "negative"
 
 
@@ -298,7 +298,7 @@ class TestFactorEngine:
         fd.fund_size_history = [1e9, 1.1e9, 0.9e9, 1.05e9]
         engine = FactorEngine()
         factors = [
-            {"code": "pe_percentile", "name": "PE百分位", "params": "{}", "direction": "negative"},
+            {"code": "price_percentile", "name": "价格百分位", "params": "{}", "direction": "negative"},
             {"code": "fed_model", "name": "股债性价比FED", "params": "{}", "direction": "positive"},
             {"code": "momentum_6m", "name": "动量因子", "params": "{}", "direction": "positive"},
             {"code": "inv_volatility", "name": "波动率倒数", "params": "{}", "direction": "positive"},
@@ -328,7 +328,7 @@ class TestFactorEngine:
         factors = [
             {"code": "inv_volatility", "name": "波动率倒数", "params": "{}", "direction": "positive",
              "normalization": "cross_sectional_zscore", "normalization_config": {"zscore_thresholds": [1.0, 0, -1.0]}},
-            {"code": "pe_percentile", "name": "PE百分位", "params": "{}", "direction": "negative",
+            {"code": "price_percentile", "name": "价格百分位", "params": "{}", "direction": "negative",
              "normalization": "none"},
         ]
         fd_a = make_fund_data(code="A", close_history_len=200)

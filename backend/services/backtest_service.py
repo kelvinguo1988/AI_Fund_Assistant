@@ -137,31 +137,39 @@ class BacktestService:
     ) -> list[BacktestPoint]:
         """构建回测数据点序列
 
-        策略逻辑：当日信号决定当日仓位比例，应用于当日涨跌。
+        策略逻辑（next-bar execution，避免前视偏差）：
+        - 当日信号在收盘后生成（默认 15:10 后），记录在当日点；
+        - 但仓位由「前一日信号」决定，作用于当日涨跌；
+        - 即 T 日信号 → T+1 日仓位 → 作用于 T+1 日收益。
         无信号日默认 hold（50% 仓位）。
+
+        收益累计：几何复利（非加法），strategy_nav 维护策略净值。
         """
         points: list[BacktestPoint] = []
-        nav_cum_return = 0.0
-        strategy_cum_return = 0.0
-
         # 默认仓位（无信号时）
         default_position = 0.5
+        # 策略净值（几何复利），初始 1.0
+        strategy_nav = 1.0
+        initial_nav = navs[0] if navs else 1.0
+
+        # 前一日信号决定的仓位（next-bar execution）
+        prev_position = default_position
 
         for i in range(len(dates)):
             d = dates[i]
             nav = navs[i]
 
-            # 日收益率
+            # 日收益率（%）
             if i == 0:
                 daily_return = 0.0
             else:
                 prev_nav = navs[i - 1]
                 daily_return = (nav / prev_nav - 1) * 100 if prev_nav > 0 else 0.0
 
-            # 累计净值收益
-            nav_cum_return = round(nav_cum_return + daily_return, 4)
+            # 累计净值收益（几何复利：用 nav 比值直接算区间收益，非加法累计）
+            nav_cum_return = round((nav / initial_nav - 1) * 100, 4) if initial_nav > 0 else 0.0
 
-            # 查找当日信号（精确匹配）
+            # 查找当日信号（记录在当日点，但仓位作用于下一日）
             # 日期格式可能是 "2025-06-13 00:00:00" 或 "2025-06-13"
             date_key = d[:10]  # 取前 10 字符
             sig = signal_map.get(date_key)
@@ -170,16 +178,22 @@ class BacktestService:
                 direction = sig["direction"]
                 strength = sig["strength"]
                 score = sig["score"]
-                position = POSITION_MAP.get(strength, default_position)
+                current_position = POSITION_MAP.get(strength, default_position)
             else:
                 direction = None
                 strength = None
                 score = None
-                position = default_position
+                current_position = default_position
 
-            # 策略收益 = 当日涨跌 × 仓位比例
+            # 策略收益 = 当日涨跌 × 仓位（仓位由前一日信号决定，避免前视偏差）
+            position = prev_position
             strategy_daily = daily_return * position
-            strategy_cum_return = round(strategy_cum_return + strategy_daily, 4)
+            # 几何复利：(1+r1)(1+r2)...-1
+            strategy_nav *= (1 + strategy_daily / 100)
+            strategy_cum_return = round((strategy_nav - 1) * 100, 4)
+
+            # 当日信号更新为下一日的 prev_position（next-bar execution）
+            prev_position = current_position
 
             points.append(BacktestPoint(
                 date=date_key,

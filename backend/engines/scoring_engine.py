@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 
 # ── 默认五档阈值配置（因子总分理论范围 -6.4 ~ +6.4）────────────────────
 # min_score 降序排列，末档设 -6.4 作为兜底（等于理论最小值）
+#
+# 适用范围说明（2026-08-22 审计修复）：
+# 五档阈值仅用于 ScoringEngine.compute 直接调用路径（无质量过滤的旧路径）。
+# 走质量过滤的正式路径（compute_with_quality_filter）由 determine_signal 动态阈值
+# 决策（base_buy_threshold/base_sell_threshold + 规模冲击/漂移上调），五档在此
+# 路径不生效。前端调"五档阈值"实际只影响旧路径，请勿误判已调参。
 DEFAULT_THRESHOLDS: list[dict] = [
     {
         "min_score": 3.0,
@@ -194,13 +200,21 @@ def compute_with_quality_filter(
     """评分 + 质量过滤器集成入口
 
     原有 ScoringEngine.compute 完全不变。此函数作为外围包装器，
-    先调用 compute 得到基础信号，再根据质量过滤结果调整最终决策。
+    先调用 compute 得到基础评分（weighted_score / raw_score），再根据质量过滤
+    结果调整最终决策。
+
+    决策路径说明（2026-08-22 审计修复）：
+    - 五档阈值（DEFAULT_THRESHOLDS / thresholds_json）在此路径不生效，仅用于
+      无质量过滤的旧路径（ScoringEngine.compute 直接调用）。
+    - 本路径最终信号 direction/strength 由 determine_signal 动态阈值决定
+      （base_buy/sell_threshold + 规模冲击/漂移上调）。
+    - base_signal 仍需调用以获取 weighted_score 和 raw_score（钳位后的原始评分）。
 
     Args:
         factor_scores: 已修正的因子评分列表
         factor_weights: 已修正的因子权重列表
         quality_result: QualityFilterResult 质量过滤结果
-        thresholds_json: 阈值配置 JSON（用于基础信号判定）
+        thresholds_json: 阈值配置 JSON（仅用于 base_signal 的原始评分计算，不影响最终决策）
 
     Returns:
         SignalResult（含扩展字段）

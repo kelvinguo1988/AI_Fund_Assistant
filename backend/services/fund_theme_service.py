@@ -28,7 +28,7 @@ def fetch_related_themes(fund_code: str) -> list[str]:
         "Referer": "http://fund.eastmoney.com",
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=30)
+        resp = requests.get(url, headers=headers, timeout=20)
         resp.encoding = "utf-8"
         if resp.status_code != 200:
             logger.warning("获取基金 %s 页面失败, status=%d", fund_code, resp.status_code)

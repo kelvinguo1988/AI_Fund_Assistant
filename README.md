@@ -200,9 +200,10 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 | 环境变量 | 必填 | 默认值 | 说明 |
 |---------|------|--------|------|
-| `DEFAULT_AI_API_KEY` | 是 | — | AI 模型 API Key |
 | `DEFAULT_AI_MODEL` | 否 | `deepseek` | AI 模型名称 |
 | `DEFAULT_AI_BASE_URL` | 否 | `https://api.deepseek.com/v1` | AI API 基础 URL |
+
+> AI API Key 通过 Web 界面"系统配置"设置（存入 system_config 表），不再从 .env 读取。
 | `FEISHU_WEBHOOK_URL` | 否 | — | 飞书机器人 Webhook URL |
 | `FEISHU_WEBHOOK_SECRET` | 否 | — | 飞书签名密钥 |
 | `JOINQUANT_USER` | 否 | — | 聚宽账号 |
