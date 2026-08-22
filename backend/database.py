@@ -96,6 +96,16 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+        # analysis_results 索引（按日期查询、按基金查历史时加速）
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS ix_analysis_results_analysis_date ON analysis_results (analysis_date)",
+            "CREATE INDEX IF NOT EXISTS ix_analysis_results_fund_id ON analysis_results (fund_id)",
+        ]:
+            try:
+                await conn.execute(text(idx_sql))
+            except Exception:
+                pass
+
     # ── 修复已有因子记录的标准化配置 ──
     async with async_session_factory() as session:
         from sqlalchemy import select, update

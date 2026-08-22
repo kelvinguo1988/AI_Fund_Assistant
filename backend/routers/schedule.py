@@ -1,5 +1,6 @@
 """调度计划 CRUD 路由"""
 
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,7 @@ from backend.models.schedule import Schedule
 from backend.schemas.common import ApiResponse
 from backend.schemas.schedule import ScheduleCreate, ScheduleUpdate, ScheduleOut
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -44,8 +46,8 @@ async def create_schedule(
     try:
         from backend.scheduler.task_scheduler import task_scheduler
         await task_scheduler.reload_jobs()
-    except ImportError:
-        pass
+    except Exception as e:
+        logger.warning(f"新增调度后热更新调度器失败: {e}")
 
     return ApiResponse(data=ScheduleOut.model_validate(sched))
 
@@ -73,8 +75,8 @@ async def update_schedule(
     try:
         from backend.scheduler.task_scheduler import task_scheduler
         await task_scheduler.reload_jobs()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"更新调度后热更新调度器失败: {e}")
 
     return ApiResponse(data=ScheduleOut.model_validate(sched))
 
@@ -97,7 +99,7 @@ async def delete_schedule(
     try:
         from backend.scheduler.task_scheduler import task_scheduler
         await task_scheduler.reload_jobs()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"删除调度后热更新调度器失败: {e}")
 
     return ApiResponse()

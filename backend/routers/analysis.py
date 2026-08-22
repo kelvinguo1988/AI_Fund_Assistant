@@ -103,6 +103,19 @@ def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResul
     )
 
 
+async def _batch_load_funds(db: AsyncSession, results: list[AnalysisResult]) -> dict[int, Fund]:
+    """批量加载基金，避免 N+1 查询。
+
+    一次 SELECT ... WHERE id IN (...) 取回所有需要的 Fund，
+    返回 {fund_id: Fund} 映射，供 _result_to_out 使用。
+    """
+    fund_ids = {r.fund_id for r in results}
+    if not fund_ids:
+        return {}
+    fund_result = await db.execute(select(Fund).where(Fund.id.in_(fund_ids)))
+    return {f.id: f for f in fund_result.scalars().all()}
+
+
 @router.get("", response_model=ApiResponse[list[AnalysisResultOut]])
 async def query_analysis(
     date_param: Optional[str] = Query(None, alias="date"),
@@ -119,11 +132,8 @@ async def query_analysis(
     result = await db.execute(stmt)
     results = result.scalars().all()
 
-    out_list = []
-    for r in results:
-        fund_result = await db.execute(select(Fund).where(Fund.id == r.fund_id))
-        fund = fund_result.scalars().first()
-        out_list.append(_result_to_out(r, fund))
+    fund_map = await _batch_load_funds(db, results)
+    out_list = [_result_to_out(r, fund_map.get(r.fund_id)) for r in results]
 
     return ApiResponse(data=out_list)
 
@@ -143,11 +153,8 @@ async def get_latest_analysis(db: AsyncSession = Depends(get_db)):
     result = await db.execute(stmt)
     results = result.scalars().all()
 
-    out_list = []
-    for r in results:
-        fund_result = await db.execute(select(Fund).where(Fund.id == r.fund_id))
-        fund = fund_result.scalars().first()
-        out_list.append(_result_to_out(r, fund))
+    fund_map = await _batch_load_funds(db, results)
+    out_list = [_result_to_out(r, fund_map.get(r.fund_id)) for r in results]
 
     return ApiResponse(data=out_list)
 
@@ -172,9 +179,9 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
     signal_summary = SignalSummary(total=len(analysis_list))
     out_list: list[AnalysisResultOut] = []
 
+    fund_map = await _batch_load_funds(db, list(analysis_list))
     for r in analysis_list:
-        fund_result = await db.execute(select(Fund).where(Fund.id == r.fund_id))
-        fund = fund_result.scalars().first()
+        fund = fund_map.get(r.fund_id)
         out = _result_to_out(r, fund)
         out_list.append(out)
         if out.signal_direction == "buy":

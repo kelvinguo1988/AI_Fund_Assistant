@@ -122,7 +122,7 @@ async def run_with_timeout(
         Exception: 原函数抛出的异常
     """
     sem = semaphore if semaphore is not None else _AKSHARE_SEM
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     partial = functools.partial(func, *args, **kwargs)
 
     async def _run():
@@ -172,7 +172,7 @@ async def run_batch_with_timeout(
         return []
 
     sem = asyncio.Semaphore(max_concurrency)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     async def _run_one(item: Any) -> Any:
         args, kwargs = arg_extractor(item)

@@ -4,7 +4,7 @@ from typing import Optional
 
 from datetime import date, datetime
 
-from sqlalchemy import Float, String, Integer, Date, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Float, String, Integer, Date, Text, DateTime, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -16,6 +16,8 @@ class AnalysisResult(Base):
     __tablename__ = "analysis_results"
     __table_args__ = (
         UniqueConstraint("fund_id", "analysis_date", name="uq_fund_date"),
+        Index("ix_analysis_results_fund_id", "fund_id"),
+        Index("ix_analysis_results_analysis_date", "analysis_date"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)

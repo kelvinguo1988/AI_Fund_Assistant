@@ -67,6 +67,32 @@ class AnalysisService:
             for r in records
         ]
 
+    async def _batch_load_quarterly_data(self, fund_ids: list[int]) -> dict[int, list[dict]]:
+        """批量加载多只基金的季度扩展数据，避免 N+1 查询。
+
+        一次 SELECT ... WHERE fund_id IN (...) 取回全部季度数据，
+        返回 {fund_id: [季度数据dict, ...]} 映射。
+        """
+        if not fund_ids:
+            return {}
+        result = await self.db.execute(
+            select(FundQuarterly)
+            .where(FundQuarterly.fund_id.in_(fund_ids))
+            .order_by(FundQuarterly.fund_id, FundQuarterly.report_date)
+        )
+        records = result.scalars().all()
+        by_fund: dict[int, list[dict]] = {}
+        for r in records:
+            by_fund.setdefault(r.fund_id, []).append({
+                "report_date": r.report_date,
+                "effective_date": r.effective_date,
+                "fund_size": r.fund_size,
+                "stock_position_ratio": r.stock_position_ratio,
+                "institution_holding_ratio": r.institution_holding_ratio,
+                "insider_holding_shares": r.insider_holding_shares,
+            })
+        return by_fund
+
     async def run_analysis(
         self,
         fund_ids: Optional[list[int]] = None,
@@ -142,12 +168,16 @@ class AnalysisService:
         )
 
         # 串行加载季度数据 + 计算因子（AsyncSession 非并发安全）
+        # 批量加载季度数据，避免 N+1 查询
+        valid_fund_ids = [f.id for f, fd in fetch_results if fd is not None]
+        quarterly_batch = await self._batch_load_quarterly_data(valid_fund_ids)
+
         for fund, fund_data in fetch_results:
             if fund_data is None:
                 continue
             try:
                 fund_data_map[fund.code] = fund_data
-                quarterly = await self._load_quarterly_data(fund.id)
+                quarterly = quarterly_batch.get(fund.id, [])
                 quarterly_data_map[fund.code] = quarterly
                 factor_scores = factor_engine.calculate_all(fund_data, active_factors)
                 all_factor_results[fund.code] = factor_scores
@@ -213,6 +243,8 @@ class AnalysisService:
             if result_out:
                 results.append(result_out)
 
+        # 统一提交所有分析结果（替代原来逐条 commit，60 只基金=1 次提交）
+        await self.db.commit()
         return results
 
     async def run_analysis_streaming(
@@ -270,12 +302,15 @@ class AnalysisService:
         quarterly_data_map: dict[str, list[dict]] = {}
         failed_codes: list[str] = []
 
+        # 批量预加载季度数据，避免在循环内 N+1 查询
+        quarterly_batch = await self._batch_load_quarterly_data([f.id for f in funds])
+
         for i, fund in enumerate(funds):
             try:
                 fund_data = await self.data_source.get_fund_data(fund.code, fund_type=getattr(fund, "fund_type", None))
                 fund_data_map[fund.code] = fund_data
 
-                quarterly = await self._load_quarterly_data(fund.id)
+                quarterly = quarterly_batch.get(fund.id, [])
                 quarterly_data_map[fund.code] = quarterly
 
                 factor_scores = factor_engine.calculate_all(fund_data, active_factors)
@@ -345,6 +380,10 @@ class AnalysisService:
                     chunk_results.append(result_out)
                     results.append(result_out)
 
+            # 批量提交本 chunk 的结果（替代原来逐条 commit）
+            if chunk_results:
+                await self.db.commit()
+
             if chunk_results:
                 chunk_data = {
                     "type": "chunk",
@@ -411,7 +450,7 @@ class AnalysisService:
             await self.db.flush()
             analysis_id = new_result.id
 
-        await self.db.commit()
+        # 不在此处 commit，由调用方在循环结束后统一提交，避免逐条提交（60 只=60 次提交）
 
         return AnalysisResultOut(
             id=analysis_id,
@@ -456,9 +495,15 @@ class AnalysisService:
         records = result.scalars().all()
 
         items: list[AnalysisExportItem] = []
+        # 批量加载基金，避免 N+1 查询
+        fund_ids = {r.fund_id for r in records}
+        if fund_ids:
+            fund_result = await self.db.execute(select(Fund).where(Fund.id.in_(fund_ids)))
+            fund_map = {f.id: f for f in fund_result.scalars().all()}
+        else:
+            fund_map = {}
         for r in records:
-            fund_result = await self.db.execute(select(Fund).where(Fund.id == r.fund_id))
-            fund = fund_result.scalars().first()
+            fund = fund_map.get(r.fund_id)
             factor_scores = json.loads(r.factor_scores) if isinstance(r.factor_scores, str) else (r.factor_scores or {})
 
             item = AnalysisExportItem(

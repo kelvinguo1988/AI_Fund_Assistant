@@ -29,7 +29,8 @@ services:
     volumes:
       - ./data:/app/data
       # 基金名称缓存文件（19699 只基金名称映射，避免容器启动时重新拉取）
-      - ./fund_name_cache.json:/app/fund_name_cache.json:ro
+      # 可写挂载：容器内新增基金的名称缓存可持久化更新
+      - ./fund_name_cache.json:/app/fund_name_cache.json
     expose:
       - "8000"
     # Container Station 兼容：frontend 通过 Docker 网关 IP + 本端口访问 backend
