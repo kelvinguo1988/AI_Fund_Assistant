@@ -31,6 +31,60 @@ import { fundApi } from '../api/fund';
 import type { FundOut, FundCreate, FundUpdate } from '../types';
 import ConfirmDialog from '../components/ConfirmDialog';
 
+// ── 导入 JSON 解析辅助：兼容多种结构与字段名（防止"导入没反应"）──
+// 修复前：只认 data.items + 硬编码 code/name，字段名/结构不匹配时全失败，
+// 且成功提示吞掉 errors → 用户看到绿色"导入完成"但列表无变化，误以为没反应。
+type RawItem = Record<string, any>;
+
+function _pick(raw: RawItem, keys: string[]): string {
+  for (const k of keys) {
+    const v = raw[k];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+const CODE_KEYS = ['code', 'fund_code', 'fundCode', '基金代码', '代码'];
+const NAME_KEYS = ['name', 'fund_name', 'fundName', '基金名称', '名称'];
+const TAG_KEYS = ['tags', 'tag', '标签', '基金标签'];
+
+/**
+ * 解析导入文本（JSON）。
+ * 兼容：顶层数组 / {items} / {funds} / {data}；
+ * 字段名兼容 code|fund_code|基金代码|代码 与 name|基金名称|名称 等。
+ * 返回规整后的 items 以及解析错误（JSON 非法、结构无法识别）。
+ */
+function parseImportJson(text: string): {
+  items: { code: string; name: string; tags?: string }[];
+  errors: string[];
+} {
+  const errors: string[] = [];
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch (e: any) {
+    errors.push('JSON 解析失败: ' + (e?.message || '格式错误'));
+    return { items: [], errors };
+  }
+  let raw: any[] = [];
+  if (Array.isArray(data)) raw = data;
+  else if (data && Array.isArray(data.items)) raw = data.items;
+  else if (data && Array.isArray(data.funds)) raw = data.funds;
+  else if (data && Array.isArray(data.data)) raw = data.data;
+  else {
+    errors.push('未识别的 JSON 结构（需为数组，或含 items/funds/data 字段的对象）');
+    return { items: [], errors };
+  }
+  const items = raw
+    .map((it: RawItem) => ({
+      code: _pick(it, CODE_KEYS),
+      name: _pick(it, NAME_KEYS),
+      tags: _pick(it, TAG_KEYS) || undefined,
+    }))
+    .filter((it) => it.code && it.name);
+  return { items, errors };
+}
+
 /** 主题标签颜色调色板：高区分度色值，同主题始终映射到同色 */
 const THEME_COLORS = [
   '#1976D2', '#388E3C', '#F57C00', '#7B1FA2',
@@ -310,18 +364,27 @@ const FundPool: React.FC = () => {
     if (!file) return;
     try {
       const text = await file.text();
-      const data = JSON.parse(text);
-      const items = (data.items || []).map((item: any) => ({
-        code: item.code,
-        name: item.name,
-        tags: item.tags || undefined,
-      }));
-      if (!items.length) { setSnackbar({ open: true, message: 'JSON 中没有基金数据', severity: 'error' }); return; }
-      const res = await fundApi.batchImport(items);
-      setSnackbar({ open: true, message: `导入完成: 新建${res.data?.created || 0} 跳过${(res.data?.skipped || []).length}`, severity: 'success' });
+      const parsed = parseImportJson(text);
+      if (parsed.errors.length) {
+        setSnackbar({ open: true, message: `导入失败: ${parsed.errors.join('；')}`, severity: 'error' });
+        return;
+      }
+      if (!parsed.items.length) {
+        setSnackbar({ open: true, message: 'JSON 中未找到有效基金（需含 code/name 或 基金代码/名称 等字段）', severity: 'error' });
+        return;
+      }
+      const res = await fundApi.batchImport(parsed.items);
+      const d = res.data || { total: parsed.items.length, created: 0, skipped: [], errors: [] };
+      const parts = [`导入完成：新建 ${d.created || 0}`, `跳过 ${(d.skipped || []).length}`];
+      if ((d.errors || []).length) parts.push(`失败 ${(d.errors || []).length}`);
+      setSnackbar({
+        open: true,
+        message: parts.join('，'),
+        severity: (d.errors || []).length ? 'warning' : 'success',
+      });
       loadFunds();
     } catch (err: any) {
-      setSnackbar({ open: true, message: `导入失败: ${err.message || ''}`, severity: 'error' });
+      setSnackbar({ open: true, message: `导入失败: ${err?.message || ''}`, severity: 'error' });
     }
     if (jsonInputRef.current) jsonInputRef.current.value = '';
   };
@@ -468,17 +531,33 @@ const FundPool: React.FC = () => {
         <DialogActions>
           <Button onClick={() => setImportOpen(false)} disabled={_importing}>关闭</Button>
           <Button variant="contained" onClick={async () => {
-            const lines = importText.split('\n').filter(Boolean);
-            const items = lines.map((line) => {
-              const parts = line.trim().split(/\s+/);
-              return { code: parts[0], name: parts[1] || '', tags: parts.slice(2).join(',') || undefined };
-            }).filter((item) => item.code);
+            const trimmed = importText.trim();
+            let items: { code: string; name: string; tags?: string }[] = [];
+            let parseErr = '';
+            // 兼容在文本框直接粘贴 JSON（与"导入JSON"文件入口共用解析）
+            if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+              const p = parseImportJson(importText);
+              if (p.errors.length) parseErr = p.errors.join('；');
+              else items = p.items;
+            } else {
+              const lines = importText.split('\n').filter(Boolean);
+              items = lines.map((line) => {
+                const parts = line.trim().split(/\s+/);
+                return { code: parts[0], name: parts[1] || '', tags: parts.slice(2).join(',') || undefined };
+              }).filter((item) => item.code);
+            }
+            if (parseErr) {
+              setSnackbar({ open: true, message: '批量导入失败: ' + parseErr, severity: 'error' });
+              return;
+            }
             if (items.length === 0) return;
             setImporting(true);
             try {
               const res = await fundApi.batchImport(items);
-              setImportResult(res.data || { total: items.length, created: 0, skipped: [], errors: [] });
-              if (res.data && res.data.created > 0) loadFunds();
+              const d = res.data || { total: items.length, created: 0, skipped: [], errors: [] };
+              setImportResult(d);
+              // 无论新建还是跳过都刷新列表（数据已与后端同步）
+              loadFunds();
             } catch (err: any) {
               const detail = err?.response?.data?.detail || err?.message || '';
               console.error('批量导入失败:', detail, err);
