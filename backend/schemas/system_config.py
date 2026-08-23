@@ -2,7 +2,7 @@
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AIConfigUpdate(BaseModel):
@@ -15,6 +15,10 @@ class AIConfigUpdate(BaseModel):
 
 class AIModelPreset(BaseModel):
     """预设模型配置"""
+    # model_name 字段与 pydantic v2 的 "model_" 保护命名空间冲突，
+    # 产生 UserWarning；显式关闭保护命名空间消除启动警告（字段无歧义）
+    model_config = ConfigDict(protected_namespaces=())
+
     key: str = Field(..., description="模型标识: deepseek / glm / tongyi / openai")
     label: str = Field(..., description="显示名称")
     base_url: str = Field(..., description="默认 Base URL")

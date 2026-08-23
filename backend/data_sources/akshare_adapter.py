@@ -53,6 +53,12 @@ class AKShareAdapter(BaseDataSource):
     # 避免每只基金重复请求同一接口。51 只基金原实现会产生 100+ 次重复调用。
     _bond_yield_cache: Optional[float] = None
     _bond_yield_ts: float = 0.0
+    # 失败冷却：获取失败后在此窗口内直接返回 None，不再重试。
+    # 2026-08-23 回归修复：原"失败缓存 2.7"改为"失败返 None 不缓存"后，
+    # None 永不命中缓存条件 → 60 只基金每次分析都穿透重试 2 个网络策略
+    # → 请求风暴 → 东财断连(RemoteDisconnected) + 容器 DNS 过载(name resolution)。
+    _bond_yield_fail_ts: float = 0.0
+    _BOND_YIELD_FAIL_COOLDOWN: float = 600.0  # 失败冷却 10 分钟
     _benchmark_cache: Optional[list[float]] = None
     _benchmark_ts: float = 0.0
     _index_value_cache: dict[str, tuple[float, pd.DataFrame]] = {}  # {index_code: (ts, df)}
@@ -655,6 +661,10 @@ class AKShareAdapter(BaseDataSource):
         ):
             return AKShareAdapter._bond_yield_cache
 
+        # 失败冷却检查：冷却期内直接返回 None，防止请求风暴
+        if now - AKShareAdapter._bond_yield_fail_ts < AKShareAdapter._BOND_YIELD_FAIL_COOLDOWN:
+            return None
+
         # 获取锁后再次检查（double-checked locking）
         lock = self._get_lock('_bond_yield_lock')
         async with lock:
@@ -666,6 +676,10 @@ class AKShareAdapter(BaseDataSource):
             ):
                 logger.debug(f"国债收益率命中缓存（锁内复用）: {AKShareAdapter._bond_yield_cache}")
                 return AKShareAdapter._bond_yield_cache
+
+            # 锁内冷却检查：等锁期间前序协程已失败并进入冷却，直接返回不重试
+            if now - AKShareAdapter._bond_yield_fail_ts < AKShareAdapter._BOND_YIELD_FAIL_COOLDOWN:
+                return None
 
             # 策略 1: 尝试全局指数估值表获取无风险利率参考
             # 优化：优先复用 _fill_pe_pb_for_etf 已缓存的 000300 数据，
@@ -722,5 +736,10 @@ class AKShareAdapter(BaseDataSource):
 
             # 回退：不再硬编码 2.7% 假数据，返回 None 由引擎层显式降级
             # （与 factor_engine.py 的 2.5% 默认值叠加会基于过时利率假设产生信号）
-            logger.warning("国债收益率实时接口不可用，返回 None 由引擎降级")
+            # 记录失败时间戳进入冷却期，防止每只基金分析都穿透重试（请求风暴）
+            AKShareAdapter._bond_yield_fail_ts = now
+            logger.warning(
+                "国债收益率实时接口不可用，返回 None 由引擎降级（%.0f 分钟冷却）",
+                AKShareAdapter._BOND_YIELD_FAIL_COOLDOWN / 60,
+            )
             return None
