@@ -7,7 +7,7 @@ import random
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +30,7 @@ from backend.services.fund_detail_service import fetch_period_returns
 from backend.services.fund_holding_service import get_latest_holdings, refresh_holdings
 from backend.services.fund_manager_service import get_current_managers, refresh_managers
 from backend.services.fund_change_detector import get_fund_changes
-from backend.services.fund_service import FundService, classify_and_sort_funds
+from backend.services.fund_service import FundService, classify_and_sort_funds, enrich_fund_themes
 from backend.services.fund_refresh_task import get_refresh_state, run_refresh_all_details
 
 router = APIRouter()
@@ -149,6 +149,7 @@ async def delete_fund(
 @router.post("/import", response_model=ApiResponse[dict])
 async def import_funds(
     body: dict,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """批量导入基金
@@ -166,6 +167,10 @@ async def import_funds(
         raise HTTPException(status_code=400, detail="items 不能为空")
     svc = FundService(db)
     result = await svc.batch_import(items)
+    # 主题标签补全移出请求主流程，后台异步执行，避免导入因东财网络卡死/超时
+    created_codes = result.get("created_codes") or []
+    if created_codes:
+        background_tasks.add_task(enrich_fund_themes, created_codes)
     return ApiResponse(data=result)
 
 

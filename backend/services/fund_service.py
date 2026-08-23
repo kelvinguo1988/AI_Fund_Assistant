@@ -161,13 +161,15 @@ class FundService:
         """批量导入基金
 
         已有代码跳过不重复创建，其余自动识别类型并创建。
-        导入完成后会逐个抓取天天基金相关主题并合并到标签中。
+        导入仅做数据库写入（毫秒级返回）；相关主题标签改由后台任务
+        `enrich_fund_themes` 异步补全，避免东财网络慢/反爬导致导入请求
+        卡死或超时（曾表现为前端"服务器内部错误"）。
 
         Args:
             items: [{"code": "000001", "name": "示例基金", "tags": "宽基"}]
 
         Returns:
-            {"total": 3, "created": 2, "skipped": ["000001"], "errors": []}
+            {"total": 3, "created": 2, "skipped": ["000001"], "errors": [], "created_codes": [...]}
         """
         created = 0
         skipped: list[str] = []
@@ -175,56 +177,51 @@ class FundService:
         created_codes: list[str] = []
 
         logger.info("批量导入 %d 个基金", len(items))
-        for item in items:
-            code = str(item.get("code", "")).strip()
-            name = str(item.get("name", "")).strip()
-            tags = str(item.get("tags", "")).strip() or None
+        try:
+            for item in items:
+                code = str(item.get("code", "")).strip()
+                name = str(item.get("name", "")).strip()
+                tags = str(item.get("tags", "")).strip() or None
 
-            if not code or not name:
-                errors.append(f"代码或名称为空: {item}")
-                continue
-            if not re.match(r"^\d{6}$", code):
-                errors.append(f"代码格式无效: {code}")
-                continue
-
-            try:
-                existing = await self.get_fund_by_code(code)
-                if existing:
-                    skipped.append(code)
+                if not code or not name:
+                    errors.append(f"代码或名称为空: {item}")
+                    continue
+                if not re.match(r"^\d{6}$", code):
+                    errors.append(f"代码格式无效: {code}")
                     continue
 
-                fund = Fund(
-                    code=code,
-                    name=name,
-                    fund_type=_guess_fund_type(code),
-                    tags=tags,
-                    status="active",
-                )
-                self.db.add(fund)
-                await self.db.flush()
-                created_codes.append(code)
-                created += 1
-            except Exception as e:
-                errors.append(f"{code}: {e}")
-                continue
-
-        await self.db.commit()
-
-        # 对新创建的基金抓取相关主题（仅当未手动填写标签时）
-        if created_codes:
-            logger.info("开始抓取 %d 个新基金的相关主题", len(created_codes))
-            for code in created_codes:
                 try:
-                    fund_obj = await self.get_fund_by_code(code)
-                    if fund_obj and not fund_obj.tags:
-                        themes = await run_with_timeout(fetch_related_themes, code, timeout=20.0)
-                        if themes:
-                            merged = _merge_tags(None, themes)
-                            if merged != fund_obj.tags:
-                                fund_obj.tags = merged
+                    existing = await self.get_fund_by_code(code)
+                    if existing:
+                        skipped.append(code)
+                        continue
+
+                    fund = Fund(
+                        code=code,
+                        name=name,
+                        fund_type=_guess_fund_type(code),
+                        tags=tags,
+                        status="active",
+                    )
+                    self.db.add(fund)
+                    await self.db.flush()
+                    created_codes.append(code)
+                    created += 1
                 except Exception as e:
-                    logger.warning("抓取基金 %s 主题时异常: %s", code, e)
+                    errors.append(f"{code}: {e}")
+                    continue
+
+            # 单处提交；失败整体回滚，绝不抛 500 给前端
             await self.db.commit()
+        except Exception as e:
+            logger.exception("批量导入提交失败，已回滚: %s", e)
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            errors.append(f"数据库提交失败: {e}")
+            created = 0
+            created_codes = []
 
         logger.info("批量导入完成: total=%d created=%d skipped=%d errors=%d",
                      len(items), created, len(skipped), len(errors))
@@ -235,7 +232,46 @@ class FundService:
             "created": created,
             "skipped": skipped,
             "errors": errors,
+            "created_codes": created_codes,
         }
+
+async def enrich_fund_themes(codes: list[str]) -> None:
+    """后台任务：为新导入基金异步补全相关主题标签
+
+    原实现在导入请求内同步抓取东财主题，因东财反爬/网络慢，单只即耗时数秒，
+    整池导入（百只级）动辄数分钟，前端 120s 超时或网关 504 → 误报"服务器内部错误"。
+    现改为请求返回后异步执行：不阻塞导入；任一基金失败仅告警，不影响其余。
+    """
+    if not codes:
+        return
+    from backend.database import async_session_factory
+
+    async with async_session_factory() as session:
+        for code in codes:
+            try:
+                result = await session.execute(select(Fund).where(Fund.code == code))
+                fund = result.scalars().first()
+                # 仅当确实无标签时补全，用户手动填写的不覆盖
+                if fund is None or fund.tags:
+                    continue
+                themes = await run_with_timeout(fetch_related_themes, code, timeout=20.0)
+                if themes:
+                    merged = _merge_tags(None, themes)
+                    if merged and merged != fund.tags:
+                        fund.tags = merged
+                        await session.flush()
+                        logger.info("基金 %s 主题补全: %s", code, merged)
+            except Exception as e:
+                logger.warning("后台主题补全失败 %s: %s", code, e)
+        try:
+            await session.commit()
+        except Exception as e:
+            logger.warning("后台主题写入失败，已回滚: %s", e)
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+
 
     async def refresh_themes(self, fund_id: int) -> Optional[Fund]:
         """刷新指定基金的相关主题

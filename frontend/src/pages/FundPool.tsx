@@ -384,7 +384,10 @@ const FundPool: React.FC = () => {
       });
       loadFunds();
     } catch (err: any) {
-      setSnackbar({ open: true, message: `导入失败: ${err?.message || ''}`, severity: 'error' });
+      // 优先展示服务器返回的真实错误明细（detail），便于排查；否则用拦截器文案
+      const detail = err?.response?.data?.detail;
+      const msg = detail ? `导入失败: ${detail}` : (err?.message || '未知错误');
+      setSnackbar({ open: true, message: msg, severity: 'error' });
     }
     if (jsonInputRef.current) jsonInputRef.current.value = '';
   };
