@@ -5,9 +5,11 @@
 # ============================================================================
 #
 # QNAP Container Station 兼容说明：
-# - 使用 extra_hosts 将 backend 写入 /etc/hosts，不依赖 Docker DNS
-# - backend 暴露端口 8000，frontend 通过 Docker 网关 IP 访问 backend
-# - links 作为额外保护层
+# - 前后端置于同一自定义桥接网络 fund-quant-network，依靠 Docker 内置
+#   DNS（127.0.0.11）解析服务名 backend，不依赖 host-gateway / links
+#   （Container Station 均不支持，会导致 backend 不可解析 / 502）。
+# - nginx 通过 resolver 127.0.0.11 在运行时动态解析 backend，直连容器
+#   网络，绝不经由宿主机网关 IP（容器间经网关不可达，会 Connection refused）。
 # ============================================================================
 
 services:
@@ -50,6 +52,10 @@ services:
         max-size: "50m"
         max-file: "3"
 
+    # 与 frontend 同处自定义桥接网络，供 Docker DNS 解析服务名 backend
+    networks:
+      - fund-quant-network
+
   # ── 前端服务 ──────────────────────────────────────────────────────────
   frontend:
     build:
@@ -59,15 +65,13 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
-    extra_hosts:
-      # host-gateway 自动解析为 Docker 宿主机网关 IP（默认 172.17.0.1）
-      # 即使 Container Station 不支持自定义网络和 links，/etc/hosts 也能生效
-      - "backend:host-gateway"
     depends_on:
       - backend
-    # links 在 /etc/hosts 中添加 backend 解析，作为 extra_hosts 的补充
-    links:
-      - backend
+    # 与 backend 同处自定义桥接网络；不再使用 host-gateway / links
+    # （Container Station 不支持，会导致 backend 不可解析 / 502）。
+    # nginx 经 Docker 内置 DNS（127.0.0.11）在运行时解析 backend 并直连。
+    networks:
+      - fund-quant-network
 
     # 日志配置（防止日志无限增长）
     logging:
@@ -75,3 +79,8 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+# ── 自定义桥接网络：前后端共享，供 Docker 内置 DNS 解析服务名 ────────────
+networks:
+  fund-quant-network:
+    driver: bridge

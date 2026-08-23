@@ -10,6 +10,9 @@ services:
     image: ghcr.io/kelvinguo1988/ai_fund_assistant/backend:latest
     container_name: ai-fund-backend
     restart: unless-stopped
+    # 与 frontend 同处自定义桥接网络，供 Docker DNS 解析服务名 backend
+    networks:
+      - fund-quant-network
 
     # ⚠️ 必须使用绝对路径！Container Station 会将相对路径解析到 /tmp/
     # 请将下方路径改为你的 .env 实际位置
@@ -46,9 +49,10 @@ services:
       - "80:80"
     depends_on:
       - backend
-    # links 在 /etc/hosts 中添加 backend 解析，解决 Container Station DNS 问题
-    links:
-      - backend
+    # 与 backend 同处自定义桥接网络；不使用 links（Container Station 不支持，
+    # 且会导致 backend 不可解析 / 502）。nginx 经 Docker 内置 DNS 直连 backend。
+    networks:
+      - fund-quant-network
 
     # 日志配置（防止日志无限增长占满NAS存储）
     logging:
@@ -56,3 +60,8 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+# ── 自定义桥接网络：前后端共享，供 Docker 内置 DNS 解析服务名 ────────────
+networks:
+  fund-quant-network:
+    driver: bridge
