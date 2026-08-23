@@ -134,15 +134,30 @@ async def run_refresh_all_details() -> None:
                 async with progress_lock:
                     state.current = f"{fund.code} {fund.name}"
                 result = {"code": fund.code, "name": fund.name}
-                try:
-                    async with async_session_factory() as fund_db:
-                        await refresh_holdings(fund_db, fund.id, fund.code)
-                        await refresh_managers(fund_db, fund.id, fund.code)
-                        await fund_db.commit()
-                    result["status"] = "ok"
-                except Exception as e:
-                    logger.warning("刷新基金 %s 详情异常: %s", fund.code, e)
-                    result["error"] = str(e)
+                last_err = None
+                # SQLite 并发写（5 并发）在锁竞争剧烈时仍可能短暂报
+                # "database is locked"（即使已启用 WAL + busy_timeout=30s）。
+                # 对锁错误做有限重试（写操作原子，重试安全），避免持仓/经理
+                # 数据因瞬时锁竞争而丢失；非锁类异常直接记录不重试。
+                for _attempt in range(4):
+                    try:
+                        async with async_session_factory() as fund_db:
+                            await refresh_holdings(fund_db, fund.id, fund.code)
+                            await refresh_managers(fund_db, fund.id, fund.code)
+                            await fund_db.commit()
+                        result["status"] = "ok"
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        last_err = e
+                        if "database is locked" in str(e).lower():
+                            await asyncio.sleep(0.3 * (_attempt + 1))
+                            continue
+                        logger.warning("刷新基金 %s 详情异常: %s", fund.code, e)
+                        break
+                else:
+                    logger.warning("刷新基金 %s 详情异常(锁重试耗尽): %s", fund.code, last_err)
+                if last_err is not None and result.get("status") != "ok":
+                    result["error"] = str(last_err)
 
                 async with progress_lock:
                     done_counter[0] += 1

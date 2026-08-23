@@ -24,6 +24,12 @@ RUN npm run build
 # ── 阶段2: Nginx 生产服务 ─────────────────────────────────────────────
 FROM nginx:alpine AS serve
 
+# 设置时区为北京时间（让 nginx 日志时间戳显示 +0800 而非 UTC）
+ENV TZ=Asia/Shanghai
+RUN apk add --no-cache tzdata && \
+    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone
+
 # 移除默认 nginx 配置
 RUN rm /etc/nginx/conf.d/default.conf
 

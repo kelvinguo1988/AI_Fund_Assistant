@@ -18,6 +18,11 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
     future=True,
+    # SQLite 并发写保护：busy_timeout=30s 让并发写（后台 refresh 5 并发）
+    # 排队等待而非立即报 "database is locked"（默认 5s 在高频并发下偶发失败，
+    # 导致部分基金持仓/经理数据写入丢失）。timeout 由 aiosqlite 透传给
+    # sqlite3.connect，等价于 PRAGMA busy_timeout=30000。
+    connect_args={"timeout": 30},
 )
 
 async_session_factory = async_sessionmaker(
@@ -65,8 +70,12 @@ async def init_db() -> None:
         HolidayCalendar,
     )
 
-    # 建表
+    # 建表（先确保 WAL 模式，避免并发刷新触发 database is locked）
+    # WAL 让读写互不阻塞，配合上面的 busy_timeout=30s 可彻底消除后台
+    # 5 并发刷新时的 "database is locked"（曾导致部分基金持仓/经理数据
+    # 写入丢失）。journal_mode 持久化在数据库文件上，设一次即可。
     async with engine.begin() as conn:
+        await conn.execute(text("PRAGMA journal_mode=WAL;"))
         await conn.run_sync(Base.metadata.create_all)
 
     # ── 迁移合集 ──
