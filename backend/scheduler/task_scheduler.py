@@ -63,6 +63,10 @@ class TaskScheduler:
                             id=f"schedule_{sched.id}",
                             args=[sched.id],
                             replace_existing=True,
+                            # 防止长任务与下一次触发重叠执行；错过触发点 5 分钟内补跑
+                            max_instances=1,
+                            coalesce=True,
+                            misfire_grace_time=300,
                         )
                         logger.info(f"已加载调度: {sched.name} (id={sched.id})")
                 except Exception as e:
@@ -176,6 +180,9 @@ class TaskScheduler:
                 trigger=trigger,
                 id="holiday_auto_sync",
                 replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=300,
             )
             logger.info(f"已注册调休自动同步任务 (每日 {tmpl})")
         except Exception as e:  # noqa: BLE001

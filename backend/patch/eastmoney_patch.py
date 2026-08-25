@@ -148,7 +148,9 @@ def apply_patch():
         if nid:
             headers["Cookie"] = f"nid18={nid}"
         kwargs["headers"] = headers
-        time.sleep(random.uniform(1, 4))
+        # 抖动上限从 4s 降至 2s：该 sleep 在 16 个 worker 线程内逐请求执行，
+        # 与信号量(5)叠加后 4s 抖动会把有效吞吐压到每请求 3s+，成为并发抓取的瓶颈
+        time.sleep(random.uniform(0.5, 2))
         return original_request(self, method, url, **kwargs)
 
     requests.Session.request = patched_request

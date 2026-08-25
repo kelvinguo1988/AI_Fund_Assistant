@@ -48,7 +48,8 @@ if [ ! -f .env ]; then
     if [ -f .env.example ]; then
         info "从 .env.example 复制创建 .env ..."
         cp .env.example .env
-        warn "请编辑 .env 文件，填写 AI_API_KEY 等必要配置后再重新运行"
+        warn "请按需编辑 .env（JoinQuant 账号等，可全部留空直接使用）"
+        warn "注意: AI API Key 和飞书 Webhook 不在 .env 配置，启动后在 Web 界面「系统配置/推送渠道」中设置"
         warn "编辑命令: nano .env 或 vim .env"
         exit 0
     else

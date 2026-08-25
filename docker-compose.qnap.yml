@@ -28,6 +28,8 @@ services:
     # 持久化数据库
     volumes:
       - /share/Container/AI_Fund_Assistant/data:/app/data
+      # 基金名称缓存（与生产 compose 一致，可写挂载避免容器重建丢失缓存）
+      - /share/Container/AI_Fund_Assistant/fund_name_cache.json:/app/fund_name_cache.json
 
     expose:
       - "8000"

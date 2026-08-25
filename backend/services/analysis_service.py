@@ -179,7 +179,10 @@ class AnalysisService:
                 fund_data_map[fund.code] = fund_data
                 quarterly = quarterly_batch.get(fund.id, [])
                 quarterly_data_map[fund.code] = quarterly
-                factor_scores = factor_engine.calculate_all(fund_data, active_factors)
+                # numpy 密集计算放线程池，避免阻塞事件循环（批量分析时拖慢所有并发请求）
+                factor_scores = await asyncio.to_thread(
+                    factor_engine.calculate_all, fund_data, active_factors
+                )
                 all_factor_results[fund.code] = factor_scores
                 logger.info(f"因子计算完成: {fund.code} ({fund.name}), {len(factor_scores)} 个因子")
             except Exception as e:
@@ -187,7 +190,9 @@ class AnalysisService:
                 continue
 
         # 6. 跨基金截面标准化
-        all_factor_results = factor_engine.normalize_cross_sectional(all_factor_results, active_factors)
+        all_factor_results = await asyncio.to_thread(
+            factor_engine.normalize_cross_sectional, all_factor_results, active_factors
+        )
 
         # 7. 逐只基金评分 + 信号 + 存储
         results: list[AnalysisResultOut] = []
@@ -313,7 +318,9 @@ class AnalysisService:
                 quarterly = quarterly_batch.get(fund.id, [])
                 quarterly_data_map[fund.code] = quarterly
 
-                factor_scores = factor_engine.calculate_all(fund_data, active_factors)
+                factor_scores = await asyncio.to_thread(
+                    factor_engine.calculate_all, fund_data, active_factors
+                )
                 all_factor_results[fund.code] = factor_scores
             except Exception as e:
                 logger.error(f"获取/计算基金 {fund.code} 失败: {e}")
@@ -323,7 +330,9 @@ class AnalysisService:
             yield "data: " + json.dumps(progress_data) + "\n\n"
 
         # 5. 跨基金截面标准化
-        all_factor_results = factor_engine.normalize_cross_sectional(all_factor_results, active_factors)
+        all_factor_results = await asyncio.to_thread(
+            factor_engine.normalize_cross_sectional, all_factor_results, active_factors
+        )
 
         # ── Phase 2: 分块评分 + 存储 + 推送结果 ──
         results: list[AnalysisResultOut] = []

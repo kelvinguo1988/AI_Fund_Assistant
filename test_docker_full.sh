@@ -15,7 +15,7 @@ echo ""
 # 等待服务启动
 echo "[1/4] 等待后端服务启动..."
 for i in $(seq 1 30); do
-    if curl -s http://localhost:8000/health | grep -q "healthy"; then
+    if curl -s http://localhost:8000/health | grep -q '"ok"'; then
         echo "  后端服务已启动 (尝试 $i/30)"
         break
     fi

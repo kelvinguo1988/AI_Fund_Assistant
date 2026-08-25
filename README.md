@@ -32,10 +32,10 @@ AI_Fund_Assistant/
 │   ├── src/api/                # API 客户端
 │   ├── src/hooks/              # 自定义 Hooks（AI 对话、分析）
 │   └── nginx.conf              # Nginx（API 反向代理 + SPA）
-├── config/                     # 全局配置
+├── android/                    # Android 原生客户端（Kotlin/Compose，独立构建，不参与 Docker 部署；服务器地址在 App 内配置）
 ├── docker-compose.yml          # 一键部署（生产 + 开发模式）
 ├── .env.example
-└── requirements.txt
+└── backend/requirements.txt
 ```
 
 ---

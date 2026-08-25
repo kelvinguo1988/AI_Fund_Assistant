@@ -60,6 +60,13 @@ async def lifespan(app: FastAPI):
     # ── Shutdown ──
     task_scheduler.shutdown()
 
+    # 释放数据库连接池
+    try:
+        from backend.database import engine
+        await engine.dispose()
+    except Exception as e:
+        logger.warning(f"关闭数据库引擎失败: {e}")
+
     # 关闭 akshare 独立线程池，避免孤儿线程残留
     try:
         from backend.utils.concurrency import shutdown_pool
