@@ -244,19 +244,25 @@ def check_ecg_pattern(
     if annual_vol >= cfg["ecg_annual_vol_pct"]:
         return False
 
-    # 检查脉冲次数
+    # 检查脉冲次数：单日涨幅超阈值后，在 revert_days 内至少回吐一半脉冲涨幅
+    # 2026-08-26 修复：原判定 np.min(future_norm) < high 恒为真（前面的区间
+    # 检查已保证所有值 ≤ high），"脉冲后跌回"校验形同虚设。改为要求脉冲后
+    # 净值至少回落到脉冲涨幅一半的位置，才是真正的"心电图式脉冲回吐"。
     spike_pct = cfg["ecg_spike_pct"]
     revert_days = cfg["ecg_spike_revert_days"]
     spike_count = 0
 
     for i in range(len(returns)):
-        if returns[i] > spike_pct:
-            # 检查是否在 revert_days 内跌回区间
-            end_idx = min(i + 1 + revert_days, len(normalized))
-            if end_idx > i + 1:
-                future_norm = normalized[i + 1:end_idx]
-                if float(np.min(future_norm)) < high:
-                    spike_count += 1
+        if returns[i] <= spike_pct:
+            continue
+        pre_close = prices[i]
+        spike_close = prices[i + 1]
+        end_idx = min(i + 1 + revert_days, len(prices))
+        future = prices[i + 2:end_idx]
+        if len(future) > 0:
+            revert_level = pre_close + 0.5 * (spike_close - pre_close)
+            if float(np.min(future)) <= revert_level:
+                spike_count += 1
 
     if spike_count >= cfg["ecg_spike_min_count"]:
         logger.info(
@@ -313,14 +319,7 @@ def check_liquidation_risk(
                 )
                 return True
 
-    # 仅两条时检查
-    shrink = (prev_size - latest_size) / prev_size
-    if (shrink > cfg["liquidation_shrink_pct"]
-            and latest_size < cfg["liquidation_min_size"]
-            and len(active_records) == 2):
-        # 只有两条记录，只看最近一次缩减
-        # 严格来说需要"连续两个季报"，数据不足时保守处理
-        pass
+    # 不足三条季报时无法判断"连续两个季报"缩减，保守放行
 
     return False
 
@@ -377,13 +376,9 @@ def calc_excess_return_persistence(
             or len(fund_data.benchmark_history) < 130):
         return 0
 
-    fund_prices = np.array(fund_data.close_history)
-    bench_prices = np.array(fund_data.benchmark_history)
-
-    # 对齐长度
-    min_len = min(len(fund_prices), len(bench_prices))
-    fund_prices = fund_prices[-min_len:]
-    bench_prices = bench_prices[-min_len:]
+    from backend.engines.factor_engine import align_price_series
+    fund_prices, bench_prices = align_price_series(fund_data)
+    min_len = len(fund_prices)
 
     windows = cfg["excess_windows_days"]  # [21, 63, 126]
     all_positive = True
@@ -614,7 +609,9 @@ def apply_factor_corrections(
         elif code == "trend_consistency":
             trend_idx = i
 
-    # 修正1: 波动率倒数得分 × (0.5 + 0.5 × 动量稳定性)
+    # 修正1: 波动率倒数截面标准化后的离散分 × (0.5 + 0.5 × 动量稳定性)
+    # 注意：此修正实际作用于截面标准化之后的分数（-1~+1），而非原始 inv_vol，
+    # 效果是"动量不稳定的基金正分被压向 0"，只缩幅不翻向。
     if inv_vol_idx is not None and momentum_stability is not None:
         original_score = corrected_scores[inv_vol_idx].score
         multiplier = 0.5 + 0.5 * momentum_stability

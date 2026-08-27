@@ -52,46 +52,52 @@ def ema(data: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
-def rolling_mean(data: np.ndarray, period: int) -> np.ndarray:
-    """滚动均值"""
-    if len(data) < period or period <= 0:
-        return np.array([float(np.mean(data))] * len(data)) if len(data) > 0 else data
-    result = np.zeros_like(data, dtype=float)
-    cumsum = np.cumsum(data)
-    result[period - 1] = cumsum[period - 1] / period
-    for i in range(period, len(data)):
-        result[i] = (cumsum[i] - cumsum[i - period]) / period
-    result[:period - 1] = result[period - 1]
-    return result
-
-
-def rolling_std(data: np.ndarray, period: int) -> np.ndarray:
-    """滚动标准差"""
-    if len(data) < period:
-        return np.array([float(np.std(data))] * len(data)) if len(data) > 0 else data
-    result = np.zeros_like(data, dtype=float)
-    for i in range(period - 1, len(data)):
-        result[i] = float(np.std(data[i - period + 1:i + 1]))
-    result[:period - 1] = result[period - 1]
-    return result
-
-
-def shift(data: np.ndarray, n: int) -> np.ndarray:
-    """向前移位，前 n 个元素用第一个值填充"""
-    result = np.zeros_like(data)
-    if len(data) <= n:
-        result[:] = data[0]
-        return result
-    result[n:] = data[:-n]
-    result[:n] = data[0]
-    return result
-
-
 def percentile_rank(value: float, history: np.ndarray) -> float:
     """计算 value 在 history 中的百分位排名 (0~1)"""
     if len(history) == 0:
         return 0.5
     return float(np.sum(history <= value)) / len(history)
+
+
+def align_price_series(fund_data: FundData) -> tuple[np.ndarray, np.ndarray]:
+    """按日期交集对齐基金净值与基准指数序列
+
+    基准（沪深300）是全交易日序列，基金净值存在停牌缺日/新基金历史短，
+    按索引对齐会在错位日产生虚假超额收益（info_ratio / 超额持续性失真）。
+    任一侧日期序列缺失或长度不匹配时，退化为尾部等长对齐（旧行为，兼容旧调用方）。
+
+    Returns:
+        (fund_prices, bench_prices)：同长度、同日期序的两个价格序列
+    """
+    fund_prices = np.array(fund_data.close_history, dtype=float)
+    bench_prices = np.array(fund_data.benchmark_history, dtype=float)
+
+    fund_dates = fund_data.date_history or []
+    bench_dates = getattr(fund_data, "benchmark_date_history", None) or []
+    if (
+        fund_dates and bench_dates
+        and len(fund_dates) == len(fund_prices)
+        and len(bench_dates) == len(bench_prices)
+    ):
+        bench_map = dict(zip(bench_dates, bench_prices))
+        pairs = [
+            (p, bench_map[d])
+            for d, p in zip(fund_dates, fund_prices)
+            if d in bench_map
+        ]
+        if len(pairs) >= 2:
+            if len(pairs) < len(fund_prices):
+                logger.info(
+                    f"基准日期对齐: {len(fund_prices)} → {len(pairs)} 行 "
+                    f"(code={fund_data.code})"
+                )
+            return (
+                np.array([a for a, _ in pairs]),
+                np.array([b for _, b in pairs]),
+            )
+
+    min_len = min(len(fund_prices), len(bench_prices))
+    return fund_prices[-min_len:], bench_prices[-min_len:]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -200,8 +206,11 @@ def calculate_price_percentile(fund_data: FundData, params: Optional[dict] = Non
     """
     window = (params or {}).get("window", 1250)
 
-    current_close = fund_data.close or fund_data.pe
+    current_close = fund_data.close
     if current_close is None:
+        # 2026-08-26 修复：原代码回退用 PE 对净值历史算百分位——量纲差一个数量级
+        # （PE≈20 vs 净值≈1.5），pct 恒为 1.0，该基金永远拿 -1.0 垃圾分。
+        # close 缺失时直接返回中性分。
         logger.warning(f"价格百分位数据不足 code={fund_data.code}")
         return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative")
 
@@ -235,7 +244,13 @@ def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> F
         return FactorScoreResult("fed_model", "股债性价比FED", 0.0, 0.0, "positive")
 
     earnings_yield = 1.0 / fund_data.pe * 100
-    bond = fund_data.bond_yield if fund_data.bond_yield is not None else 2.5
+    # 2026-08-26 修复：原代码 bond_yield 缺失时静默填 2.5 —— 实际利率偏离时
+    # 0.5pp 误差足以翻转一档信号。与数据源侧"失败返 None 不造假数据"策略
+    # 保持一致：缺失时返回中性分。
+    bond = fund_data.bond_yield
+    if bond is None:
+        logger.warning(f"股债性价比FED无债券收益率数据 code={fund_data.code}，返回中性")
+        return FactorScoreResult("fed_model", "股债性价比FED", 0.0, 0.0, "positive")
     fed_value = earnings_yield - bond
 
     rules = [
@@ -268,7 +283,9 @@ def calculate_momentum_6m(fund_data: FundData, params: Optional[dict] = None) ->
         return FactorScoreResult("momentum_6m", "动量因子", 0.0, 0.0, "positive")
 
     recent_returns = returns[-window:]
-    total_return = prices[-1] / prices[-window] - 1 if window < len(prices) else 0.0
+    # 2026-08-26 修复 off-by-one：prices[-window] 只有 window-1 个交易日区间，
+    # 与分母 returns[-window:]（window 个区间）不一致；改用 prices[-window-1]
+    total_return = prices[-1] / prices[-window - 1] - 1
     vol = float(np.std(recent_returns))
     momentum = total_return / (vol * np.sqrt(window)) if vol > 0 else 0.0
 
@@ -324,16 +341,10 @@ def calculate_info_ratio(fund_data: FundData, params: Optional[dict] = None) -> 
         logger.warning(f"信息比率数据不足 code={fund_data.code}")
         return FactorScoreResult("info_ratio", "信息比率", 0.0, 0.0, "positive")
 
-    fund_prices = np.array(fund_data.close_history)
-    bench_prices = np.array(fund_data.benchmark_history)
+    fund_prices, bench_prices = align_price_series(fund_data)
 
     fund_returns = np.diff(fund_prices) / fund_prices[:-1]
     bench_returns = np.diff(bench_prices) / bench_prices[:-1]
-
-    # 对齐长度
-    min_len = min(len(fund_returns), len(bench_returns))
-    fund_returns = fund_returns[-min_len:]
-    bench_returns = bench_returns[-min_len:]
 
     excess = fund_returns - bench_returns
     recent_excess = excess[-window:]
@@ -433,7 +444,9 @@ def calculate_size_stability(fund_data: FundData, params: Optional[dict] = None)
         return FactorScoreResult("size_stability", "规模稳定性", 0.0, 0.0, "positive")
 
     size_cv = std_size / mean_size
-    stability = 1.0 / size_cv
+    # cap=5：规模几乎不变时 1/CV 无界（CV=0.1% → stability=1000），
+    # 若该因子未配置截面标准化，原始值直接进加权求和会打爆总分
+    stability = min(1.0 / size_cv, 5.0)
 
     # 规模调整因子（当前最新规模）
     latest_size = sizes[-1]
@@ -443,7 +456,7 @@ def calculate_size_stability(fund_data: FundData, params: Optional[dict] = None)
     elif latest_size > 1e10:
         bonus = -0.1
 
-    final = stability + bonus
+    final = min(stability, 5.0) + bonus
 
     return FactorScoreResult("size_stability", "规模稳定性", round(final, 4), round(final, 4), "positive")
 
@@ -466,7 +479,7 @@ def calculate_short_momentum(fund_data: FundData, params: Optional[dict] = None)
         return FactorScoreResult("short_momentum", "短期动量", 0.0, 0.0, "positive")
 
     prices = np.array(fund_data.close_history)
-    mom = prices[-1] / prices[-window] - 1
+    mom = prices[-1] / prices[-window - 1] - 1
 
     # Z-score 因子返回 raw_value 作为 score，供截面标准化使用
     return FactorScoreResult("short_momentum", "短期动量", round(mom, 6), round(mom, 6), "positive")
@@ -484,7 +497,7 @@ def calculate_mid_momentum(fund_data: FundData, params: Optional[dict] = None) -
         return FactorScoreResult("mid_momentum", "中期动量", 0.0, 0.0, "positive")
 
     prices = np.array(fund_data.close_history)
-    mom = prices[-1] / prices[-window] - 1
+    mom = prices[-1] / prices[-window - 1] - 1
 
     return FactorScoreResult("mid_momentum", "中期动量", round(mom, 6), round(mom, 6), "positive")
 
@@ -557,8 +570,8 @@ def calculate_momentum_accel(fund_data: FundData, params: Optional[dict] = None)
         return FactorScoreResult("momentum_accel", "动量加速度", 0.0, 0.0, "positive")
 
     prices = np.array(fund_data.close_history)
-    mom20 = prices[-1] / prices[-short_w] - 1
-    mom60 = prices[-1] / prices[-mid_w] - 1
+    mom20 = prices[-1] / prices[-short_w - 1] - 1
+    mom60 = prices[-1] / prices[-mid_w - 1] - 1
     accel = mom20 - mom60
 
     return FactorScoreResult("momentum_accel", "动量加速度", round(accel, 6), round(accel, 6), "positive")
@@ -582,8 +595,8 @@ def calculate_trend_consistency(fund_data: FundData, params: Optional[dict] = No
         return FactorScoreResult("trend_consistency", "趋势一致性", 0.0, 0.0, "positive")
 
     prices = np.array(fund_data.close_history)
-    mom20 = prices[-1] / prices[-short_w] - 1
-    mom60 = prices[-1] / prices[-mid_w] - 1
+    mom20 = prices[-1] / prices[-short_w - 1] - 1
+    mom60 = prices[-1] / prices[-mid_w - 1] - 1
 
     sign20 = 1.0 if mom20 > 0 else -1.0 if mom20 < 0 else 0.0
     sign60 = 1.0 if mom60 > 0 else -1.0 if mom60 < 0 else 0.0
@@ -650,6 +663,9 @@ class FactorEngine:
             code = factor.get("code", "")
             name = factor.get("name", code)
             params_str = factor.get("params", "{}")
+            # direction 仅作元数据展示，此处不做翻转：内置因子的信号规则已编码方向
+            # （如 price_percentile 的规则本身就是"低位高分"），若在此按 direction
+            # 翻转 score 会把已按负向设计的因子反向，产生错误信号
             direction = factor.get("direction", "positive")
 
             if isinstance(params_str, str):

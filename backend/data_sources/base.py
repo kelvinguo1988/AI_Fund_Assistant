@@ -33,6 +33,7 @@ class FundData:
     # ── 指数数据 ──
     index_close: Optional[float] = None  # 关联指数收盘价
     benchmark_history: list[float] = field(default_factory=list)  # 基准指数（沪深300）收盘价序列
+    benchmark_date_history: list[str] = field(default_factory=list)  # 基准日期序列（与收盘价一一对应，用于按日期对齐）
     # ── 债券收益率 ──
     bond_yield: Optional[float] = None   # 10年国债收益率
     # ── 规模数据 ──

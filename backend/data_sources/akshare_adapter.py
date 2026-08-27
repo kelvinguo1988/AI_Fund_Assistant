@@ -60,6 +60,7 @@ class AKShareAdapter(BaseDataSource):
     _bond_yield_fail_ts: float = 0.0
     _BOND_YIELD_FAIL_COOLDOWN: float = 600.0  # 失败冷却 10 分钟
     _benchmark_cache: Optional[list[float]] = None
+    _benchmark_dates_cache: Optional[list[str]] = None
     _benchmark_ts: float = 0.0
     _index_value_cache: dict[str, tuple[float, pd.DataFrame]] = {}  # {index_code: (ts, df)}
     _SHARED_CACHE_TTL: float = 3600.0  # 共享数据缓存 1 小时
@@ -560,6 +561,7 @@ class AKShareAdapter(BaseDataSource):
             and now - AKShareAdapter._benchmark_ts < AKShareAdapter._SHARED_CACHE_TTL
         ):
             fund_data.benchmark_history = AKShareAdapter._benchmark_cache
+            fund_data.benchmark_date_history = AKShareAdapter._benchmark_dates_cache or []
             logger.debug(f"基准指数数据命中缓存: {len(fund_data.benchmark_history)} 行")
             return
 
@@ -573,6 +575,7 @@ class AKShareAdapter(BaseDataSource):
                 and now - AKShareAdapter._benchmark_ts < AKShareAdapter._SHARED_CACHE_TTL
             ):
                 fund_data.benchmark_history = AKShareAdapter._benchmark_cache
+                fund_data.benchmark_date_history = AKShareAdapter._benchmark_dates_cache or []
                 logger.debug(f"基准指数数据命中缓存（锁内复用）: {len(fund_data.benchmark_history)} 行")
                 return
 
@@ -581,9 +584,14 @@ class AKShareAdapter(BaseDataSource):
                 df = df.tail(period + 10)
                 df = df.sort_values("date")
                 history = df["close"].astype(float).tolist()
+                # 日期序列与收盘价一一对应，供 info_ratio/超额持续性按日期对齐
+                # （基准是全交易日序列，基金净值有停牌缺日，按索引对齐会产生虚假超额）
+                dates = [str(d)[:10] for d in df["date"].tolist()]
                 fund_data.benchmark_history = history
+                fund_data.benchmark_date_history = dates
                 # 写入缓存
                 AKShareAdapter._benchmark_cache = history
+                AKShareAdapter._benchmark_dates_cache = dates
                 AKShareAdapter._benchmark_ts = now
                 logger.info(f"基准指数数据填充完成: {len(history)} 行（首次网络请求）")
 

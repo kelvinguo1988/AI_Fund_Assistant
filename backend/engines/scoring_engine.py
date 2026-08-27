@@ -256,9 +256,9 @@ def compute_with_quality_filter(
     else:
         advice += f"建议持有观望，维持基准仓位 {int(equity * 100)}%"
 
-    # 5. 汇总警告
+    # 5. 汇总警告（去重：build_result 与 determine_signal 对漂移会生成相同文案）
     warnings = list(quality_result.warnings)
-    if warning:
+    if warning and warning not in warnings:
         warnings.append(warning)
 
     return SignalResult(
