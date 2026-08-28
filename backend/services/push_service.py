@@ -84,6 +84,33 @@ class PushService:
             try:
                 from backend.services.market_service import MarketService
                 MarketService.clear_cache()
+
+                # 市场环境摘要（估值分位/情绪/资金面）——置于全景报告头部
+                market_regime_md = None
+                try:
+                    from backend.services.market_regime_service import MarketRegimeService
+                    snap = await MarketRegimeService().get_snapshot()
+                    regime_lines = []
+                    if snap.valuation_percentile is not None:
+                        regime_lines.append(
+                            f"- 大盘估值：沪深300 PE 分位 **{snap.valuation_percentile:.0%}**"
+                            f"（当前 PE {snap.valuation_current_pe}，{snap.valuation_date}）"
+                        )
+                    if snap.adv_decline_ratio is not None:
+                        regime_lines.append(
+                            f"- 市场情绪：涨跌家数比 {snap.adv_decline_ratio:+.2f}"
+                            f"（涨 {snap.up_count} / 跌 {snap.down_count}）"
+                        )
+                    if snap.margin_change_pct_7d is not None:
+                        regime_lines.append(
+                            f"- 资金面：两融余额 7 日变化 **{snap.margin_change_pct_7d:+.2%}**"
+                            f"（{snap.margin_date}）"
+                        )
+                    if regime_lines:
+                        market_regime_md = "**市场环境**\n" + "\n".join(regime_lines)
+                except Exception as re_:
+                    logger.warning(f"市场环境摘要生成失败: {re_}")
+                    market_regime_md = None
                 svc = MarketService()
                 from backend.schemas.market import MarketSummaryOut, SignalSummary
 
@@ -139,6 +166,9 @@ class PushService:
                 market_summary_md = report_engine.generate_market_summary_markdown(
                     market_summary, enabled_items=enabled_market
                 )
+                # 市场环境摘要拼接在全景报告头部
+                if market_regime_md:
+                    market_summary_md = f"{market_regime_md}\n\n{market_summary_md}"
 
                 # 同步更新仪表盘行情缓存，确保推送后仪表盘看到的是最新数据
                 try:
@@ -193,6 +223,7 @@ class PushService:
                                 signal_strength=r.signal_strength,
                                 operation_advice=r.operation_advice,
                                 equity_ratio=getattr(r, "equity_ratio", 0.5),
+                                quality_warnings=getattr(r, "quality_warnings", None) or [],
                             )
 
                             report_md = report_engine.generate_markdown(

@@ -140,8 +140,9 @@ class ScoringEngine:
             weighted_sum += score.score * weight
 
         raw_score = weighted_sum
-        # 钳位到理论范围（8 因子体系总权重 6.4）
-        normalized = round(max(-6.4, min(6.4, weighted_sum)), 2)
+        # 钳位到理论范围：用户 7 因子总权重 6.5 + 市场环境 3 因子 1.8 = 8.3
+        # （旧 8 因子体系 6.4；钳位放宽不影响旧因子集的分数分布）
+        normalized = round(max(-8.5, min(8.5, weighted_sum)), 2)
 
         # 加载阈值配置并判定信号
         thresholds = self._load_thresholds(thresholds_json)
@@ -230,7 +231,7 @@ def compute_with_quality_filter(
 
     # 2. 加偏置得到最终评分
     adjusted_score = original_score + quality_result.institution_bias
-    adjusted_score = round(max(-6.4, min(6.4, adjusted_score)), 2)
+    adjusted_score = round(max(-8.5, min(8.5, adjusted_score)), 2)
 
     # 3. 动态阈值决策
     from backend.engines.quality_filter import determine_signal

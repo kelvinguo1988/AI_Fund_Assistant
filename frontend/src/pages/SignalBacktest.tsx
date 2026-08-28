@@ -78,24 +78,21 @@ const SignalBacktest: React.FC = () => {
     const navReturns = data.points.map((p) => p.nav_return);
     const strategyReturns = data.points.map((p) => p.strategy_return);
 
-    // 信号标注
+    // 信号标注：scatter 在 category 轴上须用 [类目值, y值] 数对格式
+    // （{xAxis, yAxis} 对象格式仅对 markPoint 生效，series.data 中不渲染）
     const buyMarkers = data.points
       .filter((p) => p.signal_direction === 'buy')
       .map((p) => ({
+        value: [p.date, p.nav_return],
         name: STRENGTH_LABELS[p.signal_strength || ''] || '买入',
-        xAxis: p.date,
-        yAxis: p.nav_return,
-        value: p.weighted_score,
         itemStyle: { color: '#e53935' },
       }));
 
     const sellMarkers = data.points
       .filter((p) => p.signal_direction === 'sell')
       .map((p) => ({
+        value: [p.date, p.nav_return],
         name: STRENGTH_LABELS[p.signal_strength || ''] || '卖出',
-        xAxis: p.date,
-        yAxis: p.nav_return,
-        value: p.weighted_score,
         itemStyle: { color: '#43a047' },
       }));
 
@@ -279,7 +276,7 @@ const SignalBacktest: React.FC = () => {
       )}
 
       {/* ── 信号评分表格 ── */}
-      {result && result.points.filter((p) => p.signal_direction).length > 0 && (
+      {result && result.points.filter((p) => p.signal_direction === 'buy' || p.signal_direction === 'sell').length > 0 && (
         <Paper sx={{ p: 2, mt: 3 }}>
           <Typography variant="subtitle1" sx={{ mb: 1 }}>
             信号有效性明细（{result.effectiveness_window} 日窗口）
@@ -298,7 +295,7 @@ const SignalBacktest: React.FC = () => {
               </TableHead>
               <TableBody>
                 {result.points
-                  .filter((p) => p.signal_direction)
+                  .filter((p) => p.signal_direction === 'buy' || p.signal_direction === 'sell')
                   .map((p) => {
                     const eff = p.signal_effectiveness;
                     const ok = eff != null && eff >= 50;

@@ -31,6 +31,7 @@ import {
   Divider,
   Tabs,
   Tab,
+  LinearProgress,
 } from '@mui/material';
 import { Refresh as RefreshIcon, PlayArrow as PlayArrowIcon } from '@mui/icons-material';
 import SignalIndicator from '../components/SignalIndicator';
@@ -38,7 +39,7 @@ import ScoreGauge from '../components/ScoreGauge';
 import FactorRadarChart from '../components/FactorRadarChart';
 import { analysisApi } from '../api/analysis';
 import { fundApi } from '../api/fund';
-import type { AnalysisResultOut, FundOut, MarketSummaryOut, SectorFlowItem } from '../types';
+import type { AnalysisResultOut, FundOut, MarketSummaryOut, MarketRegimeOut, SectorFlowItem } from '../types';
 
 const STRENGTH_COLOR_MAP: Record<string, 'error' | 'success' | 'default'> = {
   heavy_buy: 'error',
@@ -59,9 +60,15 @@ const formatAmount = (v: number): string => {
 
 const flowColor = (v: number): string => v > 0 ? '#f44336' : v < 0 ? '#4caf50' : '#999';
 
+/** 估值分位配色：高位红（贵）/低位绿（便宜）/中位橙 */
+const regimeColor = (pct: number): string => pct > 0.6 ? '#f44336' : pct < 0.4 ? '#4caf50' : '#ff9800';
+const regimeLabel = (pct: number): string =>
+  pct > 0.8 ? '高估' : pct > 0.6 ? '偏贵' : pct < 0.2 ? '低估' : pct < 0.4 ? '偏便宜' : '中性';
+
 const Dashboard: React.FC = () => {
   const [results, setResults] = useState<AnalysisResultOut[]>([]);
   const [summary, setSummary] = useState<MarketSummaryOut | null>(null);
+  const [regime, setRegime] = useState<MarketRegimeOut | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'info' });
@@ -105,10 +112,14 @@ const Dashboard: React.FC = () => {
   const loadCached = async () => {
     setLoading(true);
     try {
-      const [res, sumRes] = await Promise.all([
+      const [res, sumRes, regimeRes] = await Promise.all([
         analysisApi.latest(),
         analysisApi.summary().catch(() => null),
+        analysisApi.marketRegime().catch(() => null),
       ]);
+      if (regimeRes?.data) {
+        setRegime(regimeRes.data);
+      }
       if (res.data) {
         setResults(res.data);
         if (res.data.length > 0 && !selectedFund) {
@@ -395,6 +406,82 @@ const Dashboard: React.FC = () => {
                   <br />
                   <Typography variant="caption" sx={{ color: flowColor(summary.turnover.change_pct) }}>
                     较上日 {summary.turnover.change_pct >= 0 ? '+' : ''}{summary.turnover.change_pct}%
+                  </Typography>
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary">暂无数据</Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+      </Grid>
+
+      {/* ── 市场环境 — 估值分位 / 情绪 / 资金面 ── */}
+      <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>市场环境</Typography>
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        {/* 大盘估值分位 */}
+        <Grid item xs={4}>
+          <Card variant="outlined">
+            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>大盘估值分位（沪深300 PE 近5年）</Typography>
+              {regime?.valuation_percentile != null ? (
+                <Box>
+                  <Typography variant="h4" sx={{ color: regimeColor(regime.valuation_percentile) }}>
+                    {(regime.valuation_percentile * 100).toFixed(0)}%
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    当前 PE {regime.valuation_current_pe} · {regime.valuation_date}
+                    {' '}· {regimeLabel(regime.valuation_percentile)}
+                  </Typography>
+                  <LinearProgress
+                    variant="determinate"
+                    value={regime.valuation_percentile * 100}
+                    sx={{ mt: 1, height: 6, borderRadius: 3 }}
+                    color={regime.valuation_percentile > 0.6 ? 'error' : regime.valuation_percentile < 0.4 ? 'success' : 'warning'}
+                  />
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary">暂无数据</Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* 市场情绪 */}
+        <Grid item xs={4}>
+          <Card variant="outlined">
+            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>市场情绪（涨跌家数比）</Typography>
+              {regime?.adv_decline_ratio != null ? (
+                <Box>
+                  <Typography variant="h4" sx={{ color: flowColor(regime.adv_decline_ratio) }}>
+                    {regime.adv_decline_ratio >= 0 ? '+' : ''}{regime.adv_decline_ratio.toFixed(2)}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    涨 {regime.up_count?.toLocaleString() ?? '-'} / 跌 {regime.down_count?.toLocaleString() ?? '-'}
+                  </Typography>
+                </Box>
+              ) : (
+                <Typography variant="body2" color="text.secondary">暂无数据</Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* 资金面 */}
+        <Grid item xs={4}>
+          <Card variant="outlined">
+            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>资金面（两融余额 7 日变化）</Typography>
+              {regime?.margin_change_pct_7d != null ? (
+                <Box>
+                  <Typography variant="h4" sx={{ color: flowColor(regime.margin_change_pct_7d) }}>
+                    {regime.margin_change_pct_7d >= 0 ? '+' : ''}{(regime.margin_change_pct_7d * 100).toFixed(2)}%
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    余额 {(regime.margin_balance ?? 0) / 1e12 >= 1
+                      ? `${((regime.margin_balance ?? 0) / 1e12).toFixed(2)} 万亿`
+                      : `${((regime.margin_balance ?? 0) / 1e8).toFixed(0)} 亿`} 元 · {regime.margin_date}
                   </Typography>
                 </Box>
               ) : (

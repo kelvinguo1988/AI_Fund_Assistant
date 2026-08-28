@@ -31,6 +31,14 @@ async def _prewarm_market_cache():
             return_exceptions=True,
         )
         logger.info("市场数据缓存预热完成")
+
+        # 市场环境快照预热（估值分位 xls ~2MB + 两融接口，避免首次分析串行等待）
+        try:
+            from backend.services.market_regime_service import MarketRegimeService
+            await MarketRegimeService().get_snapshot()
+            logger.info("市场环境快照预热完成")
+        except Exception as e:
+            logger.warning(f"市场环境快照预热失败: {e}")
     except Exception as e:
         logger.warning(f"市场数据缓存预热失败: {e}")
 

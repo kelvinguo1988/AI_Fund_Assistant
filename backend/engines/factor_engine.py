@@ -606,6 +606,107 @@ def calculate_trend_consistency(fund_data: FundData, params: Optional[dict] = No
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 市场环境因子（模块级快照上下文）
+# ═══════════════════════════════════════════════════════════════════════
+
+# 当前市场环境快照（MarketRegimeSnapshot 或 None）。
+# 市场环境因子不依赖单只基金的 fund_data，而是读取此模块级上下文；
+# 由 analysis_service 在每轮分析前注入，快照缺失时因子返回中性 0 分。
+_current_regime: Optional[object] = None
+
+
+def set_current_regime(snapshot: Optional[object]) -> None:
+    """注入当前市场环境快照（None 表示无数据，因子将降级为中性分）"""
+    global _current_regime
+    _current_regime = snapshot
+
+
+def get_current_regime() -> Optional[object]:
+    """读取当前市场环境快照"""
+    return _current_regime
+
+
+def _regime_field(name: str, params: Optional[dict] = None) -> Optional[float]:
+    """安全读取快照字段（快照缺失/字段为 None 时返回 None）
+
+    优先读 params["_regime_snapshot"]（分析任务注入，任务间隔离、无竞态；
+    键存在即权威——即使值为 None 也不回退全局，避免旧任务快照污染），
+    键不存在时回退模块级全局（向后兼容旧调用方）。
+    """
+    if params is not None and "_regime_snapshot" in params:
+        regime = params["_regime_snapshot"]
+    else:
+        regime = _current_regime
+    if regime is None:
+        return None
+    return getattr(regime, name, None)
+
+
+def calculate_market_valuation(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """大盘估值分位 — 负向（低分位=便宜=高分）
+
+    原始值: 沪深300 PE 近5年分位 (0~1)，来自 MarketRegimeService。
+    信号: ≤0.2→1.0, ≤0.4→0.5, ≤0.6→0, ≤0.8→-0.5, >0.8→-1.0
+    快照缺失时返回中性 0 分。
+    """
+    pct = _regime_field("valuation_percentile", params)
+    if pct is None:
+        return FactorScoreResult("market_valuation", "大盘估值分位", 0.0, 0.0, "negative")
+
+    rules = [
+        {"condition": "<= 0.2", "score": 1.0},
+        {"condition": "<= 0.4", "score": 0.5},
+        {"condition": "<= 0.6", "score": 0.0},
+        {"condition": "<= 0.8", "score": -0.5},
+        {"condition": "> 0.8", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(pct, rules)
+    return FactorScoreResult("market_valuation", "大盘估值分位", round(pct, 4), score, "negative")
+
+
+def calculate_market_sentiment(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """市场情绪 — 正向
+
+    原始值: 全市场涨跌家数比 (up-down)/(up+down)，-1~1。
+    信号: >0.5→1.0, >0.2→0.5, ≥-0.2→0, ≥-0.5→-0.5, else→-1.0
+    """
+    ratio = _regime_field("adv_decline_ratio", params)
+    if ratio is None:
+        return FactorScoreResult("market_sentiment", "市场情绪", 0.0, 0.0, "positive")
+
+    rules = [
+        {"condition": "> 0.5", "score": 1.0},
+        {"condition": "> 0.2", "score": 0.5},
+        {"condition": ">= -0.2", "score": 0.0},
+        {"condition": ">= -0.5", "score": -0.5},
+        {"condition": "else", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(ratio, rules)
+    return FactorScoreResult("market_sentiment", "市场情绪", round(ratio, 4), score, "positive")
+
+
+def calculate_market_fund_flow(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
+    """资金面 — 正向（杠杆资金流入为正）
+
+    原始值: 上交所融资融券余额 7 日变化率。
+    信号: >0.03→1.0, >0.01→0.5, ≥-0.01→0, ≥-0.03→-0.5, else→-1.0
+    """
+    change = _regime_field("margin_change_pct_7d", params)
+    if change is None:
+        return FactorScoreResult("market_fund_flow", "资金面", 0.0, 0.0, "positive")
+
+    rules = [
+        {"condition": "> 0.03", "score": 1.0},
+        {"condition": "> 0.01", "score": 0.5},
+        {"condition": ">= -0.01", "score": 0.0},
+        {"condition": ">= -0.03", "score": -0.5},
+        {"condition": "else", "score": -1.0},
+    ]
+    score = evaluate_signal_rules(change, rules)
+    return FactorScoreResult("market_fund_flow", "资金面", round(change, 6), score, "positive")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 因子注册表
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -626,6 +727,10 @@ FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreRe
     "return_risk_ratio": calculate_return_risk_ratio,
     "momentum_accel": calculate_momentum_accel,
     "trend_consistency": calculate_trend_consistency,
+    # 市场环境 3 因子（读模块级 regime 快照，所有基金同分）
+    "market_valuation": calculate_market_valuation,
+    "market_sentiment": calculate_market_sentiment,
+    "market_fund_flow": calculate_market_fund_flow,
 }
 
 

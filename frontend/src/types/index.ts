@@ -394,6 +394,20 @@ export interface MarketSummaryOut {
   updated_at?: string | null;
 }
 
+/* ── 市场环境快照（估值分位/情绪/资金面） ─────────────────────────── */
+export interface MarketRegimeOut {
+  fetched_at: string;
+  valuation_percentile: number | null;   // 沪深300 PE 近5年分位 0~1
+  valuation_date: string | null;
+  valuation_current_pe: number | null;
+  adv_decline_ratio: number | null;     // 涨跌家数比 -1~1
+  up_count: number | null;
+  down_count: number | null;
+  margin_balance: number | null;        // 上交所两融余额（元）
+  margin_change_pct_7d: number | null;  // 7 日变化率
+  margin_date: string | null;
+}
+
 /* ── 基金阶段涨幅 ──────────────────────────────────────────────────── */
 export interface FundPeriodReturn {
   code: string;

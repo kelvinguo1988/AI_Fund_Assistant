@@ -141,6 +141,10 @@ class TaskScheduler:
 
                 # 执行分析
                 from backend.config import settings
+                # 市场环境快照含盘中实时指标（涨跌家数）：调度分析前清缓存，
+                # 避免复用盘中旧快照污染收盘后的分析（与 MarketService 清缓存模式一致）
+                from backend.services.market_regime_service import MarketRegimeService
+                MarketRegimeService.clear_cache()
                 svc = AnalysisService(
                     session,
                     joinquant_user=settings.JOINQUANT_USER,

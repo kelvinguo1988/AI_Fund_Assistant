@@ -36,6 +36,23 @@ logger = logging.getLogger(__name__)
 _STREAM_CHUNK_SIZE = 5
 
 
+def _inject_regime_params(params_json, snapshot) -> dict:
+    """把市场环境快照注入因子 params（_ 前缀 = 引擎内部字段，不落库）
+
+    calculate_all 接受 dict 或 JSON 字符串形式的 params；这里返回 dict，
+    快照对象以 "_regime_snapshot" 键原样传递给市场环境因子。
+    """
+    import json as _json
+    try:
+        params = _json.loads(params_json) if params_json else {}
+    except (TypeError, ValueError):
+        params = {}
+    if not isinstance(params, dict):
+        params = {}
+    params["_regime_snapshot"] = snapshot
+    return params
+
+
 class AnalysisService:
     """分析编排服务"""
 
@@ -142,6 +159,22 @@ class AnalysisService:
         merged_qf_config = await merge_quality_config(self.db)
         qf = build_quality_filter(merged_qf_config)
 
+        # 5.5 获取市场环境快照（市场环境因子 + 极端估值阈值调节）
+        # 快照随参数传递（任务间隔离，无模块级全局竞态）；
+        # 失败不阻塞主流程：快照缺失时市场因子返回中性 0 分，阈值不调节
+        try:
+            from backend.services.market_regime_service import MarketRegimeService
+            regime_snapshot = await MarketRegimeService().get_snapshot()
+        except Exception as e:
+            logger.warning(f"市场环境快照获取失败，市场因子将使用中性分: {e}")
+            regime_snapshot = None
+        # 市场环境因子不依赖 fund_data，通过 params 注入快照（_ 前缀 = 引擎内部字段）
+        regime_factors = [
+            {**f, "params": _inject_regime_params(f.get("params"), regime_snapshot)}
+            if f.get("code", "").startswith("market_") else f
+            for f in active_factors
+        ]
+
         # 6. 逐只基金获取数据 + 计算因子（第一遍）
         # 修复：原实现串行 for 循环，40-60 只基金 × (3s 限流 + 2-5s jitter + 请求耗时)
         # = 10-40 分钟。改为并发获取基金数据（网络密集型，最慢），
@@ -181,7 +214,7 @@ class AnalysisService:
                 quarterly_data_map[fund.code] = quarterly
                 # numpy 密集计算放线程池，避免阻塞事件循环（批量分析时拖慢所有并发请求）
                 factor_scores = await asyncio.to_thread(
-                    factor_engine.calculate_all, fund_data, active_factors
+                    factor_engine.calculate_all, fund_data, regime_factors
                 )
                 all_factor_results[fund.code] = factor_scores
                 logger.info(f"因子计算完成: {fund.code} ({fund.name}), {len(factor_scores)} 个因子")
@@ -191,7 +224,7 @@ class AnalysisService:
 
         # 6. 跨基金截面标准化
         all_factor_results = await asyncio.to_thread(
-            factor_engine.normalize_cross_sectional, all_factor_results, active_factors
+            factor_engine.normalize_cross_sectional, all_factor_results, regime_factors
         )
 
         # 7. 逐只基金评分 + 信号 + 存储
@@ -209,6 +242,7 @@ class AnalysisService:
                 continue
 
             qf_result, corrected_scores, corrected_weights = qf.build_result(
+                regime_snapshot=regime_snapshot,
                 fund_code=fund.code,
                 fund_data=fund_data,
                 quarterly_history=quarterly,
@@ -301,6 +335,19 @@ class AnalysisService:
         merged_qf_config = await merge_quality_config(self.db)
         qf = build_quality_filter(merged_qf_config)
 
+        # 获取市场环境快照（随参数传递，失败不阻塞主流程）
+        try:
+            from backend.services.market_regime_service import MarketRegimeService
+            regime_snapshot = await MarketRegimeService().get_snapshot()
+        except Exception as e:
+            logger.warning(f"市场环境快照获取失败，市场因子将使用中性分: {e}")
+            regime_snapshot = None
+        regime_factors = [
+            {**f, "params": _inject_regime_params(f.get("params"), regime_snapshot)}
+            if f.get("code", "").startswith("market_") else f
+            for f in active_factors
+        ]
+
         # ── Phase 1: 逐只获取数据 + 计算因子（仅推进度，不推结果） ──
         fund_data_map: dict[str, FundData] = {}
         all_factor_results: dict[str, list[FactorScoreResult]] = {}
@@ -319,7 +366,7 @@ class AnalysisService:
                 quarterly_data_map[fund.code] = quarterly
 
                 factor_scores = await asyncio.to_thread(
-                    factor_engine.calculate_all, fund_data, active_factors
+                    factor_engine.calculate_all, fund_data, regime_factors
                 )
                 all_factor_results[fund.code] = factor_scores
             except Exception as e:
@@ -331,7 +378,7 @@ class AnalysisService:
 
         # 5. 跨基金截面标准化
         all_factor_results = await asyncio.to_thread(
-            factor_engine.normalize_cross_sectional, all_factor_results, active_factors
+            factor_engine.normalize_cross_sectional, all_factor_results, regime_factors
         )
 
         # ── Phase 2: 分块评分 + 存储 + 推送结果 ──
@@ -354,6 +401,7 @@ class AnalysisService:
 
                 # 第零层：质量过滤
                 qf_result, corrected_scores, corrected_weights = qf.build_result(
+                    regime_snapshot=regime_snapshot,
                     fund_code=fund.code,
                     fund_data=fund_data,
                     quarterly_history=quarterly,

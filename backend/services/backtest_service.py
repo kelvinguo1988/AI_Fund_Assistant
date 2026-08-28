@@ -27,8 +27,28 @@ POSITION_MAP = {
 class BacktestService:
     """信号回测服务"""
 
+    # 净值短期缓存：{(fund_code, period): (timestamp, fund_data)}
+    # 用户反复回测同一基金时避免重复拉取全量净值（10 分钟内命中）
+    _nav_cache: dict[tuple[str, int], tuple[float, object]] = {}
+    _NAV_CACHE_TTL = 600.0  # 10 分钟
+
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def _get_nav_series(self, fund_code: str, period: int):
+        """获取净值序列（10 分钟缓存，失败/过期时重新拉取）"""
+        import time as _time
+        key = (fund_code, period)
+        now = _time.time()
+        cached = BacktestService._nav_cache.get(key)
+        if cached is not None and now - cached[0] < BacktestService._NAV_CACHE_TTL:
+            return cached[1]
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        adapter = AKShareAdapter()
+        fund_data = await adapter.get_fund_data(fund_code, period=period)
+        if fund_data is not None:
+            BacktestService._nav_cache[key] = (now, fund_data)
+        return fund_data
 
     async def run_backtest(
         self,
@@ -51,10 +71,8 @@ class BacktestService:
         if fund is None:
             return None
 
-        # 2. 获取净值序列
-        from backend.data_sources.akshare_adapter import AKShareAdapter
-        adapter = AKShareAdapter()
-        fund_data = await adapter.get_fund_data(fund.code, period=period)
+        # 2. 获取净值序列（10 分钟缓存）
+        fund_data = await self._get_nav_series(fund.code, period)
 
         if not fund_data.close_history or not fund_data.date_history:
             logger.warning(f"基金 {fund.code} 无净值数据")
@@ -128,6 +146,30 @@ class BacktestService:
             }
         return signal_map
 
+    @staticmethod
+    def _align_signals_to_trading_days(
+        dates: list[str], signal_map: dict[str, dict]
+    ) -> dict[str, dict]:
+        """非交易日信号前向对齐到下一个交易日
+
+        分析可能在周末/节假日手动运行，信号记录在自然日（如周六 05-23），
+        而净值序列只含交易日 → 直接按日期匹配会丢信号。
+        语义：周末生成的信号，其实际作用时点是下一个交易日。
+        同一交易日命中多个信号（周末连跑多日分析）时保留最新一条。
+        晚于净值序列末尾的信号（尚无后续交易日）丢弃。
+        """
+        import bisect
+
+        # 归一化交易日键（日期可能是 "2026-05-13" 或 "2026-05-13 00:00:00"）
+        norm_dates = [d[:10] for d in dates]
+        aligned: dict[str, dict] = {}
+        for date_key in sorted(signal_map.keys()):
+            idx = bisect.bisect_left(norm_dates, date_key)
+            if idx >= len(norm_dates):
+                continue  # 晚于序列末尾，无交易日可作用
+            aligned[norm_dates[idx]] = signal_map[date_key]  # 后写覆盖 → 保留最新
+        return aligned
+
     def _build_points(
         self,
         dates: list[str],
@@ -145,6 +187,9 @@ class BacktestService:
 
         收益累计：几何复利（非加法），strategy_nav 维护策略净值。
         """
+        # 非交易日信号（周末/节假日运行分析）前向对齐到下一交易日
+        aligned_signal_map = self._align_signals_to_trading_days(dates, signal_map)
+
         points: list[BacktestPoint] = []
         # 默认仓位（无信号时）
         default_position = 0.5
@@ -172,7 +217,7 @@ class BacktestService:
             # 查找当日信号（记录在当日点，但仓位作用于下一日）
             # 日期格式可能是 "2025-06-13 00:00:00" 或 "2025-06-13"
             date_key = d[:10]  # 取前 10 字符
-            sig = signal_map.get(date_key)
+            sig = aligned_signal_map.get(date_key)
 
             if sig:
                 direction = sig["direction"]

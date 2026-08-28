@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import type { ApiResponse, AnalysisResultOut, MarketSummaryOut } from '../types';
+import type { ApiResponse, AnalysisResultOut, MarketSummaryOut, MarketRegimeOut } from '../types';
 
 const BASE = '/api/analysis';
 
@@ -23,6 +23,10 @@ export const analysisApi = {
 
   importAnalysis: (data: any, overwrite: boolean = false) =>
     apiClient.post<ApiResponse<any>>(`${BASE}/import?overwrite=${overwrite}`, data).then((r) => r.data),
+
+  /** 市场环境快照（估值分位/情绪/资金面，后端缓存 1 小时） */
+  marketRegime: () =>
+    apiClient.get<ApiResponse<MarketRegimeOut>>(`${BASE}/market-regime`, { timeout: 60000 }).then((r) => r.data),
 
   trigger: (fundIds?: number[]) =>
     apiClient.post<ApiResponse<AnalysisResultOut[]>>(`${BASE}/trigger`, {

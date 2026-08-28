@@ -408,4 +408,5 @@ class TestScoringEngine:
     def test_clamp_to_range(self):
         scores = self._make_factor_scores([2.0])  # impossible but test clamping
         result = self.engine.compute(scores, [6.4])
-        assert result.weighted_score <= 6.4
+        # 钳位范围随因子总权重放宽：7 因子 6.5 + 市场环境 1.8 = 8.3 → 钳位 ±8.5
+        assert result.weighted_score == 8.5

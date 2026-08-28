@@ -19,7 +19,7 @@ from backend.schemas.analysis import (
     FactorScore, AnalysisResultOut,
     AnalysisExportPayload, AnalysisImportResult,
 )
-from backend.schemas.market import MarketSummaryOut, SignalSummary, MarketCapitalFlow, SectorFlowRanking, HSGTFlow, MarketAdvDecline, MarketTurnover
+from backend.schemas.market import MarketSummaryOut, SignalSummary, MarketCapitalFlow, SectorFlowRanking, HSGTFlow, MarketAdvDecline, MarketTurnover, MarketRegimeOut
 
 CACHE_KEY_MARKET = "market_summary"
 
@@ -245,6 +245,32 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
         updated_at=updated_at,
     )
     return ApiResponse(data=summary)
+
+
+@router.get("/market-regime", response_model=ApiResponse[MarketRegimeOut])
+async def get_market_regime():
+    """获取市场环境快照（大盘估值分位/市场情绪/资金面）
+
+    数据源 AKShare，服务层缓存 1 小时；单项失败对应字段为 null。
+    """
+    try:
+        from backend.services.market_regime_service import MarketRegimeService
+        snap = await MarketRegimeService().get_snapshot()
+        return ApiResponse(data=MarketRegimeOut(
+            fetched_at=snap.fetched_at,
+            valuation_percentile=snap.valuation_percentile,
+            valuation_date=snap.valuation_date,
+            valuation_current_pe=snap.valuation_current_pe,
+            adv_decline_ratio=snap.adv_decline_ratio,
+            up_count=snap.up_count,
+            down_count=snap.down_count,
+            margin_balance=snap.margin_balance,
+            margin_change_pct_7d=snap.margin_change_pct_7d,
+            margin_date=snap.margin_date,
+        ))
+    except Exception as e:
+        logger.error(f"市场环境快照获取失败: {e}")
+        raise HTTPException(status_code=500, detail=f"市场环境数据获取失败: {str(e)}")
 
 
 @router.post("/refresh-summary", response_model=ApiResponse[dict])

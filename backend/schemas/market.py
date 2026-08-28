@@ -85,3 +85,20 @@ class MarketSummaryOut(BaseModel):
     adv_decline: Optional[MarketAdvDecline] = None
     turnover: Optional[MarketTurnover] = None
     updated_at: Optional[str] = None  # 缓存数据时间
+
+
+class MarketRegimeOut(BaseModel):
+    """市场环境快照（估值分位/情绪/资金面）"""
+    fetched_at: str = ""
+    # 大盘估值：沪深300 PE 近5年分位 (0~1)
+    valuation_percentile: Optional[float] = None
+    valuation_date: Optional[str] = None
+    valuation_current_pe: Optional[float] = None
+    # 市场情绪：涨跌家数比 -1~1
+    adv_decline_ratio: Optional[float] = None
+    up_count: Optional[int] = None
+    down_count: Optional[int] = None
+    # 资金面：上交所两融余额（元）及 7 日变化率
+    margin_balance: Optional[float] = None
+    margin_change_pct_7d: Optional[float] = None
+    margin_date: Optional[str] = None

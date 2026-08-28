@@ -81,6 +81,14 @@ QUALITY_CONFIG = {
     "institution_decline_threshold_pct": 2.0, # 机构认可度：惩罚触发阈值
     "insider_growth_bonus": 0.2,              # 内部人增持：额外加分
     "insider_growth_pct": 0.20,               # 内部人增持：增长 > 20%
+
+    # ── 市场环境阈值调节（估值分位来自 MarketRegimeSnapshot）──
+    # 极端高估：买入阈值上调（泡沫期谨慎加仓）
+    "extreme_high_valuation_pct": 0.85,        # 高估警戒线：估值分位 ≥ 此值触发
+    "extreme_high_valuation_buy_increment": 1.0,  # 高估时买入阈值上调量
+    # 极端低估：买入阈值下调（便宜时更易触发买入）
+    "extreme_low_valuation_pct": 0.15,         # 低估机会线：估值分位 ≤ 此值触发
+    "extreme_low_valuation_buy_decrement": 0.5,   # 低估时买入阈值下调量
 }
 
 
@@ -121,8 +129,12 @@ PARAM_META: dict[str, tuple[str, str]] = {
     "institution_decline_penalty":        ("机构认可度：大幅下降减分",         "固定偏置"),
     "institution_min_change_pct":         ("机构认可度：最小有效变动（百分点）", "固定偏置"),
     "institution_decline_threshold_pct":  ("机构认可度：惩罚触发阈值",     "固定偏置"),
-    "insider_growth_bonus":               ("内部人增持：额外加分",                 "固定偏置"),
-    "insider_growth_pct":                 ("内部人增持：增长比例阈值",         "固定偏置"),
+    "insider_growth_bonus":              ("内部人增持：额外加分",                 "固定偏置"),
+    "insider_growth_pct":                ("内部人增持：增长比例阈值",         "固定偏置"),
+    "extreme_high_valuation_pct":        ("市场环境：高估警戒线（估值分位≥此值触发）", "市场环境阈值"),
+    "extreme_high_valuation_buy_increment": ("市场环境：高估时买入阈值上调量",     "市场环境阈值"),
+    "extreme_low_valuation_pct":         ("市场环境：低估机会线（估值分位≤此值触发）", "市场环境阈值"),
+    "extreme_low_valuation_buy_decrement":  ("市场环境：低估时买入阈值下调量",     "市场环境阈值"),
 }
 
 
@@ -146,6 +158,9 @@ class QualityFilterResult:
     size_shock_triggered: bool = False
     drift_triggered: bool = False
     drift_warning: str = ""
+    # ── 市场环境 ──
+    extreme_valuation_triggered: bool = False
+    market_regime_warning: str = ""
     # ── 固定偏置 ──
     institution_bias: float = 0.0                   # 机构认可度偏置
     # ── 最终输出 ──
@@ -648,15 +663,31 @@ def apply_factor_corrections(
 # 6. 动态阈值决策函数
 # ═══════════════════════════════════════════════════════════════════════
 
+_SENTINEL = object()  # 区分"未传参"（回退全局）与"显式传 None"（无快照）
+
+
+def _resolve_regime(regime_snapshot=_SENTINEL):
+    """解析市场环境快照：显式传入优先（含 None=无数据），未传时回退模块级全局"""
+    if regime_snapshot is not _SENTINEL:
+        return regime_snapshot
+    from backend.engines.factor_engine import get_current_regime
+    return get_current_regime()
+
+
 def compute_dynamic_thresholds(
     size_shock: bool,
     drift: bool,
     cfg: dict = QUALITY_CONFIG,
+    regime_snapshot=_SENTINEL,
 ) -> tuple[float, float]:
     """计算每只基金的专属买入/卖出阈值
 
     buy_threshold = base + (size_shock ? increment : 0) + (drift ? increment : 0)
-    sell_threshold = base_sell（固定不变）
+                  + 市场环境调节（极端高估上调 / 极端低估下调）
+    sell_threshold = base_sell（固定不变，与五档阈值"中性/观望"下界对齐）
+
+    Args:
+        regime_snapshot: 市场环境快照（任务隔离传递；None 时回退模块级全局）
 
     Returns: (buy_threshold, sell_threshold)
     """
@@ -667,6 +698,17 @@ def compute_dynamic_thresholds(
         buy += cfg["size_shock_buy_increment"]
     if drift:
         buy += cfg["drift_buy_increment"]
+
+    # 市场环境调节：快照缺失/分位缺失时不调节
+    regime = _resolve_regime(regime_snapshot)
+    pct = getattr(regime, "valuation_percentile", None) if regime is not None else None
+    if pct is not None:
+        if pct >= cfg["extreme_high_valuation_pct"]:
+            buy += cfg["extreme_high_valuation_buy_increment"]
+        elif pct <= cfg["extreme_low_valuation_pct"]:
+            buy -= cfg["extreme_low_valuation_buy_decrement"]
+            # 低估下调不把买入阈值打到 0 以下（避免白送买入信号）
+            buy = max(buy, 0.5)
 
     return buy, sell
 
@@ -858,6 +900,7 @@ class QualityFilter:
         factor_scores: list[FactorScoreResult],
         active_factors: list[dict],
         today: date = None,
+        regime_snapshot=_SENTINEL,
     ) -> tuple[QualityFilterResult, list[FactorScoreResult], list[float]]:
         """一站式处理：前置否决→衍生因子→修正→阈值→偏置→决策
 
@@ -882,17 +925,36 @@ class QualityFilter:
         result.momentum_stability = self.calc_momentum_stability(fund_data)
         result.excess_persistence = self.calc_excess_persistence(fund_data)
 
-        # Step 3: 动态阈值
+        # Step 3: 动态阈值（含市场环境调节）
         result.size_shock_triggered = self.check_size_shock(quarterly_history, today)
         drift, _ = self.check_drift(quarterly_history, today)
         result.drift_triggered = drift
-        result.dynamic_buy_threshold, result.dynamic_sell_threshold = self.get_thresholds(
-            result.size_shock_triggered, drift
+        result.dynamic_buy_threshold, result.dynamic_sell_threshold = compute_dynamic_thresholds(
+            result.size_shock_triggered, drift, self.cfg, regime_snapshot
         )
 
         if drift:
             result.drift_warning = "警告：该基金仓位择时成分显著，信号可能不稳定，请人工复核。"
             result.warnings.append(result.drift_warning)
+
+        # 极端市场环境提示（估值分位触发阈值调节时）
+        regime = _resolve_regime(regime_snapshot)
+        pct = getattr(regime, "valuation_percentile", None) if regime is not None else None
+        if pct is not None:
+            if pct >= self.cfg["extreme_high_valuation_pct"]:
+                result.extreme_valuation_triggered = True
+                result.market_regime_warning = (
+                    f"提示：大盘估值分位 {pct:.0%} 处于历史高位，买入阈值已上调 "
+                    f"{self.cfg['extreme_high_valuation_buy_increment']}，请谨慎追高。"
+                )
+                result.warnings.append(result.market_regime_warning)
+            elif pct <= self.cfg["extreme_low_valuation_pct"]:
+                result.extreme_valuation_triggered = True
+                result.market_regime_warning = (
+                    f"提示：大盘估值分位 {pct:.0%} 处于历史低位，买入阈值已下调 "
+                    f"{self.cfg['extreme_low_valuation_buy_decrement']}，左侧布局窗口。"
+                )
+                result.warnings.append(result.market_regime_warning)
 
         # Step 4: 因子修正
         corrected_scores, corrected_weights = self.apply_corrections(
