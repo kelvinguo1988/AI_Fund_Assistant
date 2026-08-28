@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,21 @@ from backend.models.fund_data_cache import FundDataCache
 from backend.services.fund_detail_service import fetch_all_js_texts, _parse_period_returns, _parse_extended_data
 
 logger = logging.getLogger(__name__)
+
+
+def _now_beijing() -> datetime:
+    """北京时间墙钟（naive）
+
+    2026-08-28 修复：python:3.9-slim 镜像无 tzdata，TZ=Asia/Shanghai 环境变量
+    不生效，datetime.now() 实际返回 UTC——11:58 的刷新被记成 03:58 并被前端
+    贴上"北京时间"标签。改用 ZoneInfo 显式取北京时间；PyPI tzdata 包兜底。
+    返回 naive（SQLite DateTime 存储丢弃 tzinfo，读写保持一致）。
+    """
+    try:
+        return datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+    except Exception:
+        logger.warning("ZoneInfo 不可用，回退系统本地时间")
+        return datetime.now()
 
 CACHE_KEY_PERIOD_RETURNS = "period_returns"
 CACHE_KEY_REFRESH_TIME = "detail_last_refreshed"
@@ -80,7 +96,7 @@ async def update_period_returns_cache(
         for code in codes
     ]
 
-    now = datetime.now()
+    now = _now_beijing()
     # Upsert
     stmt = select(FundDataCache).where(
         FundDataCache.cache_key == CACHE_KEY_PERIOD_RETURNS
@@ -157,7 +173,7 @@ async def get_cached_json(db: AsyncSession, cache_key: str) -> tuple[Any, Option
 
 async def set_cached_json(db: AsyncSession, cache_key: str, data: Any) -> str:
     """通用缓存写入 — 返回 updated_at ISO 字符串"""
-    now = datetime.now()
+    now = _now_beijing()
     json_str = json.dumps(data, ensure_ascii=False, default=str)
     stmt = select(FundDataCache).where(FundDataCache.cache_key == cache_key)
     result = await db.execute(stmt)

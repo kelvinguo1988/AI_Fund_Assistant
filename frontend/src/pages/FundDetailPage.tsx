@@ -119,14 +119,21 @@ const FundDetailPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** 格式化更新时间为北京时间显示（与 Dashboard.formatRefreshTime 逻辑一致） */
   const formatTime = (iso: string | null) => {
     if (!iso) return '暂无';
     try {
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return iso;
-      const bj = new Date(d.getTime() + 8 * 60 * 60 * 1000);
-      const pad = (n: number) => String(n).padStart(2, '0');
-      return `${bj.getUTCFullYear()}-${pad(bj.getUTCMonth() + 1)}-${pad(bj.getUTCDate())} ${pad(bj.getUTCHours())}:${pad(bj.getUTCMinutes())} (北京时间)`;
+      if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(iso)) {
+        const d = new Date(iso);
+        if (!isNaN(d.getTime())) {
+          return new Intl.DateTimeFormat('zh-CN', {
+            timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
+            day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+          }).format(d).split('/').join('-');
+        }
+      }
+      const m = iso.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+      return m ? `${m[1]} ${m[2]} (北京时间)` : iso;
     } catch {
       return iso;
     }

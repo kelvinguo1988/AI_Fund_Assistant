@@ -79,15 +79,23 @@ const Dashboard: React.FC = () => {
   const [sectorTab, setSectorTab] = useState(0);
   const [refreshTime, setRefreshTime] = useState<string | null>(null);
 
-  /** 格式化缓存更新时间为北京时间显示 */
+  /** 格式化更新时间为北京时间显示
+   *  后端返回北京时间墙钟的 naive ISO 串（无时区标记）→ 直接展示；
+   *  若带时区标记（Z / ±hh:mm）→ 按 Instant 换算到 Asia/Shanghai。 */
   const formatRefreshTime = (isoStr: string | null): string => {
     if (!isoStr) return '暂无';
     try {
-      const d = new Date(isoStr);
-      if (isNaN(d.getTime())) return isoStr;
-      const bj = new Date(d.getTime() + 8 * 60 * 60 * 1000);
-      const pad = (n: number) => String(n).padStart(2, '0');
-      return `${bj.getUTCFullYear()}-${pad(bj.getUTCMonth() + 1)}-${pad(bj.getUTCDate())} ${pad(bj.getUTCHours())}:${pad(bj.getUTCMinutes())} (北京时间)`;
+      if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(isoStr)) {
+        const d = new Date(isoStr);
+        if (!isNaN(d.getTime())) {
+          return new Intl.DateTimeFormat('zh-CN', {
+            timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
+            day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+          }).format(d).split('/').join('-');
+        }
+      }
+      const m = isoStr.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
+      return m ? `${m[1]} ${m[2]} (北京时间)` : isoStr;
     } catch {
       return isoStr;
     }
