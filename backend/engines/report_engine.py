@@ -43,6 +43,7 @@ class ReportEngine:
         factor_scores: list[FactorScoreResult],
         enabled_items: list[str] | None = None,
         top10_changes: list[dict] | None = None,
+        top10_quote_time: str | None = None,
     ) -> str:
         """生成 Markdown 格式报告
 
@@ -124,6 +125,9 @@ class ReportEngine:
         if "top10_change" in enabled_items and top10_changes:
             lines.append("## 前十大持仓涨跌")
             lines.append("")
+            if top10_quote_time:
+                lines.append(f"**数据时点**: {top10_quote_time}")
+                lines.append("")
             lines.append("| 股票 | 代码 | 占净值比 | 今日涨跌 |")
             lines.append("|------|------|----------|----------|")
             for h in top10_changes:

@@ -33,6 +33,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -206,6 +207,9 @@ class FundRealtimeService:
     _fundgz_fail_until: float = 0.0
     # 数据源熔断冷却 {source: fail_until_ts}
     _source_fail_until: dict[str, float] = {}
+    # 最近一次快照的行情时点（"哪一天的涨跌"），随快照成功更新
+    _spot_quote_time: str = ""
+    _spot_quote_time_ts: Optional[datetime] = None
 
     # ── 熔断器 ──────────────────────────────────────────────────────────
 
@@ -226,6 +230,45 @@ class FundRealtimeService:
     @staticmethod
     def _mark_source_ok(name: str) -> None:
         FundRealtimeService._source_fail_until.pop(name, None)
+
+    # ── 行情时点（"涨跌是哪一天的"）────────────────────────────────────
+
+    @staticmethod
+    def _update_quote_time(raw: str = "", trusted: bool = False) -> None:
+        """记录最近一次快照的行情时点
+
+        raw 支持: 腾讯 14 位时间戳(20260828161437) / "YYYY-MM-DD HH:MM[:SS]"；
+        trusted=True 表示行情源自带时间（可信，取更新者，周末不回退）；
+        trusted=False 为服务器拉取时间（近似，仅在无记录时填写）。
+        """
+        raw = (raw or "").strip()
+        ts = None
+        if len(raw) == 14 and raw.isdigit():
+            try:
+                ts = datetime.strptime(raw, "%Y%m%d%H%M%S")
+            except ValueError:
+                ts = None
+        elif raw:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                try:
+                    ts = datetime.strptime(raw, fmt)
+                    break
+                except ValueError:
+                    continue
+
+        if ts is not None and trusted:
+            cur = FundRealtimeService._spot_quote_time_ts
+            if cur is None or ts > cur:
+                FundRealtimeService._spot_quote_time = ts.strftime("%Y-%m-%d %H:%M")
+                FundRealtimeService._spot_quote_time_ts = ts
+        elif not FundRealtimeService._spot_quote_time:
+            FundRealtimeService._spot_quote_time = datetime.now().strftime(
+                "%Y-%m-%d %H:%M"
+            )
+
+    @staticmethod
+    def get_spot_quote_time() -> str:
+        return FundRealtimeService._spot_quote_time
 
     def __init__(self, db) -> None:
         self.db = db
@@ -457,6 +500,8 @@ class FundRealtimeService:
                             if code and pct is not None:
                                 pct_map[code] = pct
                         self._mark_source_ok(EM_SOURCE)
+                        # 东财 A 股快照无时间列，用服务器拉取时间近似（仅空时填）
+                        self._update_quote_time()
                         logger.info(f"A 股实时快照刷新(东财): {len(pct_map)} 只")
                 except Exception as e:
                     self._mark_source_fail(EM_SOURCE, str(e)[:80])
@@ -482,6 +527,8 @@ class FundRealtimeService:
                             if code and pct is not None:
                                 pct_map[code] = pct
                         self._mark_source_ok(SINA_SOURCE)
+                        # 新浪只有 HH:MM:SS 无日期，仅空时填服务器时间近似
+                        self._update_quote_time()
                         logger.info(f"A 股实时快照刷新(新浪): {len(pct_map)} 只")
                 except Exception as e:
                     self._mark_source_fail(SINA_SOURCE, str(e)[:80])
@@ -644,6 +691,10 @@ class FundRealtimeService:
                 text = await asyncio.to_thread(_do_request)
                 all_quotes.update(parse_tencent_quotes(text))
             self._mark_source_ok(TENCENT_SOURCE)
+            # 腾讯响应自带行情时间（14 位），是"涨跌是哪天的"最可信来源
+            first = next(iter(all_quotes.values()), None)
+            if first:
+                self._update_quote_time(first.get("time", ""), trusted=True)
             return all_quotes
         except Exception as e:
             self._mark_source_fail(TENCENT_SOURCE, str(e)[:80])
@@ -753,7 +804,7 @@ class FundRealtimeService:
                 "nav": None,
                 "estimated_nav": None,
                 "growth_pct": round(growth, 2),
-                "quote_time": "",
+                "quote_time": FundRealtimeService._spot_quote_time,
                 "coverage": round(coverage, 3),
                 "est_model": model,
             }
@@ -808,6 +859,8 @@ class FundRealtimeService:
                 "ratio": h.ratio,
                 "pct": _lookup(h.stock_code),
             })
+        # 行情时点兜底填充（腾讯路径已在快照成功时记录）
+        FundRealtimeService._update_quote_time()
         return result
 
 

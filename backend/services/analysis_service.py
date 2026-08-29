@@ -266,8 +266,9 @@ class AnalysisService:
             # 生成报告
             analysis_date = date.today().isoformat()
             top10_changes = None
+            top10_quote_time = ""
             if "top10_change" in enabled_report_items:
-                top10_changes = await self._get_top10_changes(fund.id)
+                top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
             report_md = report_engine.generate_markdown(
                 fund_code=fund.code,
                 fund_name=fund.name,
@@ -276,6 +277,7 @@ class AnalysisService:
                 factor_scores=corrected_scores,
                 enabled_items=enabled_report_items,
                 top10_changes=top10_changes,
+                top10_quote_time=top10_quote_time,
             )
 
             # 存储结果（含质量过滤扩展字段）
@@ -425,8 +427,9 @@ class AnalysisService:
                 )
 
                 top10_changes = None
+                top10_quote_time = ""
                 if "top10_change" in enabled_report_items:
-                    top10_changes = await self._get_top10_changes(fund.id)
+                    top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
                 report_md = report_engine.generate_markdown(
                     fund_code=fund.code,
                     fund_name=fund.name,
@@ -435,6 +438,7 @@ class AnalysisService:
                     factor_scores=corrected_scores,
                     enabled_items=enabled_report_items,
                     top10_changes=top10_changes,
+                    top10_quote_time=top10_quote_time,
                 )
 
                 result_out = await self._save_result(
@@ -466,19 +470,21 @@ class AnalysisService:
         }
         yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
-    async def _get_top10_changes(self, fund_id: int) -> Optional[list[dict]]:
+    async def _get_top10_changes(
+        self, fund_id: int
+    ) -> tuple[Optional[list[dict]], str]:
         """前十大持仓当日涨跌（报告 top10_change 项）
 
-        FundRealtimeService 内部有 60s 全市场快照缓存，批量分析时只请求一次行情。
+        Returns: (changes, quote_time) — quote_time 为行情时点（哪一天的涨跌）
         """
         try:
             from backend.services.fund_realtime_service import FundRealtimeService
             rt_svc = FundRealtimeService(self.db)
             changes = await rt_svc.get_top10_changes(fund_id)
-            return changes or None
+            return (changes or None), FundRealtimeService.get_spot_quote_time()
         except Exception as e:
             logger.warning(f"获取前十大持仓涨跌失败 fund_id={fund_id}: {e}")
-            return None
+            return None, ""
 
     async def _save_result(
         self,

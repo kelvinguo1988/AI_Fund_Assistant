@@ -395,3 +395,32 @@ class TestTencentQuotes:
         finally:
             FundRealtimeService._source_fail_until.clear()
             FundRealtimeService._stock_spot_cache = None
+
+
+class TestQuoteTime:
+    def setup_method(self):
+        FundRealtimeService._spot_quote_time = ""
+        FundRealtimeService._spot_quote_time_ts = None
+
+    def teardown_method(self):
+        FundRealtimeService._spot_quote_time = ""
+        FundRealtimeService._spot_quote_time_ts = None
+
+    def test_tencent_14digit_trusted(self):
+        FundRealtimeService._update_quote_time("20260828161437", trusted=True)
+        assert FundRealtimeService._spot_quote_time == "2026-08-28 16:14"
+
+    def test_trusted_takes_newer(self):
+        FundRealtimeService._update_quote_time("20260828161437", trusted=True)
+        FundRealtimeService._update_quote_time("20260827090000", trusted=True)
+        assert FundRealtimeService._spot_quote_time == "2026-08-28 16:14", "旧时间不应回退"
+
+    def test_untrusted_only_fills_empty(self):
+        FundRealtimeService._update_quote_time("20260828161437", trusted=True)
+        FundRealtimeService._update_quote_time("", trusted=False)
+        assert FundRealtimeService._spot_quote_time == "2026-08-28 16:14", \
+            "服务器时间不得覆盖行情源时间"
+
+    def test_untrusted_fills_when_empty(self):
+        FundRealtimeService._update_quote_time("", trusted=False)
+        assert FundRealtimeService._spot_quote_time != ""

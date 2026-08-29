@@ -716,11 +716,12 @@ const Dashboard: React.FC = () => {
                       {pct != null ? (
                         <Tooltip
                           title={
-                            rt.source === 'fundgz'
+                            (rt.source === 'fundgz'
                               ? '天天基金官方盘中估值'
                               : rt.source === 'etf_spot'
                               ? '场内实时行情'
-                              : `持仓加权估算（覆盖率 ${Math.round((rt.coverage ?? 0) * 100)}%，${rt.est_model === 'index_blend' ? '含指数混合' : '归一法'}）`
+                              : `持仓加权估算（覆盖率 ${Math.round((rt.coverage ?? 0) * 100)}%，${rt.est_model === 'index_blend' ? '含指数混合' : '归一法'}）`)
+                            + (rt.quote_time ? `\n行情时间: ${rt.quote_time}` : '')
                           }
                         >
                           <span style={{
