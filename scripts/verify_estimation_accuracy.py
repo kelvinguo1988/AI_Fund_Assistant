@@ -54,20 +54,40 @@ def get_nav_returns(code: str, days: int = 20) -> pd.DataFrame:
     nav = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")
     nav = nav.sort_values("净值日期").tail(days + 1).reset_index(drop=True)
     nav["actual_pct"] = nav["单位净值"].pct_change() * 100
-    return nav[["净值日期", "actual_pct"]].dropna()
+    nav = nav[["净值日期", "actual_pct"]].dropna()
+    nav["净值日期"] = nav["净值日期"].astype(str).str[:10]  # date对象/str 统一
+    return nav
 
 
 def get_stock_pcts(stock_codes: list[str], days: int = 20) -> dict[str, pd.Series]:
-    """个股近 N 日每日涨跌幅 → {code: Series(date→pct%)}"""
+    """个股近 N 日每日涨跌幅 → {code: Series(date→pct%)}
+
+    降级链: 东财 stock_zh_a_hist → 腾讯 stock_zh_a_hist_tx（东财限连时可用）
+    """
     out = {}
     for sc in stock_codes:
+        s = None
         try:
             h = ak.stock_zh_a_hist(symbol=sc, period="daily", adjust="qfq")
             h = h.sort_values("日期").tail(days + 1)
             s = h.set_index("日期")["涨跌幅"].astype(float)
+        except Exception:
+            pass
+        if s is None and not (len(sc) == 5 and sc.isdigit()):
+            # 腾讯日线降级（close 差分算涨跌幅）；注意仅支持 A 股，港股会卡死
+            try:
+                from backend.services.fund_realtime_service import tencent_code
+                end = pd.Timestamp.now().strftime("%Y%m%d")
+                start = (pd.Timestamp.now() - pd.Timedelta(days=days * 2 + 15)).strftime("%Y%m%d")
+                h = ak.stock_zh_a_hist_tx(symbol=tencent_code(sc), start_date=start, end_date=end)
+                if h is not None and not h.empty:
+                    h = h.sort_values("date").tail(days + 1)
+                    s = (h.set_index("date")["close"].astype(float).pct_change() * 100).dropna()
+                    s.index = s.index.astype(str)
+            except Exception as e:
+                print(f"  [warn] {sc} 行情失败(东财+腾讯): {e}")
+        if s is not None:
             out[sc] = s
-        except Exception as e:
-            print(f"  [warn] {sc} 行情失败: {e}")
         time.sleep(0.5)
     return out
 
