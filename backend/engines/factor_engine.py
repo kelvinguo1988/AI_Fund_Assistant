@@ -847,8 +847,21 @@ class FactorEngine:
                 for fund_code in scores_map:
                     if fi < len(all_results[fund_code]):
                         all_results[fund_code][fi].score = 0.0
-                logger.info(f"截面标准化: 单只基金，因子索引 {fi} 使用中性值 0.0")
+                logger.warning(
+                    f"截面标准化: 基金池仅 1 只，因子索引 {fi} 全部取中性 0.0"
+                    "（截面因子无信号，建议停用该因子或扩充基金池）"
+                )
                 continue
+
+            if len(scores_map) < 5:
+                # 小池退化：z-score 只反映池内相对排名。2 只基金时两值 z=±1
+                #（+0.5/-1.0 不对称分档），即使所有基金 pre-norm 同为正，
+                # 也必有一只拿满档负分——无绝对价值判断意义
+                logger.warning(
+                    f"截面标准化: 基金池仅 {len(scores_map)} 只 (<5)，"
+                    f"因子索引 {fi} 得分为纯池内相对排名，可能失真；"
+                    "建议扩充基金池或改用无标准化因子"
+                )
 
             normalized = apply_cross_sectional_zscore(scores_map, thresholds)
 
