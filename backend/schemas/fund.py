@@ -123,3 +123,23 @@ class FundChangeSummary(BaseModel):
     holding_changes: Optional[HoldingChanges] = None
     manager_changes: Optional[ManagerChanges] = None
     tags: list[str] = []
+
+
+class FundRealtimeOut(BaseModel):
+    """基金实时净值预估（2026-08-28 新增）
+
+    source 数据源三级降级:
+    - etf_spot:    场内 ETF 实时行情（真实价格）
+    - fundgz:      天天基金盘中估值（官方估算）
+    - holdings_est: 持仓×个股快照自算（coverage 为持仓覆盖率）
+    """
+    code: str
+    name: str = ""
+    source: str = ""
+    nav_date: Optional[str] = None        # 上一交易日（净值日期）
+    nav: Optional[float] = None           # 上一交易日单位净值
+    estimated_nav: Optional[float] = None  # 估算净值（ETF=最新价）
+    growth_pct: Optional[float] = None    # 估算涨跌幅 %
+    quote_time: Optional[str] = None      # 估值时间/行情时间
+    coverage: Optional[float] = None      # 持仓覆盖率 0~1（仅 holdings_est）
+    est_model: Optional[str] = None       # official/normalized/index_blend/market_price

@@ -2,7 +2,7 @@
  * 仪表盘页面 — 今日信号概览 + 市场资金流 + 板块排行
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Box,
   Grid,
@@ -18,6 +18,7 @@ import {
   Paper,
   Button,
   Chip,
+  Tooltip,
   CircularProgress,
   Dialog,
   DialogTitle,
@@ -39,6 +40,7 @@ import ScoreGauge from '../components/ScoreGauge';
 import FactorRadarChart from '../components/FactorRadarChart';
 import { analysisApi } from '../api/analysis';
 import { fundApi } from '../api/fund';
+import type { FundRealtimeOut } from '../api/fund';
 import type { AnalysisResultOut, FundOut, MarketSummaryOut, MarketRegimeOut, SectorFlowItem } from '../types';
 
 const STRENGTH_COLOR_MAP: Record<string, 'error' | 'success' | 'default'> = {
@@ -85,6 +87,40 @@ const Dashboard: React.FC = () => {
 
   const [sectorTab, setSectorTab] = useState(0);
   const [refreshTime, setRefreshTime] = useState<string | null>(null);
+
+  // ── 实时净值预估（场外基金为主）──
+  const [realtimeMap, setRealtimeMap] = useState<Record<string, FundRealtimeOut>>({});
+  const realtimeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  /** A 股交易时段判定（周一~周五 09:30-11:30 / 13:00-15:00，北京时间） */
+  const isTradingTime = useCallback((): boolean => {
+    const now = new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000);
+    const day = now.getDay();
+    if (day === 0 || day === 6) return false;
+    const mins = now.getHours() * 60 + now.getMinutes();
+    return (mins >= 570 && mins < 690) || (mins >= 780 && mins < 900);
+  }, []);
+
+  const loadRealtime = useCallback(async (force = false) => {
+    try {
+      const res = await fundApi.realtime(force);
+      if (res.data && Object.keys(res.data).length > 0) {
+        setRealtimeMap(res.data);
+      }
+    } catch {
+      // 实时估值为增强功能，失败静默（不打扰主流程）
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRealtime();
+    realtimeTimer.current = setInterval(() => {
+      if (isTradingTime()) loadRealtime();
+    }, 60_000);
+    return () => {
+      if (realtimeTimer.current) clearInterval(realtimeTimer.current);
+    };
+  }, [loadRealtime, isTradingTime]);
 
   /** 格式化更新时间为北京时间显示
    *  后端返回北京时间墙钟的 naive ISO 串（无时区标记）→ 直接展示；
@@ -669,6 +705,7 @@ const Dashboard: React.FC = () => {
                 <TableRow>
                   <TableCell>基金代码</TableCell>
                   <TableCell>基金名称</TableCell>
+                  <TableCell>实时估值</TableCell>
                   <TableCell>评分(-6~+6)</TableCell>
                   <TableCell>权益仓位</TableCell>
                   <TableCell>信号</TableCell>
@@ -676,7 +713,10 @@ const Dashboard: React.FC = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {results.map((r) => (
+                {results.map((r) => {
+                  const rt = realtimeMap[r.fund_code];
+                  const pct = rt?.growth_pct;
+                  return (
                   <TableRow
                     key={r.id}
                     hover
@@ -686,6 +726,28 @@ const Dashboard: React.FC = () => {
                   >
                     <TableCell>{r.fund_code}</TableCell>
                     <TableCell>{r.fund_name}</TableCell>
+                    <TableCell>
+                      {pct != null ? (
+                        <Tooltip
+                          title={
+                            rt.source === 'fundgz'
+                              ? '天天基金官方盘中估值'
+                              : rt.source === 'etf_spot'
+                              ? '场内实时行情'
+                              : `持仓加权估算（覆盖率 ${Math.round((rt.coverage ?? 0) * 100)}%，${rt.est_model === 'index_blend' ? '含指数混合' : '归一法'}）`
+                          }
+                        >
+                          <span style={{
+                            color: pct > 0 ? '#f44336' : pct < 0 ? '#4caf50' : 'inherit',
+                            fontWeight: 500,
+                          }}>
+                            {pct > 0 ? '+' : ''}{pct.toFixed(2)}%
+                          </span>
+                        </Tooltip>
+                      ) : (
+                        <span style={{ color: '#bbb' }}>—</span>
+                      )}
+                    </TableCell>
                     <TableCell>{r.weighted_score}</TableCell>
                     <TableCell>{Math.round((r as any).equity_ratio * 100)}%</TableCell>
                     <TableCell>
@@ -699,10 +761,11 @@ const Dashboard: React.FC = () => {
                       />
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
                 {results.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} align="center">暂无分析数据</TableCell>
+                    <TableCell colSpan={7} align="center">暂无分析数据</TableCell>
                   </TableRow>
                 )}
               </TableBody>

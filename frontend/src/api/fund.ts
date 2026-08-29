@@ -85,4 +85,25 @@ export const fundApi = {
 
   getExtendedDetail: () =>
     apiClient.get<ApiResponse<ExtendedDetailResponse>>(`${BASE}/extended-detail`).then((r) => r.data),
+
+  /** 实时净值预估（场外 fundgz/持仓自算，场内 ETF 行情） */
+  realtime: (force = false) =>
+    apiClient
+      .get<ApiResponse<Record<string, FundRealtimeOut>>>(`${BASE}/realtime`, {
+        params: force ? { force: true } : undefined,
+      })
+      .then((r) => r.data),
 };
+
+export interface FundRealtimeOut {
+  code: string;
+  name: string;
+  source: 'fundgz' | 'holdings_est' | 'etf_spot' | string;
+  nav_date: string | null;
+  nav: number | null;
+  estimated_nav: number | null;
+  growth_pct: number | null;
+  quote_time: string | null;
+  coverage: number | null;
+  est_model: 'official' | 'normalized' | 'index_blend' | 'market_price' | null;
+}

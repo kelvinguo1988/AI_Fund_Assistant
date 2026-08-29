@@ -10,6 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 
 logger = logging.getLogger(__name__)
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -30,6 +31,7 @@ from backend.services.fund_detail_service import fetch_period_returns
 from backend.services.fund_holding_service import get_latest_holdings, refresh_holdings
 from backend.services.fund_manager_service import get_current_managers, refresh_managers
 from backend.services.fund_change_detector import get_fund_changes
+from backend.models.fund import Fund
 from backend.services.fund_service import FundService, classify_and_sort_funds, enrich_fund_themes
 from backend.services.fund_refresh_task import get_refresh_state, run_refresh_all_details
 
@@ -375,3 +377,28 @@ async def batch_update_funds(
     svc = FundService(db)
     await svc.batch_update_status(ids, action)
     return ApiResponse()
+
+
+@router.get("/realtime", response_model=ApiResponse[dict])
+async def get_funds_realtime(
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取全部活跃基金的实时净值预估（涨跌百分比）
+
+    数据源（以场外基金为主，三级降级）:
+    - fundgz:      天天基金官方盘中估值（精度最高，部分网络被反爬时不可用）
+    - holdings_est: 持仓×个股实时快照自算（主力兜底，coverage<0.5 时指数混合）
+    - etf_spot:    场内 ETF 实时行情（真实价格）
+
+    结果缓存 60s；force=true 跳过缓存。
+    """
+    result = await db.execute(select(Fund).where(Fund.status == "active"))
+    funds = list(result.scalars().all())
+    if not funds:
+        return ApiResponse(data={})
+
+    from backend.services.fund_realtime_service import FundRealtimeService
+    svc = FundRealtimeService(db)
+    data = await svc.get_realtime(funds, force=force)
+    return ApiResponse(data=data)
