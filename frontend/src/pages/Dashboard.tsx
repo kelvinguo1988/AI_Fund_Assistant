@@ -2,7 +2,7 @@
  * 仪表盘页面 — 今日信号概览 + 市场资金流 + 板块排行
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box,
   Grid,
@@ -89,17 +89,9 @@ const Dashboard: React.FC = () => {
   const [refreshTime, setRefreshTime] = useState<string | null>(null);
 
   // ── 实时净值预估（场外基金为主）──
+  // 触发时机：页面加载/刷新时一次（force 取新）+ 定时推送任务预热缓存。
+  // 不做前端轮询（2026-08-29 设计变更）；后端快照 60s 缓存防刷新风暴。
   const [realtimeMap, setRealtimeMap] = useState<Record<string, FundRealtimeOut>>({});
-  const realtimeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  /** A 股交易时段判定（周一~周五 09:30-11:30 / 13:00-15:00，北京时间） */
-  const isTradingTime = useCallback((): boolean => {
-    const now = new Date(Date.now() + (8 * 60 + new Date().getTimezoneOffset()) * 60000);
-    const day = now.getDay();
-    if (day === 0 || day === 6) return false;
-    const mins = now.getHours() * 60 + now.getMinutes();
-    return (mins >= 570 && mins < 690) || (mins >= 780 && mins < 900);
-  }, []);
 
   const loadRealtime = useCallback(async (force = false) => {
     try {
@@ -113,14 +105,8 @@ const Dashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadRealtime();
-    realtimeTimer.current = setInterval(() => {
-      if (isTradingTime()) loadRealtime();
-    }, 60_000);
-    return () => {
-      if (realtimeTimer.current) clearInterval(realtimeTimer.current);
-    };
-  }, [loadRealtime, isTradingTime]);
+    loadRealtime(true);
+  }, [loadRealtime]);
 
   /** 格式化更新时间为北京时间显示
    *  后端返回北京时间墙钟的 naive ISO 串（无时区标记）→ 直接展示；

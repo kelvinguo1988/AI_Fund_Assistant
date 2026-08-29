@@ -152,6 +152,21 @@ class TaskScheduler:
                 )
                 results = await svc.run_analysis()
 
+                # 预热实时估值缓存：推送后用户打开仪表盘即可见当日实时涨跌，
+                # 无需前端轮询（页面加载/刷新时也会触发，此处保证推送后数据新鲜）
+                try:
+                    from backend.services.fund_realtime_service import FundRealtimeService
+                    from backend.models.fund import Fund as _Fund
+                    rt_stmt = await session.execute(
+                        select(_Fund).where(_Fund.status == "active")
+                    )
+                    rt_funds = list(rt_stmt.scalars().all())
+                    if rt_funds:
+                        rt_svc = FundRealtimeService(session)
+                        await rt_svc.get_realtime(rt_funds, force=True)
+                except Exception as rt_err:
+                    logger.warning(f"实时估值预热失败（不影响推送）: {rt_err}")
+
                 # 推送
                 if sched and sched.channel_id:
                     from backend.services.push_service import PushService
