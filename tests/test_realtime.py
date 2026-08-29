@@ -8,6 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from backend.services.fund_realtime_service import (
     FundRealtimeService,
     parse_fundgz_jsonp,
+    parse_tencent_quotes,
+    tencent_code,
     compute_holdings_growth,
 )
 
@@ -114,7 +116,7 @@ async def test_fundgz_failure_falls_back_to_holdings(monkeypatch):
 
         svc = FundRealtimeService(db=_FakeDB())
 
-        async def _fake_stock_spot(self):
+        async def _fake_stock_spot(self, codes=None):
             return {"600000": 2.0}
 
         async def _fake_index(self):
@@ -155,7 +157,7 @@ async def test_etf_uses_spot(monkeypatch):
     FundRealtimeService._estimate_cache.clear()
     svc = FundRealtimeService(db=None)
 
-    async def _fake_etf(self):
+    async def _fake_etf(self, codes=None):
         return {"510300": {"name": "沪深300ETF", "price": 4.679, "pct": -0.26,
                             "time": "15:00:00", "date": "2026-08-28"}}
 
@@ -228,10 +230,10 @@ class TestTop10ReportRendering:
 
         svc = FundRealtimeService(db=None)
 
-        async def _fake_stock(self):
+        async def _fake_stock(self, codes=None):
             return {"300308": -0.9}
 
-        async def _fake_hk(self):
+        async def _fake_hk(self, codes=None):
             return {"00981": 1.23}
 
         monkeypatch.setattr(FundRealtimeService, "_get_stock_spot", _fake_stock)
@@ -325,3 +327,71 @@ class TestSourceCircuitBreaker:
         svc._mark_source_fail("eastmoney")
         svc._mark_source_ok("eastmoney")
         assert FundRealtimeService._source_available("eastmoney")
+
+
+# ── 腾讯稳定源（2026-08-29 接入）─────────────────────────────────────
+
+class TestTencentQuotes:
+    @staticmethod
+    def _tencent_line(key: str, name: str, price: str, prev: str, pct: str) -> str:
+        """构造对齐真实字段位（30=时间 31=涨跌额 32=涨跌幅）的腾讯响应行"""
+        fields = [""] * 30
+        fields[0:9] = ["1", name, key.lstrip("shszhk"), price, prev, "", "", "", ""]
+        fields += ["20260828161437", "0.05", pct]
+        return f'v_{key}="{"~".join(fields)}";'
+
+    def test_parse_quotes(self):
+        text = self._tencent_line("sh600308", "华泰股份", "3.34", "3.29", "1.52")
+        d = parse_tencent_quotes(text)
+        assert "600308" in d
+        q = d["600308"]
+        assert q["name"] == "华泰股份"
+        assert q["price"] == 3.34
+        assert q["pct"] == 1.52
+
+    def test_parse_hk(self):
+        text = self._tencent_line("hk00981", "中芯国际", "70.150", "71.300", "-1.61")
+        d = parse_tencent_quotes(text)
+        assert "00981" in d
+        assert d["00981"]["pct"] == -1.61
+
+    def test_parse_garbage(self):
+        assert parse_tencent_quotes("") == {}
+        assert parse_tencent_quotes("<html>blocked</html>") == {}
+
+    def test_code_prefix(self):
+        from backend.services.fund_realtime_service import tencent_code
+        assert tencent_code("600308") == "sh600308"
+        assert tencent_code("000001") == "sz000001"
+        assert tencent_code("300308") == "sz300308"
+        assert tencent_code("510300") == "sh510300"
+        assert tencent_code("159915") == "sz159915"
+        assert tencent_code("00981") == "hk00981"
+
+    def test_em_breaker_falls_to_tencent(self, monkeypatch):
+        """东财+新浪都熔断 → 腾讯按需接管"""
+        import asyncio
+        import time as _t
+        import pandas as pd
+        from backend.services import fund_realtime_service as m
+
+        FundRealtimeService._source_fail_until = {
+            "eastmoney": _t.time() + 600,
+            "sina": _t.time() + 600,
+        }
+        FundRealtimeService._stock_spot_cache = None
+        FundRealtimeService._spot_ts = 0.0
+        try:
+            svc = FundRealtimeService(db=None)
+
+            async def _fake_tencent(self, codes):
+                return {"300308": -0.9, "600487": -3.65}
+
+            monkeypatch.setattr(FundRealtimeService, "_get_tencent_pct", _fake_tencent)
+            result = asyncio.run(svc._get_stock_spot(codes=["300308", "600487"]))
+            assert result == {"300308": -0.9, "600487": -3.65}
+            # 腾讯按需结果应并入 60s 缓存
+            assert FundRealtimeService._stock_spot_cache == result
+        finally:
+            FundRealtimeService._source_fail_until.clear()
+            FundRealtimeService._stock_spot_cache = None

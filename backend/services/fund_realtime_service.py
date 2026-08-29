@@ -55,9 +55,13 @@ FUNDGZ_TIMEOUT = 8.0
 SOURCE_FAIL_COOLDOWN = 600.0
 
 # 熔断键："eastmoney" 管所有东财实时快照接口（封禁按 IP/域名生效，
-# 单接口被拒时其余东财接口也无意义）；"sina" 管新浪分页快照。
+# 单接口被拒时其余东财接口也无意义）；"sina" 管新浪分页快照；
+# "tencent" 管腾讯行情接口。
 EM_SOURCE = "eastmoney"
 SINA_SOURCE = "sina"
+TENCENT_SOURCE = "tencent"
+
+TENCENT_URL = "http://qt.gtimg.cn/q={codes}"
 
 FUNDGZ_URL = "https://fundgz.1234567.com.cn/js/{code}.js"
 
@@ -69,6 +73,59 @@ _JSONP_RE = re.compile(r"jsonpgz\((.*)\)")
 
 
 # ── 纯函数（供单元测试） ──────────────────────────────────────────────
+
+def parse_tencent_quotes(text: str) -> dict[str, dict]:
+    """解析腾讯行情批量响应（GBK 文本）
+
+    格式: v_sh600308="1~华泰股份~600308~3.34~3.29~...~20260828161437~0.05~1.52~...";
+    字段: [1]名称 [3]最新价 [4]昨收 [30]时间 [32]涨跌幅%
+    A股/ETF/指数/港股统一兼容（实测 2026-08-29：sh600308/sh510300/hk00981/sh000300）
+
+    Returns:
+        {code(纯数字): {name, price, prev_close, pct, time}}
+    """
+    out: dict[str, dict] = {}
+    for line in (text or "").split(";"):
+        line = line.strip()
+        if not line or "=" not in line or not line.startswith("v_"):
+            continue
+        var, payload = line.split("=", 1)
+        key = var[2:]  # 去 "v_"
+        fields = payload.strip().strip('"').split("~")
+        if len(fields) <= 32:
+            continue
+        # key 形如 sh600308 / hk00981 → 取纯数字代码
+        code = key[2:] if not key[:2].isdigit() else key
+        try:
+            pct = float(fields[32])
+            price = float(fields[3]) if fields[3] else None
+            prev = float(fields[4]) if fields[4] else None
+        except (ValueError, TypeError):
+            continue
+        out[code] = {
+            "name": fields[1],
+            "price": price,
+            "prev_close": prev,
+            "pct": pct,
+            "time": fields[30] if len(fields) > 30 else "",
+        }
+    return out
+
+
+def tencent_code(code: str) -> str:
+    """纯数字代码 → 腾讯带市场前缀代码
+
+    - 6 位: 6/5 开头→sh（股票/沪ETF），0/1/3 开头→sz，4/8/9 开头→bj（尽力而为）
+    - 5 位: 港股 hk 前缀
+    """
+    if len(code) == 5 and code.isdigit():
+        return f"hk{code}"
+    if code and code[0] in ("5", "6", "9"):
+        return f"sh{code}"
+    if code and code[0] in ("0", "1", "2", "3"):
+        return f"sz{code}"
+    return f"bj{code}" if code else code
+
 
 def parse_fundgz_jsonp(text: str) -> Optional[dict]:
     """解析天天基金估值 JSONP 响应
@@ -229,7 +286,7 @@ class FundRealtimeService:
         # ── ETF 场内（透明分支，真实价格非估算）──
         etf_funds = [f for f in pending if guess_fund_type(f.code) == "etf"]
         if etf_funds:
-            spot = await self._get_etf_spot()
+            spot = await self._get_etf_spot(codes=[f.code for f in etf_funds])
             if spot is not None:
                 for f in etf_funds:
                     row = spot.get(f.code)
@@ -252,8 +309,14 @@ class FundRealtimeService:
 
     # ── 数据源实现 ──────────────────────────────────────────────────────
 
-    async def _get_etf_spot(self) -> Optional[dict[str, dict]]:
-        """全市场 ETF 快照（60s 缓存）→ {code: {name,price,pct,time,date}}"""
+    async def _get_etf_spot(
+        self, codes: Optional[list[str]] = None
+    ) -> Optional[dict[str, dict]]:
+        """ETF 快照 → {code: {name,price,pct,time,date}}
+
+        降级链: 东财 fund_etf_spot_em（全市场）→ 腾讯按需批量（场内基金
+        行情与股票同接口，实测 sh510300 可用）。
+        """
         now = time.time()
         if (
             FundRealtimeService._etf_spot_cache is not None
@@ -270,6 +333,24 @@ class FundRealtimeService:
                 return FundRealtimeService._etf_spot_cache
 
             if not self._source_available(EM_SOURCE):
+                # 东财熔断 → 腾讯按需构造兼容结构
+                if codes and self._source_available(TENCENT_SOURCE):
+                    quotes = await self._get_tencent_quotes(codes)
+                    if quotes:
+                        spot = {
+                            c: {
+                                "name": q.get("name", ""),
+                                "price": q.get("price"),
+                                "pct": q.get("pct"),
+                                "time": q.get("time", ""),
+                                "date": "",
+                            }
+                            for c, q in quotes.items()
+                        }
+                        FundRealtimeService._etf_spot_cache = spot
+                        FundRealtimeService._spot_ts = time.time()
+                        logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
+                        return spot
                 return None
 
             try:
@@ -298,29 +379,65 @@ class FundRealtimeService:
                 return spot
             except Exception as e:
                 self._mark_source_fail(EM_SOURCE, str(e)[:80])
+                if codes and self._source_available(TENCENT_SOURCE):
+                    quotes = await self._get_tencent_quotes(codes)
+                    if quotes:
+                        spot = {
+                            c: {
+                                "name": q.get("name", ""),
+                                "price": q.get("price"),
+                                "pct": q.get("pct"),
+                                "time": q.get("time", ""),
+                                "date": "",
+                            }
+                            for c, q in quotes.items()
+                        }
+                        FundRealtimeService._etf_spot_cache = spot
+                        FundRealtimeService._spot_ts = time.time()
+                        logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
+                        return spot
                 return None
 
-    async def _get_stock_spot(self) -> Optional[dict[str, float]]:
-        """全市场 A 股快照（60s 缓存）→ {code: 今日涨跌幅%}
+    async def _get_stock_spot(
+        self, codes: Optional[list[str]] = None
+    ) -> Optional[dict[str, float]]:
+        """A 股涨跌幅 → {code: 今日涨跌幅%}
 
-        数据源降级：东财 stock_zh_a_spot_em（快，一次请求）
-        → 新浪 stock_zh_a_spot（慢 ~30s 分页，但独立站点，东财限连时可用）。
-        新浪代码带 sh/sz/bj 前缀，统一去掉前 2 字符归一化。
+        数据源降级链（2026-08-29 实测）:
+        1. 东财 stock_zh_a_spot_em（快，一次请求全市场）
+        2. 腾讯 qt.gtimg.cn 按需批量（codes 已知时，10 只一次请求，最轻量）
+        3. 新浪 stock_zh_a_spot（全市场 70 页分页，最重，放最后）
+        腾讯按需结果并入 60s 缓存。
         """
         now = time.time()
+        # 快路径：缓存新鲜且覆盖全部所需代码（腾讯按需缓存是部分市场，
+        # 必须做覆盖检查，否则 60s 内第二只基金会拿到不完整的 map）
+        cache = FundRealtimeService._stock_spot_cache
         if (
-            FundRealtimeService._stock_spot_cache is not None
+            cache is not None
             and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
+            and all(c in cache for c in (codes or []))
         ):
-            return FundRealtimeService._stock_spot_cache
+            return cache
 
         async with FundRealtimeService._spot_lock:
             now = time.time()
+            cache = FundRealtimeService._stock_spot_cache
             if (
-                FundRealtimeService._stock_spot_cache is not None
+                cache is not None
                 and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
             ):
-                return FundRealtimeService._stock_spot_cache
+                missing = [c for c in (codes or []) if c not in cache]
+                if not missing:
+                    return cache
+                # 缓存部分覆盖 → 腾讯按需补缺失代码
+                if self._source_available(TENCENT_SOURCE):
+                    tmap = await self._get_tencent_pct(missing)
+                    if tmap:
+                        cache.update(tmap)
+                        FundRealtimeService._spot_ts = now
+                        logger.info(f"A 股行情(腾讯补缺): +{len(tmap)} 只")
+                return cache
 
             import akshare as ak
             from backend.data_sources.akshare_adapter import AKShareAdapter
@@ -344,7 +461,14 @@ class FundRealtimeService:
                 except Exception as e:
                     self._mark_source_fail(EM_SOURCE, str(e)[:80])
 
-            # 2. 新浪快照（降级；独立站点，东财限连时可用）
+            # 2. 腾讯按需批量（codes 已知时优先于新浪全市场：快且轻）
+            if not pct_map and codes and self._source_available(TENCENT_SOURCE):
+                tencent_map = await self._get_tencent_pct(codes)
+                if tencent_map:
+                    pct_map = tencent_map
+                    logger.info(f"A 股实时行情(腾讯按需): {len(pct_map)}/{len(codes)} 只")
+
+            # 3. 新浪快照（全市场分页，最后兜底）
             if not pct_map and self._source_available(SINA_SOURCE):
                 try:
                     df = await adapter._call(ak.stock_zh_a_spot, _max_attempts=1)
@@ -367,28 +491,49 @@ class FundRealtimeService:
                 FundRealtimeService._spot_ts = now
             return pct_map
 
-    async def _get_hk_spot(self) -> Optional[dict[str, float]]:
-        """港股全市场快照（60s 缓存，尽力而为）→ {code: 今日涨跌幅%}
+    async def _get_hk_spot(
+        self, codes: Optional[list[str]] = None
+    ) -> Optional[dict[str, float]]:
+        """港股涨跌幅（60s 缓存，尽力而为）→ {code: 今日涨跌幅%}
 
-        场外基金 top10 常含港股（如中芯国际 00981）；东财限连时返回 None，
-        对应持仓在报告中显示"—"。
+        降级链: 东财 stock_hk_spot_em（全市场）→ 腾讯按需批量（实测 hk00981 可用）。
+        东财限连时腾讯按需只查所需港股（top10 场景 1~2 只一次请求）。
         """
         now = time.time()
+        # 快路径：缓存新鲜且覆盖全部所需代码（腾讯按需缓存是部分市场）
+        cache = FundRealtimeService._hk_spot_cache
         if (
-            FundRealtimeService._hk_spot_cache is not None
+            cache is not None
             and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
+            and all(c in cache for c in (codes or []))
         ):
-            return FundRealtimeService._hk_spot_cache
+            return cache
 
         async with FundRealtimeService._spot_lock:
             now = time.time()
+            cache = FundRealtimeService._hk_spot_cache
             if (
-                FundRealtimeService._hk_spot_cache is not None
+                cache is not None
                 and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
             ):
-                return FundRealtimeService._hk_spot_cache
+                missing = [c for c in (codes or []) if c not in cache]
+                if missing and self._source_available(TENCENT_SOURCE):
+                    tmap = await self._get_tencent_pct(missing)
+                    if tmap:
+                        cache.update(tmap)
+                        FundRealtimeService._spot_ts = now
+                        logger.info(f"港股行情(腾讯补缺): +{len(tmap)} 只")
+                return cache
 
             if not self._source_available(EM_SOURCE):
+                # 东财熔断 → 腾讯按需
+                if codes and self._source_available(TENCENT_SOURCE):
+                    tencent_map = await self._get_tencent_pct(codes)
+                    if tencent_map:
+                        FundRealtimeService._hk_spot_cache = tencent_map
+                        FundRealtimeService._spot_ts = time.time()
+                        logger.info(f"港股实时行情(腾讯按需): {len(tencent_map)}/{len(codes)} 只")
+                        return tencent_map
                 return None
 
             try:
@@ -411,6 +556,14 @@ class FundRealtimeService:
                 return hk_map
             except Exception as e:
                 self._mark_source_fail(EM_SOURCE, str(e)[:80])
+                # 东财失败 → 腾讯按需
+                if codes and self._source_available(TENCENT_SOURCE):
+                    tencent_map = await self._get_tencent_pct(codes)
+                    if tencent_map:
+                        FundRealtimeService._hk_spot_cache = tencent_map
+                        FundRealtimeService._spot_ts = time.time()
+                        logger.info(f"港股实时行情(腾讯按需): {len(tencent_map)}/{len(codes)} 只")
+                        return tencent_map
                 return None
 
     async def _get_index_pct(self) -> Optional[float]:
@@ -431,6 +584,13 @@ class FundRealtimeService:
                 return FundRealtimeService._index_pct_cache
 
             if not self._source_available(EM_SOURCE):
+                # 东财熔断 → 腾讯
+                if self._source_available(TENCENT_SOURCE):
+                    pct_map = await self._get_tencent_pct(["000300"])
+                    if "000300" in pct_map:
+                        FundRealtimeService._index_pct_cache = pct_map["000300"]
+                        FundRealtimeService._spot_ts = time.time()
+                        return pct_map["000300"]
                 return None
 
             try:
@@ -450,7 +610,49 @@ class FundRealtimeService:
                 return pct
             except Exception as e:
                 self._mark_source_fail(EM_SOURCE, str(e)[:80])
+                if self._source_available(TENCENT_SOURCE):
+                    pct_map = await self._get_tencent_pct(["000300"])
+                    if "000300" in pct_map:
+                        FundRealtimeService._index_pct_cache = pct_map["000300"]
+                        FundRealtimeService._spot_ts = time.time()
+                        return pct_map["000300"]
                 return None
+
+    async def _get_tencent_quotes(self, codes: list[str]) -> dict[str, dict]:
+        """腾讯行情按需批量查询（熔断保护）→ {纯数字code: {name,price,pct,...}}
+
+        稳定源：无需鉴权、单次请求、覆盖 A股/ETF/港股/指数（2026-08-29 实测）。
+        按需模式只查所需代码（top10 场景 10 只一次请求），比全市场分页轻量得多。
+        """
+        if not codes:
+            return {}
+        if not self._source_available(TENCENT_SOURCE):
+            return {}
+        # 单次批量 ≤ 60 只（腾讯接口上限约 60，稳妥取 50 分批）
+        batches = [codes[i:i + 50] for i in range(0, len(codes), 50)]
+        all_quotes: dict[str, dict] = {}
+        try:
+            for batch in batches:
+                prefixed = ",".join(tencent_code(c) for c in batch)
+                url = TENCENT_URL.format(codes=prefixed)
+
+                def _do_request() -> str:
+                    resp = requests.get(url, timeout=FUNDGZ_TIMEOUT)
+                    resp.encoding = "gbk"
+                    return resp.text
+
+                text = await asyncio.to_thread(_do_request)
+                all_quotes.update(parse_tencent_quotes(text))
+            self._mark_source_ok(TENCENT_SOURCE)
+            return all_quotes
+        except Exception as e:
+            self._mark_source_fail(TENCENT_SOURCE, str(e)[:80])
+            return all_quotes
+
+    async def _get_tencent_pct(self, codes: list[str]) -> dict[str, float]:
+        """腾讯行情涨跌幅简化版 → {code: pct%}"""
+        quotes = await self._get_tencent_quotes(codes)
+        return {c: q["pct"] for c, q in quotes.items() if q.get("pct") is not None}
 
     async def _fetch_fundgz(self, code: str) -> Optional[dict]:
         """天天基金估值 JSONP（失败进入 5 分钟冷却，防反爬穿透）
@@ -494,11 +696,6 @@ class FundRealtimeService:
         一次查询所有待估基金的最新季度持仓 + 一份全市场个股快照，
         避免 N+1 网络请求。
         """
-        stock_pct = await self._get_stock_spot()
-        if not stock_pct:
-            return
-        index_pct = await self._get_index_pct()
-
         from sqlalchemy import select
         from backend.models.fund_holding import FundHolding
 
@@ -528,6 +725,16 @@ class FundRealtimeService:
         for h in holdings_rows:
             if latest_q.get(h.fund_id) == h.quarter_label:
                 by_fund.setdefault(h.fund_id, []).append((h.stock_code, h.ratio))
+
+        if not by_fund:
+            return
+
+        # 收集所需个股代码 → 快照降级链可用腾讯按需（只查所需，轻量）
+        needed_codes = sorted({c for holdings in by_fund.values() for c, _ in holdings})
+        stock_pct = await self._get_stock_spot(codes=needed_codes)
+        if not stock_pct:
+            return
+        index_pct = await self._get_index_pct()
 
         for f in funds:
             holdings = by_fund.get(f.id)
@@ -573,16 +780,18 @@ class FundRealtimeService:
         if not holdings:
             return []
 
-        stock_pct = await self._get_stock_spot() or {}
-
-        # 5 位纯数字代码视为港股（A股为 6 位），A 股快照查不到时查港股
+        # 5 位纯数字代码视为港股（A股为 6 位）
         hk_codes = [
             h.stock_code for h in holdings
             if len(h.stock_code) == 5 and h.stock_code.isdigit()
         ]
+        a_codes = [h.stock_code for h in holdings if h.stock_code not in hk_codes]
+
+        stock_pct = (await self._get_stock_spot(codes=a_codes)) or {}
+
         hk_pct: dict[str, float] = {}
         if hk_codes:
-            hk_spot = await self._get_hk_spot()
+            hk_spot = await self._get_hk_spot(codes=hk_codes)
             if hk_spot:
                 hk_pct = hk_spot
 
