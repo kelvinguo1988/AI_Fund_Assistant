@@ -265,6 +265,9 @@ class AnalysisService:
 
             # 生成报告
             analysis_date = date.today().isoformat()
+            top10_changes = None
+            if "top10_change" in enabled_report_items:
+                top10_changes = await self._get_top10_changes(fund.id)
             report_md = report_engine.generate_markdown(
                 fund_code=fund.code,
                 fund_name=fund.name,
@@ -272,6 +275,7 @@ class AnalysisService:
                 signal=signal,
                 factor_scores=corrected_scores,
                 enabled_items=enabled_report_items,
+                top10_changes=top10_changes,
             )
 
             # 存储结果（含质量过滤扩展字段）
@@ -420,6 +424,9 @@ class AnalysisService:
                     thresholds_json=thresholds_json,
                 )
 
+                top10_changes = None
+                if "top10_change" in enabled_report_items:
+                    top10_changes = await self._get_top10_changes(fund.id)
                 report_md = report_engine.generate_markdown(
                     fund_code=fund.code,
                     fund_name=fund.name,
@@ -427,6 +434,7 @@ class AnalysisService:
                     signal=signal,
                     factor_scores=corrected_scores,
                     enabled_items=enabled_report_items,
+                    top10_changes=top10_changes,
                 )
 
                 result_out = await self._save_result(
@@ -457,6 +465,20 @@ class AnalysisService:
             "failed": failed_codes,
         }
         yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
+
+    async def _get_top10_changes(self, fund_id: int) -> Optional[list[dict]]:
+        """前十大持仓当日涨跌（报告 top10_change 项）
+
+        FundRealtimeService 内部有 60s 全市场快照缓存，批量分析时只请求一次行情。
+        """
+        try:
+            from backend.services.fund_realtime_service import FundRealtimeService
+            rt_svc = FundRealtimeService(self.db)
+            changes = await rt_svc.get_top10_changes(fund_id)
+            return changes or None
+        except Exception as e:
+            logger.warning(f"获取前十大持仓涨跌失败 fund_id={fund_id}: {e}")
+            return None
 
     async def _save_result(
         self,

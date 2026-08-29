@@ -689,6 +689,13 @@ async def init_db() -> None:
                     sort_order=14,
                     created_at=now,
                 ),
+                ReportConfig(
+                    name="前十大持仓涨跌",
+                    item_key="top10_change",
+                    enabled=True,
+                    sort_order=15,
+                    created_at=now,
+                ),
         ]
         # 逐条检查缺失的配置项，避免覆盖已有数据
         for cfg in default_report_configs:

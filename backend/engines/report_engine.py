@@ -42,6 +42,7 @@ class ReportEngine:
         signal: SignalResult,
         factor_scores: list[FactorScoreResult],
         enabled_items: list[str] | None = None,
+        top10_changes: list[dict] | None = None,
     ) -> str:
         """生成 Markdown 格式报告
 
@@ -52,6 +53,8 @@ class ReportEngine:
             signal: 信号结果
             factor_scores: 因子评分列表
             enabled_items: 启用的报告项列表，None 表示全部
+            top10_changes: 前十大持仓当日涨跌 [{"stock_name","stock_code","ratio","pct"}]
+                           （top10_change 报告项启用时由调用方传入）
 
         Returns:
             Markdown 文本
@@ -115,6 +118,35 @@ class ReportEngine:
             lines.append("")
             risk_text = self._generate_risk_warning(signal, factor_scores)
             lines.append(risk_text)
+            lines.append("")
+
+        # 前十大持仓涨跌（2026-08-29 新增：最新季报 top10 × 当日实时/收盘涨跌幅）
+        if "top10_change" in enabled_items and top10_changes:
+            lines.append("## 前十大持仓涨跌")
+            lines.append("")
+            lines.append("| 股票 | 代码 | 占净值比 | 今日涨跌 |")
+            lines.append("|------|------|----------|----------|")
+            for h in top10_changes:
+                pct = h.get("pct")
+                pct_str = f"{pct:+.2f}%" if pct is not None else "—"
+                ratio = h.get("ratio")
+                ratio_str = f"{ratio:.2f}%" if ratio is not None else "—"
+                lines.append(
+                    f"| {h.get('stock_name', '')} | {h.get('stock_code', '')} "
+                    f"| {ratio_str} | {pct_str} |"
+                )
+            covered = [h for h in top10_changes if h.get("pct") is not None]
+            lines.append("")
+            if covered:
+                w_sum = sum(h["pct"] * h["ratio"] for h in covered if h.get("ratio"))
+                w_tot = sum(h["ratio"] for h in covered if h.get("ratio"))
+                if w_tot > 0:
+                    lines.append(
+                        f"**持仓加权涨跌**: {w_sum / w_tot:+.2f}%"
+                        f"（{len(covered)}/{len(top10_changes)} 只已取到行情）"
+                    )
+            else:
+                lines.append("*当日行情暂不可用*")
             lines.append("")
 
         lines.append("---")

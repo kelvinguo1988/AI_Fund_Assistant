@@ -166,3 +166,77 @@ async def test_etf_uses_spot(monkeypatch):
     assert r["estimated_nav"] == 4.679
     assert r["growth_pct"] == -0.26
     FundRealtimeService._estimate_cache.clear()
+
+
+# ── 报告 top10_change 渲染 ────────────────────────────────────────────
+
+class TestTop10ReportRendering:
+    def test_markdown_top10_section(self):
+        from backend.engines.report_engine import ReportEngine
+        from backend.engines.scoring_engine import SignalResult
+
+        signal = SignalResult(
+            weighted_score=3.0, raw_score=3.0, signal_direction="buy",
+            signal_strength="moderate_buy", operation_advice="x", equity_ratio=0.7,
+        )
+        changes = [
+            {"stock_name": "中际旭创", "stock_code": "300308", "ratio": 8.7, "pct": -0.9},
+            {"stock_name": "中芯国际", "stock_code": "00981", "ratio": 5.0, "pct": None},
+        ]
+        md = ReportEngine().generate_markdown(
+            fund_code="018994", fund_name="测试", analysis_date="2026-08-29",
+            signal=signal, factor_scores=[],
+            enabled_items=["top10_change"], top10_changes=changes,
+        )
+        assert "## 前十大持仓涨跌" in md
+        assert "-0.90%" in md
+        assert "持仓加权涨跌" in md  # 只有 1 只有行情，加权=其自身
+        assert "1/2 只已取到行情" in md
+
+    def test_markdown_no_data_section_skipped(self):
+        from backend.engines.report_engine import ReportEngine
+        from backend.engines.scoring_engine import SignalResult
+
+        signal = SignalResult(
+            weighted_score=3.0, raw_score=3.0, signal_direction="buy",
+            signal_strength="moderate_buy", operation_advice="x", equity_ratio=0.7,
+        )
+        md = ReportEngine().generate_markdown(
+            fund_code="x", fund_name="t", analysis_date="d",
+            signal=signal, factor_scores=[],
+            enabled_items=["top10_change"], top10_changes=None,
+        )
+        assert "前十大持仓涨跌" not in md
+
+    def test_get_top10_changes_hk_lookup(self, monkeypatch):
+        """5 位纯数字代码走港股快照查找"""
+        import asyncio
+        from backend.models.fund_holding import FundHolding
+
+        fake_holdings = [
+            FundHolding(fund_id=1, stock_code="300308",
+                        stock_name="中际旭创", ratio=8.7, quarter_label="q"),
+            FundHolding(fund_id=1, stock_code="00981",
+                        stock_name="中芯国际", ratio=5.0, quarter_label="q"),
+        ]
+
+        async def _fake_get_latest(db, fund_id, limit=10):
+            return fake_holdings
+
+        import backend.services.fund_holding_service as _fhs
+        monkeypatch.setattr(_fhs, "get_latest_holdings", _fake_get_latest)
+
+        svc = FundRealtimeService(db=None)
+
+        async def _fake_stock(self):
+            return {"300308": -0.9}
+
+        async def _fake_hk(self):
+            return {"00981": 1.23}
+
+        monkeypatch.setattr(FundRealtimeService, "_get_stock_spot", _fake_stock)
+        monkeypatch.setattr(FundRealtimeService, "_get_hk_spot", _fake_hk)
+        result = asyncio.run(svc.get_top10_changes(1))
+        by_code = {r["stock_code"]: r["pct"] for r in result}
+        assert by_code["300308"] == -0.9
+        assert by_code["00981"] == 1.23

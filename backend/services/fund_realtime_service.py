@@ -128,6 +128,7 @@ class FundRealtimeService:
     # 类级共享缓存（一次快照服务全部基金）
     _stock_spot_cache: Optional[dict[str, float]] = None
     _etf_spot_cache: Optional[dict[str, dict]] = None
+    _hk_spot_cache: Optional[dict[str, float]] = None
     _index_pct_cache: Optional[float] = None
     _spot_ts: float = 0.0
     _spot_lock: Optional[asyncio.Lock] = None
@@ -264,7 +265,12 @@ class FundRealtimeService:
                 return None
 
     async def _get_stock_spot(self) -> Optional[dict[str, float]]:
-        """全市场 A 股快照（60s 缓存）→ {code: 今日涨跌幅%}"""
+        """全市场 A 股快照（60s 缓存）→ {code: 今日涨跌幅%}
+
+        数据源降级：东财 stock_zh_a_spot_em（快，一次请求）
+        → 新浪 stock_zh_a_spot（慢 ~30s 分页，但独立站点，东财限连时可用）。
+        新浪代码带 sh/sz/bj 前缀，统一去掉前 2 字符归一化。
+        """
         now = time.time()
         if (
             FundRealtimeService._stock_spot_cache is not None
@@ -280,25 +286,88 @@ class FundRealtimeService:
             ):
                 return FundRealtimeService._stock_spot_cache
 
+            import akshare as ak
+            from backend.data_sources.akshare_adapter import AKShareAdapter
+            adapter = AKShareAdapter()
+
+            pct_map: Optional[dict[str, float]] = None
+
+            # 1. 东财快照（首选）
+            try:
+                df = await adapter._call(ak.stock_zh_a_spot_em, _max_attempts=2)
+                if df is not None and not df.empty:
+                    pct_map = {}
+                    for _, row in df.iterrows():
+                        code = str(row.get("代码", ""))
+                        pct = _to_float(row.get("涨跌幅"))
+                        if code and pct is not None:
+                            pct_map[code] = pct
+                    logger.info(f"A 股实时快照刷新(东财): {len(pct_map)} 只")
+            except Exception as e:
+                logger.warning(f"东财 A 股快照获取失败: {e}")
+
+            # 2. 新浪快照（降级）
+            if not pct_map:
+                try:
+                    df = await adapter._call(ak.stock_zh_a_spot, _max_attempts=1)
+                    if df is not None and not df.empty:
+                        pct_map = {}
+                        for _, row in df.iterrows():
+                            raw = str(row.get("代码", ""))
+                            # sh600000/sz000001/bj920000 → 纯数字
+                            code = raw[2:] if len(raw) > 6 else raw
+                            pct = _to_float(row.get("涨跌幅"))
+                            if code and pct is not None:
+                                pct_map[code] = pct
+                        logger.info(f"A 股实时快照刷新(新浪): {len(pct_map)} 只")
+                except Exception as e:
+                    logger.warning(f"新浪 A 股快照获取失败: {e}")
+
+            if pct_map:
+                FundRealtimeService._stock_spot_cache = pct_map
+                FundRealtimeService._spot_ts = now
+            return pct_map
+
+    async def _get_hk_spot(self) -> Optional[dict[str, float]]:
+        """港股全市场快照（60s 缓存，尽力而为）→ {code: 今日涨跌幅%}
+
+        场外基金 top10 常含港股（如中芯国际 00981）；东财限连时返回 None，
+        对应持仓在报告中显示"—"。
+        """
+        now = time.time()
+        if (
+            FundRealtimeService._hk_spot_cache is not None
+            and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
+        ):
+            return FundRealtimeService._hk_spot_cache
+
+        async with FundRealtimeService._spot_lock:
+            now = time.time()
+            if (
+                FundRealtimeService._hk_spot_cache is not None
+                and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
+            ):
+                return FundRealtimeService._hk_spot_cache
+
             try:
                 import akshare as ak
                 from backend.data_sources.akshare_adapter import AKShareAdapter
                 adapter = AKShareAdapter()
-                df = await adapter._call(ak.stock_zh_a_spot_em, _max_attempts=2)
+                df = await adapter._call(ak.stock_hk_spot_em, _max_attempts=1)
                 if df is None or df.empty:
                     return None
-                pct_map: dict[str, float] = {}
+                hk_map: dict[str, float] = {}
                 for _, row in df.iterrows():
-                    code = str(row.get("代码", ""))
+                    code = str(row.get("代码", "")).zfill(5)
                     pct = _to_float(row.get("涨跌幅"))
                     if code and pct is not None:
-                        pct_map[code] = pct
-                FundRealtimeService._stock_spot_cache = pct_map
+                        hk_map[code] = pct
+                FundRealtimeService._hk_spot_cache = hk_map
                 FundRealtimeService._spot_ts = now
-                logger.info(f"A 股实时快照刷新: {len(pct_map)} 只")
-                return pct_map
+                logger.info(f"港股实时快照刷新: {len(hk_map)} 只")
+                return hk_map
             except Exception as e:
-                logger.warning(f"A 股快照获取失败: {e}")
+                logger.warning(f"港股快照获取失败: {e}")
                 return None
 
     async def _get_index_pct(self) -> Optional[float]:
@@ -441,6 +510,49 @@ class FundRealtimeService:
     @staticmethod
     def _cache_estimate(code: str, data: dict) -> None:
         FundRealtimeService._estimate_cache[code] = (time.time(), data)
+
+    # ── 报告项：前十大持仓涨跌 ──────────────────────────────────────────
+
+    async def get_top10_changes(self, fund_id: int) -> list[dict]:
+        """最新季报前十大持仓的当日涨跌（供报告 top10_change 项使用）
+
+        Returns:
+            [{"stock_name","stock_code","ratio","pct"}] — pct 为 None 表示
+            行情未取到（停牌/港股/数据缺失）
+        """
+        from backend.services.fund_holding_service import get_latest_holdings
+
+        holdings = await get_latest_holdings(self.db, fund_id, limit=10)
+        if not holdings:
+            return []
+
+        stock_pct = await self._get_stock_spot() or {}
+
+        # 5 位纯数字代码视为港股（A股为 6 位），A 股快照查不到时查港股
+        hk_codes = [
+            h.stock_code for h in holdings
+            if len(h.stock_code) == 5 and h.stock_code.isdigit()
+        ]
+        hk_pct: dict[str, float] = {}
+        if hk_codes:
+            hk_spot = await self._get_hk_spot()
+            if hk_spot:
+                hk_pct = hk_spot
+
+        def _lookup(code: str) -> Optional[float]:
+            if code in stock_pct:
+                return stock_pct[code]
+            return hk_pct.get(code)
+
+        result = []
+        for h in holdings:
+            result.append({
+                "stock_name": h.stock_name,
+                "stock_code": h.stock_code,
+                "ratio": h.ratio,
+                "pct": _lookup(h.stock_code),
+            })
+        return result
 
 
 def _to_float(v) -> Optional[float]:
