@@ -240,3 +240,88 @@ class TestTop10ReportRendering:
         by_code = {r["stock_code"]: r["pct"] for r in result}
         assert by_code["300308"] == -0.9
         assert by_code["00981"] == 1.23
+
+
+# ── 数据源熔断（防封禁）────────────────────────────────────────────────
+
+class TestSourceCircuitBreaker:
+    def setup_method(self):
+        FundRealtimeService._source_fail_until.clear()
+        FundRealtimeService._stock_spot_cache = None
+        FundRealtimeService._etf_spot_cache = None
+        FundRealtimeService._hk_spot_cache = None
+        FundRealtimeService._index_pct_cache = None
+        FundRealtimeService._spot_ts = 0.0
+
+    def teardown_method(self):
+        FundRealtimeService._source_fail_until.clear()
+
+    def test_mark_fail_blocks_source(self):
+        import time as _t
+        svc = FundRealtimeService(db=None)
+        svc._mark_source_fail("eastmoney", "test")
+        assert not FundRealtimeService._source_available("eastmoney")
+        # 其他源不受影响
+        assert FundRealtimeService._source_available("sina")
+
+    def test_em_breaker_skips_request_and_falls_to_sina(self, monkeypatch):
+        """东财熔断期间不发请求，直接走新浪"""
+        import asyncio
+        import pandas as pd
+
+        FundRealtimeService._source_fail_until["eastmoney"] = float("inf")
+        svc = FundRealtimeService(db=None)
+
+        em_called = []
+
+        def _fake_em(*a, **k):
+            em_called.append(1)
+            raise RuntimeError("should not be called")
+
+        def _fake_sina(*a, **k):
+            return pd.DataFrame({
+                "代码": ["sh600000", "sz000001"],
+                "涨跌幅": [1.5, -0.5],
+            })
+
+        import akshare as ak
+        monkeypatch.setattr(ak, "stock_zh_a_spot_em", _fake_em)
+        monkeypatch.setattr(ak, "stock_zh_a_spot", _fake_sina)
+
+        class _FakeAdapter:
+            async def _call(self, func, *a, **k):
+                return func(*a, **k)
+
+        import backend.data_sources.akshare_adapter as _ada
+        monkeypatch.setattr(_ada, "AKShareAdapter", _FakeAdapter)
+
+        result = asyncio.run(svc._get_stock_spot())
+        assert em_called == [], "东财熔断期间不应发出请求"
+        assert result == {"600000": 1.5, "000001": -0.5}
+
+    def test_all_sources_cooldown_returns_fast(self, monkeypatch):
+        """双源都熔断 → 秒回 None，零网络请求"""
+        import asyncio
+        import time as _t
+
+        FundRealtimeService._source_fail_until = {
+            "eastmoney": _t.time() + 600,
+            "sina": _t.time() + 600,
+        }
+        svc = FundRealtimeService(db=None)
+
+        def _boom(*a, **k):
+            raise RuntimeError("no network call expected")
+
+        import akshare as ak
+        monkeypatch.setattr(ak, "stock_zh_a_spot_em", _boom)
+        monkeypatch.setattr(ak, "stock_zh_a_spot", _boom)
+
+        result = asyncio.run(svc._get_stock_spot())
+        assert result is None
+
+    def test_success_clears_breaker(self):
+        svc = FundRealtimeService(db=None)
+        svc._mark_source_fail("eastmoney")
+        svc._mark_source_ok("eastmoney")
+        assert FundRealtimeService._source_available("eastmoney")

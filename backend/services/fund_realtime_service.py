@@ -49,6 +49,16 @@ ESTIMATE_CACHE_TTL = 60.0      # 单基金估值结果缓存（秒）
 FUNDGZ_FAIL_COOLDOWN = 300.0   # fundgz 失败冷却（防每分钟重试被反爬盯上）
 FUNDGZ_TIMEOUT = 8.0
 
+# 数据源熔断冷却（防封禁）：请求失败后 N 秒内不再尝试该源。
+# 没有熔断时，每次页面刷新都会重新撞已被限连的接口（东财 2 次重试 +
+# 新浪 70 页分页），请求风暴只会加重封禁。冷却期间直接用缓存/空值。
+SOURCE_FAIL_COOLDOWN = 600.0
+
+# 熔断键："eastmoney" 管所有东财实时快照接口（封禁按 IP/域名生效，
+# 单接口被拒时其余东财接口也无意义）；"sina" 管新浪分页快照。
+EM_SOURCE = "eastmoney"
+SINA_SOURCE = "sina"
+
 FUNDGZ_URL = "https://fundgz.1234567.com.cn/js/{code}.js"
 
 # 估值模型参数
@@ -137,6 +147,28 @@ class FundRealtimeService:
     _estimate_cache: dict[str, tuple[float, dict]] = {}
     # fundgz 连续失败冷却时间戳
     _fundgz_fail_until: float = 0.0
+    # 数据源熔断冷却 {source: fail_until_ts}
+    _source_fail_until: dict[str, float] = {}
+
+    # ── 熔断器 ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _source_available(name: str) -> bool:
+        return time.time() >= FundRealtimeService._source_fail_until.get(name, 0.0)
+
+    @staticmethod
+    def _mark_source_fail(name: str, reason: str = "") -> None:
+        until = time.time() + SOURCE_FAIL_COOLDOWN
+        prev = FundRealtimeService._source_fail_until.get(name, 0.0)
+        FundRealtimeService._source_fail_until[name] = max(prev, until)
+        logger.warning(
+            f"数据源 [{name}] 熔断 {SOURCE_FAIL_COOLDOWN:.0f}s（防封禁）"
+            + (f": {reason}" if reason else "")
+        )
+
+    @staticmethod
+    def _mark_source_ok(name: str) -> None:
+        FundRealtimeService._source_fail_until.pop(name, None)
 
     def __init__(self, db) -> None:
         self.db = db
@@ -237,6 +269,9 @@ class FundRealtimeService:
             ):
                 return FundRealtimeService._etf_spot_cache
 
+            if not self._source_available(EM_SOURCE):
+                return None
+
             try:
                 import akshare as ak
                 from backend.data_sources.akshare_adapter import AKShareAdapter
@@ -256,12 +291,13 @@ class FundRealtimeService:
                         "time": str(row.get("更新时间", "")),
                         "date": str(row.get("数据日期", "")),
                     }
+                self._mark_source_ok(EM_SOURCE)
                 FundRealtimeService._etf_spot_cache = spot
                 FundRealtimeService._spot_ts = now
                 logger.info(f"ETF 实时快照刷新: {len(spot)} 只")
                 return spot
             except Exception as e:
-                logger.warning(f"ETF 快照获取失败: {e}")
+                self._mark_source_fail(EM_SOURCE, str(e)[:80])
                 return None
 
     async def _get_stock_spot(self) -> Optional[dict[str, float]]:
@@ -292,22 +328,24 @@ class FundRealtimeService:
 
             pct_map: Optional[dict[str, float]] = None
 
-            # 1. 东财快照（首选）
-            try:
-                df = await adapter._call(ak.stock_zh_a_spot_em, _max_attempts=2)
-                if df is not None and not df.empty:
-                    pct_map = {}
-                    for _, row in df.iterrows():
-                        code = str(row.get("代码", ""))
-                        pct = _to_float(row.get("涨跌幅"))
-                        if code and pct is not None:
-                            pct_map[code] = pct
-                    logger.info(f"A 股实时快照刷新(东财): {len(pct_map)} 只")
-            except Exception as e:
-                logger.warning(f"东财 A 股快照获取失败: {e}")
+            # 1. 东财快照（首选；熔断中直接跳过不发请求）
+            if self._source_available(EM_SOURCE):
+                try:
+                    df = await adapter._call(ak.stock_zh_a_spot_em, _max_attempts=2)
+                    if df is not None and not df.empty:
+                        pct_map = {}
+                        for _, row in df.iterrows():
+                            code = str(row.get("代码", ""))
+                            pct = _to_float(row.get("涨跌幅"))
+                            if code and pct is not None:
+                                pct_map[code] = pct
+                        self._mark_source_ok(EM_SOURCE)
+                        logger.info(f"A 股实时快照刷新(东财): {len(pct_map)} 只")
+                except Exception as e:
+                    self._mark_source_fail(EM_SOURCE, str(e)[:80])
 
-            # 2. 新浪快照（降级）
-            if not pct_map:
+            # 2. 新浪快照（降级；独立站点，东财限连时可用）
+            if not pct_map and self._source_available(SINA_SOURCE):
                 try:
                     df = await adapter._call(ak.stock_zh_a_spot, _max_attempts=1)
                     if df is not None and not df.empty:
@@ -319,9 +357,10 @@ class FundRealtimeService:
                             pct = _to_float(row.get("涨跌幅"))
                             if code and pct is not None:
                                 pct_map[code] = pct
+                        self._mark_source_ok(SINA_SOURCE)
                         logger.info(f"A 股实时快照刷新(新浪): {len(pct_map)} 只")
                 except Exception as e:
-                    logger.warning(f"新浪 A 股快照获取失败: {e}")
+                    self._mark_source_fail(SINA_SOURCE, str(e)[:80])
 
             if pct_map:
                 FundRealtimeService._stock_spot_cache = pct_map
@@ -349,6 +388,9 @@ class FundRealtimeService:
             ):
                 return FundRealtimeService._hk_spot_cache
 
+            if not self._source_available(EM_SOURCE):
+                return None
+
             try:
                 import akshare as ak
                 from backend.data_sources.akshare_adapter import AKShareAdapter
@@ -362,12 +404,13 @@ class FundRealtimeService:
                     pct = _to_float(row.get("涨跌幅"))
                     if code and pct is not None:
                         hk_map[code] = pct
+                self._mark_source_ok(EM_SOURCE)
                 FundRealtimeService._hk_spot_cache = hk_map
                 FundRealtimeService._spot_ts = now
                 logger.info(f"港股实时快照刷新: {len(hk_map)} 只")
                 return hk_map
             except Exception as e:
-                logger.warning(f"港股快照获取失败: {e}")
+                self._mark_source_fail(EM_SOURCE, str(e)[:80])
                 return None
 
     async def _get_index_pct(self) -> Optional[float]:
@@ -387,6 +430,9 @@ class FundRealtimeService:
             ):
                 return FundRealtimeService._index_pct_cache
 
+            if not self._source_available(EM_SOURCE):
+                return None
+
             try:
                 import akshare as ak
                 from backend.data_sources.akshare_adapter import AKShareAdapter
@@ -398,11 +444,12 @@ class FundRealtimeService:
                 if row.empty:
                     return None
                 pct = _to_float(row.iloc[0].get("涨跌幅"))
+                self._mark_source_ok(EM_SOURCE)
                 FundRealtimeService._index_pct_cache = pct
                 FundRealtimeService._spot_ts = now
                 return pct
             except Exception as e:
-                logger.warning(f"指数快照获取失败: {e}")
+                self._mark_source_fail(EM_SOURCE, str(e)[:80])
                 return None
 
     async def _fetch_fundgz(self, code: str) -> Optional[dict]:
