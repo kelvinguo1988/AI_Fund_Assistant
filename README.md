@@ -54,7 +54,8 @@ AI_Fund_Assistant/
 - **定时分析**：交易日自动执行 + 手动触发
 - **流式分析**：手动触发时分块处理基金数据，SSE 逐块推送结果至仪表盘，实时展示进度与中间结果
 - **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析），推送内容严格跟随报告配置项过滤，未启用的报告项不会推送
-- **AI 多模型配置**：支持 DeepSeek、智谱 GLM、通义千问、OpenAI 四种模型，系统设置页可视化配置模型/API Key/Base URL，AI 对话自动注入系统全量数据（基金池+最新分析+因子配置）
+- **AI 多模型配置**：支持 DeepSeek、智谱 GLM、通义千问、OpenAI 四种模型，系统设置页可视化配置供应商/API Key/Base URL，并支持**模型 ID 覆盖**（如 glm-4-plus / qwen-max / deepseek-reasoner，留空用预设默认）
+- **AI Skills 分析技能**：可导入的提示词扩展包，前端一键启停/删除；对话时按序注入系统提示词，支持 `{{fund_pool}}`（基金池+最新分析）/ `{{market_regime}}`（市场环境）/ `{{fund:<id>}}`（单基金详情）三个数据占位符自动渲染，详见下方「AI Skills」章节
 - **信号回测**：历史信号与基金净值按日期对齐，仓位策略模拟累计收益，信号有效性评分（买入看 N 日上涨/卖出看 N 日下跌），ECharts 双轴图表+评分明细表格
 - **东方财富反爬虫补丁**：NID 授权令牌 + User-Agent 轮换 + 请求频率控制 + 全局默认请求超时（20s，防止死连接无限挂起耗尽线程池导致仪表盘数据更新 TimeoutError）
 - **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
@@ -145,6 +146,41 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 仪表盘"实时估值"列与报告"前十大持仓涨跌"为盘中估算：场外基金优先天天基金官方估值（fundgz），不可用时按最新季报 top10 持仓 × 个股实时涨跌加权自算（东财→腾讯→新浪三级个股源）；覆盖率 <50% 自动切换指数混合模型。**分析信号始终基于官方净值计算**，估算值仅供盘中参考。
 
+### AI Skills 分析技能
+
+Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注入专业分析框架。管理入口：系统设置页「AI 分析技能」区块（新建/导入/启停/删除）。
+
+**调用逻辑**：
+
+```
+用户消息 → 构建系统提示词：
+  ① 基础角色提示词（量化助手身份与注意事项）
+  ② 系统数据上下文（基金池最新分析 + 评分阈值）
+  ③ 会话上下文（单基金/基金池/市场）
+  ④ 启用的 Skills（按创建顺序，占位符已渲染为真实数据）→ LLM
+```
+
+**数据占位符**（写在 skill 的 system_prompt 里，注入前自动渲染；数据缺失降级为"（数据暂不可用）"不阻塞对话）：
+
+| 占位符 | 渲染内容 |
+|--------|---------|
+| `{{fund_pool}}` | 全部活跃基金 + 最新评分/方向/强度 |
+| `{{market_regime}}` | 沪深300 PE 分位、涨跌家数比、两融 7 日变化 |
+| `{{fund:<id>}}` | 指定基金最新分析详情（评分/信号/因子/建议） |
+
+**导入格式**（前端「导入 JSON」粘贴，按名称 upsert）：
+
+```json
+[
+  {
+    "name": "深度基本面分析",
+    "description": "从持仓/风格/风险维度深度分析",
+    "system_prompt": "你将扮演资深基金分析师…\n\n{{fund_pool}}\n\n{{market_regime}}",
+    "enabled": true
+  }
+]
+```
+
 ---
 
 ## API 概览
@@ -176,6 +212,10 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | `/api/factors/import` | POST | 因子导入 JSON |
 | `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
 | `/api/ai/chat` | POST | AI 对话 |
+| `/api/ai/skills` | GET/POST | AI Skill 列表 / 新建 |
+| `/api/ai/skills/import` | POST | Skill 批量导入 JSON（按名称 upsert） |
+| `/api/ai/skills/{id}/toggle` | PATCH | Skill 启用/禁用 |
+| `/api/ai/skills/{id}` | PUT/DELETE | 更新 / 删除 Skill |
 | `/api/push-channels` | GET/POST | 推送渠道 |
 | `/api/schedules` | GET/POST | 调度计划 |
 | `/api/system` | GET/PUT | 系统配置（AI 开关、模型、API Key） |

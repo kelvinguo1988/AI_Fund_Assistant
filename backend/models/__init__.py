@@ -7,6 +7,7 @@ from backend.models.schedule import Schedule
 from backend.models.report_config import ReportConfig
 from backend.models.analysis_result import AnalysisResult
 from backend.models.ai_conversation import AIConversation
+from backend.models.ai_skill import AISkill
 from backend.models.system_config import SystemConfig
 from backend.models.fund_holding import FundHolding
 from backend.models.fund_manager_record import FundManagerRecord
@@ -22,6 +23,7 @@ __all__ = [
     "ReportConfig",
     "AnalysisResult",
     "AIConversation",
+    "AISkill",
     "SystemConfig",
     "FundHolding",
     "FundManagerRecord",

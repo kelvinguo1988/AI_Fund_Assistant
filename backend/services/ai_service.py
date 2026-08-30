@@ -62,9 +62,12 @@ class AIService:
         ]
         messages.append({"role": "user", "content": message.content})
 
-        # 调用 LLM
+        # 调用 LLM（ai_model_id 非空时覆盖 preset 默认模型 ID，如 glm-4-plus）
         from backend.llm.factory import LLMFactory
-        provider = LLMFactory.create(ai_model, ai_api_key, ai_base_url)
+        provider = LLMFactory.create(
+            ai_model, ai_api_key, ai_base_url,
+            model_id=config_map.get("ai_model_id") or None,
+        )
 
         try:
             ai_response = await provider.chat(
@@ -206,6 +209,18 @@ class AIService:
 
         if context_parts:
             base_prompt += "\n当前上下文信息:\n" + "\n".join(context_parts)
+
+        # ── 启用的 Skill 注入（占位符渲染后置于数据上下文之前）──
+        from backend.services.ai_skill_service import (
+            build_skills_prompt, get_enabled_skills, render_skill_prompts,
+        )
+        skills = await get_enabled_skills(self.db)
+        if skills:
+            rendered = await render_skill_prompts(skills, self.db)
+            skill_blocks = [
+                f"### Skill: {name}\n{prompt}" for name, prompt in rendered
+            ]
+            base_prompt += "\n\n【启用的分析技能（必须遵循其中的分析框架与输出要求）】\n" + "\n\n".join(skill_blocks)
 
         return base_prompt
 

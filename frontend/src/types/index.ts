@@ -273,6 +273,7 @@ export interface AIConfigUpdate {
   ai_model?: string | null;
   ai_api_key?: string | null;
   ai_base_url?: string | null;
+  ai_model_id?: string | null;
 }
 
 export interface AIModelPreset {
@@ -286,7 +287,25 @@ export interface AIConfigOut {
   ai_enabled: boolean;
   ai_model: string;
   ai_base_url: string;
+  ai_model_id?: string | null;
   presets: AIModelPreset[];
+}
+
+/* ── AI Skills ─────────────────────────────────────────────────── */
+export interface AISkill {
+  id: number;
+  name: string;
+  description?: string | null;
+  system_prompt: string;
+  enabled: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AISkillImportResult {
+  created: number;
+  updated: number;
+  errors: string[];
 }
 
 /* ── 评分阈值配置 ───────────────────────────────────────────────── */

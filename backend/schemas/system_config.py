@@ -11,6 +11,7 @@ class AIConfigUpdate(BaseModel):
     ai_model: Optional[str] = Field(None, description="AI 模型：deepseek / openai / tongyi")
     ai_api_key: Optional[str] = Field(None, description="AI 模型 API Key")
     ai_base_url: Optional[str] = Field(None, description="AI 模型 API Base URL")
+    ai_model_id: Optional[str] = Field(None, description="具体模型 ID 覆盖（如 glm-4-plus/qwen-max，空=用预设默认）")
 
 
 class AIModelPreset(BaseModel):
@@ -27,9 +28,12 @@ class AIModelPreset(BaseModel):
 
 class AIConfigOut(BaseModel):
     """系统配置输出 Schema（不返回 api_key）"""
+    model_config = ConfigDict(protected_namespaces=())
+
     ai_enabled: bool
     ai_model: str
     ai_base_url: str
+    ai_model_id: Optional[str] = Field(None, description="具体模型 ID 覆盖，空=预设默认")
     presets: list[AIModelPreset] = Field(default_factory=list)
 
 

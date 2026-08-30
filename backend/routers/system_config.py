@@ -60,6 +60,7 @@ async def get_system_config(db: AsyncSession = Depends(get_db)):
         ai_enabled=config_map.get("ai_enabled", "true").lower() == "true",
         ai_model=config_map.get("ai_model", "deepseek"),
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
+        ai_model_id=config_map.get("ai_model_id") or None,
         presets=_AI_MODEL_PRESETS,
     ))
 
@@ -80,6 +81,8 @@ async def update_system_config(
         update_map["ai_api_key"] = body.ai_api_key
     if body.ai_base_url is not None:
         update_map["ai_base_url"] = body.ai_base_url
+    if body.ai_model_id is not None:
+        update_map["ai_model_id"] = body.ai_model_id.strip()
 
     for key, value in update_map.items():
         result = await db.execute(select(SystemConfig).where(SystemConfig.config_key == key))
@@ -97,6 +100,7 @@ async def update_system_config(
         ai_enabled=config_map.get("ai_enabled", "true").lower() == "true",
         ai_model=config_map.get("ai_model", "deepseek"),
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
+        ai_model_id=config_map.get("ai_model_id") or None,
         presets=_AI_MODEL_PRESETS,
     ))
 
