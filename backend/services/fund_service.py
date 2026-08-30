@@ -235,6 +235,42 @@ class FundService:
             "created_codes": created_codes,
         }
 
+    async def refresh_themes(self, fund_id: int) -> Optional[Fund]:
+        """刷新指定基金的相关主题
+
+        Args:
+            fund_id: 基金 ID
+
+        Returns:
+            更新后的 Fund 对象或 None
+        """
+        fund = await self.get_fund(fund_id)
+        if fund is None:
+            return None
+
+        themes = await run_with_timeout(fetch_related_themes, fund.code, timeout=20.0)
+        merged = _merge_tags(fund.tags, themes)
+        if merged != fund.tags:
+            fund.tags = merged
+            await self.db.commit()
+            await self.db.refresh(fund)
+        return fund
+
+    async def batch_update_status(self, ids: list[int], action: str) -> None:
+        """批量更新基金状态
+
+        Args:
+            ids: 基金 ID 列表
+            action: 操作类型 "active" / "disabled"
+        """
+        if action not in ("active", "disabled"):
+            raise ValueError(f"无效的操作类型: {action}")
+
+        stmt = update(Fund).where(Fund.id.in_(ids)).values(status=action)
+        await self.db.execute(stmt)
+        await self.db.commit()
+
+
 async def enrich_fund_themes(codes: list[str]) -> None:
     """后台任务：为新导入基金异步补全相关主题标签
 
@@ -271,42 +307,6 @@ async def enrich_fund_themes(codes: list[str]) -> None:
                 await session.rollback()
             except Exception:
                 pass
-
-
-    async def refresh_themes(self, fund_id: int) -> Optional[Fund]:
-        """刷新指定基金的相关主题
-
-        Args:
-            fund_id: 基金 ID
-
-        Returns:
-            更新后的 Fund 对象或 None
-        """
-        fund = await self.get_fund(fund_id)
-        if fund is None:
-            return None
-
-        themes = await run_with_timeout(fetch_related_themes, fund.code, timeout=20.0)
-        merged = _merge_tags(fund.tags, themes)
-        if merged != fund.tags:
-            fund.tags = merged
-            await self.db.commit()
-            await self.db.refresh(fund)
-        return fund
-
-    async def batch_update_status(self, ids: list[int], action: str) -> None:
-        """批量更新基金状态
-
-        Args:
-            ids: 基金 ID 列表
-            action: 操作类型 "active" / "disabled"
-        """
-        if action not in ("active", "disabled"):
-            raise ValueError(f"无效的操作类型: {action}")
-
-        stmt = update(Fund).where(Fund.id.in_(ids)).values(status=action)
-        await self.db.execute(stmt)
-        await self.db.commit()
 
 
 def _primary_tag(tags: Optional[str]) -> Optional[str]:

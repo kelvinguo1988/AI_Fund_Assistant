@@ -27,7 +27,6 @@ from backend.services.fund_cache_service import (
     get_cached_json,
     CACHE_KEY_EXTENDED_DETAIL,
 )
-from backend.services.fund_detail_service import fetch_period_returns
 from backend.services.fund_holding_service import get_latest_holdings, refresh_holdings
 from backend.services.fund_manager_service import get_current_managers, refresh_managers
 from backend.services.fund_change_detector import get_fund_changes
@@ -36,6 +35,9 @@ from backend.services.fund_service import FundService, classify_and_sort_funds, 
 from backend.services.fund_refresh_task import get_refresh_state, run_refresh_all_details
 
 router = APIRouter()
+
+# 后台任务强引用（防止 asyncio.create_task 结果被 GC 回收中途取消）
+_refresh_task: Optional[asyncio.Task] = None
 
 
 @router.get("/export")
@@ -221,8 +223,14 @@ async def refresh_all_details(
             "done": state.done,
         })
 
-    # 启动后台任务（使用独立 DB 会话，不占用请求级会话）
-    asyncio.create_task(run_refresh_all_details())
+    # 同步置 running 再启动任务：消除并发 POST 双触发竞态
+    #（原先状态由任务协程启动后才重置，两个近似同时的请求都会观察到 idle）
+    state.reset_running()
+
+    # 启动后台任务（使用独立 DB 会话，不占用请求级会话）；
+    # 持有强引用防止事件循环 GC 取消进行中的任务（CPython 已知陷阱）
+    global _refresh_task
+    _refresh_task = asyncio.create_task(run_refresh_all_details())
     return ApiResponse(data={
         "accepted": True,
         "already_running": False,
@@ -298,7 +306,11 @@ async def get_funds_detail(
     # 无缓存时直接抓取（按分类顺序）
     codes = ordered_codes
     name_map = {f.code: f.name for f in ordered}
-    returns = await fetch_period_returns(codes)
+
+    # 2026-08-29 修复：原先 fetch_period_returns 与 update_period_returns_cache
+    # 内部各抓一次全部 pingzhongdata JS——冷缓存时请求数翻倍（最易触发反爬的路径）
+    # 改为复用缓存写入的返回值
+    returns, _js_texts = await update_period_returns_cache(db, codes, name_map)
 
     data = [
         FundPeriodReturn(
@@ -308,9 +320,6 @@ async def get_funds_detail(
         )
         for code in codes
     ]
-
-    # 写入缓存
-    await update_period_returns_cache(db, codes, name_map)
     new_updated = await get_last_refreshed_time(db)
 
     return ApiResponse(data=FundDetailResponse(

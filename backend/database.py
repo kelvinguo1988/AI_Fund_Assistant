@@ -105,6 +105,19 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+        # uq_fund_date 唯一约束回填（旧库 create_all 不会补约束；并发分析曾可插重复行）
+        # 先清理历史重复（保留每组最新一条），再建唯一索引
+        try:
+            await conn.execute(text(
+                "DELETE FROM analysis_results WHERE id NOT IN "
+                "(SELECT MAX(id) FROM analysis_results GROUP BY fund_id, analysis_date)"
+            ))
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_fund_date ON analysis_results (fund_id, analysis_date)"
+            ))
+        except Exception:
+            pass
+
         # analysis_results 索引（按日期查询、按基金查历史时加速）
         for idx_sql in [
             "CREATE INDEX IF NOT EXISTS ix_analysis_results_analysis_date ON analysis_results (analysis_date)",
@@ -324,6 +337,15 @@ async def init_db() -> None:
                     "normalization": "none",
                 },
             ]
+            # 一次性重激活标记：此前版本的重激活迁移执行过即不再执行，
+            # 之后用户手动停用的因子不会被重启覆盖
+            _factor_reactivation_done = (
+                await session.execute(
+                    select(SystemConfig).where(
+                        SystemConfig.config_key == "factor_reactivation_v1"
+                    )
+                )
+            ).scalars().first() is not None
             for cfg in new_factors_config:
                 result = await session.execute(select(Factor).where(Factor.code == cfg["code"]))
                 existing = result.scalars().first()
@@ -341,13 +363,22 @@ async def init_db() -> None:
                         created_at=now, updated_at=now,
                     ))
                     logger.info(f"已添加新因子: {cfg['name']} ({cfg['code']})")
-                elif existing.status != "active":
-                    # 曾被迁移禁用的关键因子（如 macd_signal）重新激活，
-                    # 保证卖出信号所需的双向绝对因子生效；权重同步为最新配置。
+                elif existing.status != "active" and not _factor_reactivation_done:
+                    # 一次性迁移：曾被旧版禁用的关键因子（如 macd_signal）重新激活。
+                    # 2026-08-29 起加标记位——否则用户在因子管理页手动停用的因子
+                    # 会在每次重启后被静默重新激活并重置权重（覆盖用户意图）。
                     existing.status = "active"
                     existing.weight = cfg["weight"]
                     existing.updated_at = now
                     logger.info(f"已重新激活因子: {cfg['name']} ({cfg['code']})")
+
+            if not _factor_reactivation_done:
+                session.add(SystemConfig(
+                    config_key="factor_reactivation_v1",
+                    config_value="done",
+                    description="内置因子一次性重激活迁移标记（2026-08-29）",
+                    updated_at=datetime.now(),
+                ))
 
             await session.commit()
 

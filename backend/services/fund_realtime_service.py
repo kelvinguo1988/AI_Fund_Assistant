@@ -684,7 +684,12 @@ class FundRealtimeService:
                 url = TENCENT_URL.format(codes=prefixed)
 
                 def _do_request() -> str:
-                    resp = requests.get(url, timeout=FUNDGZ_TIMEOUT)
+                    # 腾讯接口无 UA 时是 python-requests 指纹，易被封
+                    resp = requests.get(
+                        url,
+                        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+                        timeout=FUNDGZ_TIMEOUT,
+                    )
                     resp.encoding = "gbk"
                     return resp.text
 

@@ -214,12 +214,16 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
 
     # 4. 无缓存 — 全量拉取行情数据
     from backend.services.market_service import MarketService
+    import asyncio as _asyncio
     svc = MarketService()
-    market_flow = await svc.get_market_capital_flow()
-    sector_flow_raw = await svc.get_sector_flow_rankings()
-    hsgt_flow = await svc.get_hsgt_flow()
-    adv_decline = await svc.get_market_adv_decline()
-    turnover = await svc.get_market_turnover()
+    # 2026-08-29 修复：冷缓存时 5 个源串行最坏 ~4 分钟（超出前端 120s 超时）
+    market_flow, sector_flow_raw, hsgt_flow, adv_decline, turnover = await _asyncio.gather(
+        svc.get_market_capital_flow(),
+        svc.get_sector_flow_rankings(),
+        svc.get_hsgt_flow(),
+        svc.get_market_adv_decline(),
+        svc.get_market_turnover(),
+    )
 
     sector_flow_list = list(sector_flow_raw.values())
 
@@ -281,12 +285,15 @@ async def refresh_market_summary(db: AsyncSession = Depends(get_db)):
 
     # 清除 MarketService 内存缓存，确保获取最新行情
     MarketService.clear_cache()
+    import asyncio as _asyncio
     svc = MarketService()
-    market_flow = await svc.get_market_capital_flow()
-    sector_flow_raw = await svc.get_sector_flow_rankings()
-    hsgt_flow = await svc.get_hsgt_flow()
-    adv_decline = await svc.get_market_adv_decline()
-    turnover = await svc.get_market_turnover()
+    market_flow, sector_flow_raw, hsgt_flow, adv_decline, turnover = await _asyncio.gather(
+        svc.get_market_capital_flow(),
+        svc.get_sector_flow_rankings(),
+        svc.get_hsgt_flow(),
+        svc.get_market_adv_decline(),
+        svc.get_market_turnover(),
+    )
 
     sector_flow_list = list(sector_flow_raw.values())
 

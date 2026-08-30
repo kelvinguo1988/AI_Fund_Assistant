@@ -54,6 +54,10 @@ def _inject_regime_params(params_json, snapshot) -> dict:
 
 
 class AnalysisService:
+    # 进程级互斥：调度推送与手动触发（批量/流式）串行执行，
+    # 防止并发写 analysis_results 触发 uq_fund_date 唯一约束整批失败
+    _run_lock: Optional[asyncio.Lock] = None
+
     """分析编排服务"""
 
     def __init__(self, db: AsyncSession,
@@ -111,6 +115,16 @@ class AnalysisService:
         return by_fund
 
     async def run_analysis(
+        self,
+        fund_ids: Optional[list[int]] = None,
+    ) -> list[AnalysisResultOut]:
+        """批量分析（进程级互斥，见 _run_lock）"""
+        if AnalysisService._run_lock is None:
+            AnalysisService._run_lock = asyncio.Lock()
+        async with AnalysisService._run_lock:
+            return await self._run_analysis_locked(fund_ids=fund_ids)
+
+    async def _run_analysis_locked(
         self,
         fund_ids: Optional[list[int]] = None,
     ) -> list[AnalysisResultOut]:
@@ -241,58 +255,75 @@ class AnalysisService:
             if fund_data is None:
                 continue
 
-            qf_result, corrected_scores, corrected_weights = qf.build_result(
-                regime_snapshot=regime_snapshot,
-                fund_code=fund.code,
-                fund_data=fund_data,
-                quarterly_history=quarterly,
-                factor_scores=factor_scores,
-                active_factors=active_factors,
-            )
+            # 2026-08-29 修复：单基金评分/报告异常不再中止整轮分析
+            #（原先任何异常会让最终 commit 不执行，全部结果丢失且接口 500）
+            try:
+                qf_result, corrected_scores, corrected_weights = qf.build_result(
+                    regime_snapshot=regime_snapshot,
+                    fund_code=fund.code,
+                    fund_data=fund_data,
+                    quarterly_history=quarterly,
+                    factor_scores=factor_scores,
+                    active_factors=active_factors,
+                )
 
-            # 被否决的基金跳过
-            if qf_result.vetoed:
-                logger.info(f"基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
+                # 被否决的基金跳过
+                if qf_result.vetoed:
+                    logger.info(f"基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
+                    continue
+
+                # ── 加权评分 + 质量过滤决策 ──
+                signal = compute_with_quality_filter(
+                    factor_scores=corrected_scores,
+                    factor_weights=corrected_weights,
+                    quality_result=qf_result,
+                    thresholds_json=thresholds_json,
+                )
+
+                # 生成报告
+                analysis_date = date.today().isoformat()
+                top10_changes = None
+                top10_quote_time = ""
+                if "top10_change" in enabled_report_items:
+                    top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
+                report_md = report_engine.generate_markdown(
+                    fund_code=fund.code,
+                    fund_name=fund.name,
+                    analysis_date=analysis_date,
+                    signal=signal,
+                    factor_scores=corrected_scores,
+                    enabled_items=enabled_report_items,
+                    top10_changes=top10_changes,
+                    top10_quote_time=top10_quote_time,
+                )
+
+                # 存储结果（含质量过滤扩展字段）
+                result_out = await self._save_result(
+                    fund, signal, corrected_scores,
+                    qf_result=qf_result,
+                )
+                if result_out:
+                    results.append(result_out)
+            except Exception as fund_err:
+                logger.error(f"基金 {fund.code} 评分/报告失败，跳过: {fund_err}", exc_info=True)
                 continue
-
-            # ── 加权评分 + 质量过滤决策 ──
-            signal = compute_with_quality_filter(
-                factor_scores=corrected_scores,
-                factor_weights=corrected_weights,
-                quality_result=qf_result,
-                thresholds_json=thresholds_json,
-            )
-
-            # 生成报告
-            analysis_date = date.today().isoformat()
-            top10_changes = None
-            top10_quote_time = ""
-            if "top10_change" in enabled_report_items:
-                top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
-            report_md = report_engine.generate_markdown(
-                fund_code=fund.code,
-                fund_name=fund.name,
-                analysis_date=analysis_date,
-                signal=signal,
-                factor_scores=corrected_scores,
-                enabled_items=enabled_report_items,
-                top10_changes=top10_changes,
-                top10_quote_time=top10_quote_time,
-            )
-
-            # 存储结果（含质量过滤扩展字段）
-            result_out = await self._save_result(
-                fund, signal, corrected_scores,
-                qf_result=qf_result,
-            )
-            if result_out:
-                results.append(result_out)
 
         # 统一提交所有分析结果（替代原来逐条 commit，60 只基金=1 次提交）
         await self.db.commit()
         return results
 
     async def run_analysis_streaming(
+        self,
+        fund_ids: Optional[list[int]] = None,
+    ) -> AsyncGenerator[str, None]:
+        """流式分析（进程级互斥，见 _run_lock）；连接中断时锁随生成器关闭释放"""
+        if AnalysisService._run_lock is None:
+            AnalysisService._run_lock = asyncio.Lock()
+        async with AnalysisService._run_lock:
+            async for event in self._run_analysis_streaming_locked(fund_ids=fund_ids):
+                yield event
+
+    async def _run_analysis_streaming_locked(
         self,
         fund_ids: Optional[list[int]] = None,
     ) -> AsyncGenerator[str, None]:
@@ -363,23 +394,32 @@ class AnalysisService:
         # 批量预加载季度数据，避免在循环内 N+1 查询
         quarterly_batch = await self._batch_load_quarterly_data([f.id for f in funds])
 
-        for i, fund in enumerate(funds):
+        # 2026-08-29 修复：原逐只串行 fetch（60 只 × 最坏 25-80s/只），与批量路径
+        # 不一致。改为并发 fetch（网络层并发由 adapter 信号量控制，不碰 DB，
+        # as_completed 保持逐只进度推送体验）
+        async def _fetch_and_score(fund: Fund):
             try:
-                fund_data = await self.data_source.get_fund_data(fund.code, fund_type=getattr(fund, "fund_type", None))
-                fund_data_map[fund.code] = fund_data
-
-                quarterly = quarterly_batch.get(fund.id, [])
-                quarterly_data_map[fund.code] = quarterly
-
-                factor_scores = await asyncio.to_thread(
-                    factor_engine.calculate_all, fund_data, regime_factors
+                fd = await self.data_source.get_fund_data(
+                    fund.code, fund_type=getattr(fund, "fund_type", None)
                 )
-                all_factor_results[fund.code] = factor_scores
+                fs = await asyncio.to_thread(factor_engine.calculate_all, fd, regime_factors)
+                return fund, fd, fs, None
             except Exception as e:
                 logger.error(f"获取/计算基金 {fund.code} 失败: {e}")
+                return fund, None, None, str(e)
+
+        done_count = 0
+        for fut in asyncio.as_completed([_fetch_and_score(f) for f in funds]):
+            fund, fd, fs, err = await fut
+            done_count += 1
+            if err is not None:
                 failed_codes.append(fund.code)
+            else:
+                fund_data_map[fund.code] = fd
+                quarterly_data_map[fund.code] = quarterly_batch.get(fund.id, [])
+                all_factor_results[fund.code] = fs
             # 每只基金都推送进度
-            progress_data = {"type": "progress", "current": i + 1, "total": total, "fund_code": fund.code}
+            progress_data = {"type": "progress", "current": done_count, "total": total, "fund_code": fund.code}
             yield "data: " + json.dumps(progress_data) + "\n\n"
 
         # 5. 跨基金截面标准化
@@ -406,48 +446,53 @@ class AnalysisService:
                     continue
 
                 # 第零层：质量过滤
-                qf_result, corrected_scores, corrected_weights = qf.build_result(
-                    regime_snapshot=regime_snapshot,
-                    fund_code=fund.code,
-                    fund_data=fund_data,
-                    quarterly_history=quarterly,
-                    factor_scores=factor_scores,
-                    active_factors=active_factors,
-                )
+                # 2026-08-29 修复：单基金异常不影响后续基金与 complete 事件
+                try:
+                    qf_result, corrected_scores, corrected_weights = qf.build_result(
+                        regime_snapshot=regime_snapshot,
+                        fund_code=fund.code,
+                        fund_data=fund_data,
+                        quarterly_history=quarterly,
+                        factor_scores=factor_scores,
+                        active_factors=active_factors,
+                    )
 
-                if qf_result.vetoed:
-                    logger.info(f"流式分析: 基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
+                    if qf_result.vetoed:
+                        logger.info(f"流式分析: 基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
+                        continue
+
+                    signal = compute_with_quality_filter(
+                        factor_scores=corrected_scores,
+                        factor_weights=corrected_weights,
+                        quality_result=qf_result,
+                        thresholds_json=thresholds_json,
+                    )
+
+                    top10_changes = None
+                    top10_quote_time = ""
+                    if "top10_change" in enabled_report_items:
+                        top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
+                    report_md = report_engine.generate_markdown(
+                        fund_code=fund.code,
+                        fund_name=fund.name,
+                        analysis_date=date.today().isoformat(),
+                        signal=signal,
+                        factor_scores=corrected_scores,
+                        enabled_items=enabled_report_items,
+                        top10_changes=top10_changes,
+                        top10_quote_time=top10_quote_time,
+                    )
+
+                    result_out = await self._save_result(
+                        fund, signal, corrected_scores,
+                        qf_result=qf_result,
+                    )
+                    if result_out:
+                        chunk_results.append(result_out)
+                        results.append(result_out)
+                except Exception as fund_err:
+                    logger.error(f"基金 {fund.code} 评分/报告失败，跳过: {fund_err}", exc_info=True)
                     continue
-
-                signal = compute_with_quality_filter(
-                    factor_scores=corrected_scores,
-                    factor_weights=corrected_weights,
-                    quality_result=qf_result,
-                    thresholds_json=thresholds_json,
-                )
-
-                top10_changes = None
-                top10_quote_time = ""
-                if "top10_change" in enabled_report_items:
-                    top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
-                report_md = report_engine.generate_markdown(
-                    fund_code=fund.code,
-                    fund_name=fund.name,
-                    analysis_date=date.today().isoformat(),
-                    signal=signal,
-                    factor_scores=corrected_scores,
-                    enabled_items=enabled_report_items,
-                    top10_changes=top10_changes,
-                    top10_quote_time=top10_quote_time,
-                )
-
-                result_out = await self._save_result(
-                    fund, signal, corrected_scores,
-                    qf_result=qf_result,
-                )
-                if result_out:
-                    chunk_results.append(result_out)
-                    results.append(result_out)
 
             # 批量提交本 chunk 的结果（替代原来逐条 commit）
             if chunk_results:

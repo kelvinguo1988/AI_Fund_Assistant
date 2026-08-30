@@ -60,6 +60,7 @@ class AuthCache:
 
 
 _cache = AuthCache()
+_nid_fail_until = 0.0   # NID 授权失败冷却时间戳（防封禁）
 _patched = False
 
 
@@ -75,12 +76,20 @@ def _generate_st_nvi() -> str:
 
 
 def _get_nid(user_agent: str) -> Optional[str]:
+    global _nid_fail_until
     now = time.time()
+    # 2026-08-29 修复：原失败路径只置 _cache.data=None + expire_at，但缓存检查
+    # 要求 data 非空——冷却形同虚设，授权服务故障时每个东财请求都会在锁内
+    # 重新 POST（30s 超时），既拖垮吞吐又狂打 anonflow2（自身封禁风险）
+    if now < _nid_fail_until:
+        return None
     if _cache.data and now < _cache.expire_at:
         return _cache.data
 
     with _cache.lock:
         # 二次检查：避免多个线程排队后重复请求
+        if time.time() < _nid_fail_until:
+            return None
         if _cache.data and time.time() < _cache.expire_at:
             return _cache.data
         try:
@@ -114,7 +123,7 @@ def _get_nid(user_agent: str) -> Optional[str]:
         except Exception as e:
             logger.warning(f"东方财富 NID 授权失败: {e}")
             _cache.data = None
-            _cache.expire_at = now + 300  # 5 分钟冷却
+            _nid_fail_until = time.time() + 300  # 5 分钟冷却（独立于缓存 TTL）
             return None
 
 

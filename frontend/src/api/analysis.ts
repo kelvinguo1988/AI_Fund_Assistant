@@ -72,6 +72,9 @@ export const analysisApi = {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        let sawComplete = false;
+        let failedCodes: string[] = [];
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -92,6 +95,8 @@ export const analysisApi = {
                     callbacks.onChunk?.(data.results, data.progress);
                     break;
                   case 'complete':
+                    sawComplete = true;
+                    failedCodes = data.failed || [];
                     callbacks.onComplete?.(data.total, data.succeeded);
                     break;
                 }
@@ -100,6 +105,15 @@ export const analysisApi = {
               }
             }
           }
+        }
+
+        // 2026-08-29 修复：连接正常结束但从未收到 complete 事件（后端生成器
+        // 中途死亡/网络中断），原先 onComplete/onError 都不触发，
+        // streaming.active 永远为 true，刷新与手动分析按钮永久禁用
+        if (!sawComplete) {
+          callbacks.onError?.('连接中断，分析未完成');
+        } else if (failedCodes.length > 0) {
+          callbacks.onError?.(`以下基金分析失败: ${failedCodes.join('、')}`);
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {

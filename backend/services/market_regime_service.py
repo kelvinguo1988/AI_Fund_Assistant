@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -53,6 +54,8 @@ class MarketRegimeService:
     _snapshot: Optional[MarketRegimeSnapshot] = None
     _snapshot_ts: float = 0.0
     _SNAPSHOT_TTL: float = 3600.0  # 1 小时
+    _FAIL_TTL: float = 60.0        # 全部失败时的短缓存（防雪崩，不致降级 1 小时）
+    _lock: Optional[asyncio.Lock] = None  # 2026-08-29 修复：并发快照请求穿透缓存
 
     @classmethod
     def clear_cache(cls) -> None:
@@ -61,11 +64,47 @@ class MarketRegimeService:
 
     async def get_snapshot(self) -> MarketRegimeSnapshot:
         """获取市场环境快照（带缓存；单项失败对应字段保持 None）"""
+        if MarketRegimeService._lock is None:
+            MarketRegimeService._lock = asyncio.Lock()
+
         now = time.time()
         if MarketRegimeService._snapshot is not None:
-            if now - MarketRegimeService._snapshot_ts < MarketRegimeService._SNAPSHOT_TTL:
+            ttl = (
+                MarketRegimeService._SNAPSHOT_TTL
+                if self._snapshot_has_data(MarketRegimeService._snapshot)
+                else MarketRegimeService._FAIL_TTL
+            )
+            if now - MarketRegimeService._snapshot_ts < ttl:
                 return MarketRegimeService._snapshot
 
+        async with MarketRegimeService._lock:
+            # 双重检查：等锁期间可能已被其他协程填充
+            now = time.time()
+            if MarketRegimeService._snapshot is not None:
+                ttl = (
+                    MarketRegimeService._SNAPSHOT_TTL
+                    if self._snapshot_has_data(MarketRegimeService._snapshot)
+                    else MarketRegimeService._FAIL_TTL
+                )
+                if now - MarketRegimeService._snapshot_ts < ttl:
+                    return MarketRegimeService._snapshot
+
+            snap = await self._fetch_snapshot()
+            MarketRegimeService._snapshot = snap
+            MarketRegimeService._snapshot_ts = time.time()
+            return snap
+
+    @staticmethod
+    def _snapshot_has_data(snap: MarketRegimeSnapshot) -> bool:
+        """全字段 None（三源全挂）的快照只允许短缓存，避免降级 1 小时"""
+        return (
+            snap.valuation_percentile is not None
+            or snap.adv_decline_ratio is not None
+            or snap.margin_change_pct_7d is not None
+        )
+
+    async def _fetch_snapshot(self) -> MarketRegimeSnapshot:
+        """实际拉取三项指标（锁内调用，全部吞异常保持字段 None）"""
         snap = MarketRegimeSnapshot()
 
         # 1. 大盘估值分位
@@ -86,8 +125,6 @@ class MarketRegimeService:
         except Exception as e:
             logger.warning(f"资金面获取失败: {e}")
 
-        MarketRegimeService._snapshot = snap
-        MarketRegimeService._snapshot_ts = now
         logger.info(
             "市场环境快照: 估值分位=%s, 涨跌比=%s, 两融7日变化=%s",
             snap.valuation_percentile, snap.adv_decline_ratio, snap.margin_change_pct_7d,
