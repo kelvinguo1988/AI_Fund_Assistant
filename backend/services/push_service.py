@@ -16,6 +16,18 @@ from backend.schemas.analysis import AnalysisResultOut
 
 logger = logging.getLogger(__name__)
 
+# 市场概况相关项（非基金维度）
+MARKET_ITEMS = {
+    "signal_summary", "top_buy_sell", "adv_decline", "turnover",
+    "market_flow", "hsgt_flow",
+    "sector_flow_day", "sector_flow_week", "sector_flow_month",
+}
+# 基金维度项（top10_change 2026-08-29 加入：推送报告含前十大持仓当日涨跌）
+FUND_ITEMS = {
+    "factor_detail", "weighted_score", "operation_advice",
+    "signal_strength", "risk_warning", "top10_change",
+}
+
 
 class PushService:
     """推送编排服务"""
@@ -59,20 +71,8 @@ class PushService:
         all_configs = report_result.scalars().all()
         enabled_items = [c.item_key for c in all_configs if c.enabled]
 
-        # 市场概况相关项（非基金维度）
-        market_items = {
-            "signal_summary", "top_buy_sell", "adv_decline", "turnover",
-            "market_flow", "hsgt_flow",
-            "sector_flow_day", "sector_flow_week", "sector_flow_month",
-        }
-        # 基金维度项（原 5 项）
-        fund_items = {
-            "factor_detail", "weighted_score", "operation_advice",
-            "signal_strength", "risk_warning",
-        }
-
-        enabled_market = [i for i in enabled_items if i in market_items]
-        enabled_fund = [i for i in enabled_items if i in fund_items]
+        enabled_market = [i for i in enabled_items if i in MARKET_ITEMS]
+        enabled_fund = [i for i in enabled_items if i in FUND_ITEMS]
 
         # 生成报告文本
         from backend.engines.report_engine import report_engine
@@ -226,6 +226,26 @@ class PushService:
                                 quality_warnings=getattr(r, "quality_warnings", None) or [],
                             )
 
+                            # 前十大持仓当日涨跌（top10_change 启用时）
+                            top10_changes = None
+                            top10_quote_time = ""
+                            if "top10_change" in enabled_fund:
+                                try:
+                                    from backend.services.fund_realtime_service import (
+                                        FundRealtimeService,
+                                    )
+                                    rt = FundRealtimeService(self.db)
+                                    top10_changes = (
+                                        await rt.get_top10_changes(r.fund_id) or None
+                                    )
+                                    top10_quote_time = (
+                                        FundRealtimeService.get_spot_quote_time()
+                                    )
+                                except Exception as rt_err:
+                                    logger.warning(
+                                        f"推送拉取 top10 涨跌失败 {r.fund_code}: {rt_err}"
+                                    )
+
                             report_md = report_engine.generate_markdown(
                                 fund_code=r.fund_code,
                                 fund_name=r.fund_name,
@@ -233,6 +253,8 @@ class PushService:
                                 signal=signal,
                                 factor_scores=factor_scores,
                                 enabled_items=enabled_fund,
+                                top10_changes=top10_changes,
+                                top10_quote_time=top10_quote_time,
                             )
 
                             success = await pusher.send_analysis_report(
