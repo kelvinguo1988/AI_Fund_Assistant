@@ -206,7 +206,10 @@ class AnalysisService:
                 )
                 return fund, fd
             except Exception as e:
-                logger.error(f"获取基金 {fund.code} 数据失败: {e}")
+                logger.error(
+                    f"获取基金 {fund.code} 数据失败: {type(e).__name__}: {e}",
+                    exc_info=True,
+                )
                 return fund, None
 
         # 并发获取所有基金数据（信号量在底层 _call 中控制并发为 5）
@@ -233,7 +236,10 @@ class AnalysisService:
                 all_factor_results[fund.code] = factor_scores
                 logger.info(f"因子计算完成: {fund.code} ({fund.name}), {len(factor_scores)} 个因子")
             except Exception as e:
-                logger.error(f"计算基金 {fund.code} 因子失败: {e}")
+                logger.error(
+                    f"计算基金 {fund.code} 因子失败: {type(e).__name__}: {e}",
+                    exc_info=True,
+                )
                 continue
 
         # 6. 跨基金截面标准化
@@ -405,7 +411,10 @@ class AnalysisService:
                 fs = await asyncio.to_thread(factor_engine.calculate_all, fd, regime_factors)
                 return fund, fd, fs, None
             except Exception as e:
-                logger.error(f"获取/计算基金 {fund.code} 失败: {e}")
+                logger.error(
+                    f"获取/计算基金 {fund.code} 失败: {type(e).__name__}: {e}",
+                    exc_info=True,
+                )
                 return fund, None, None, str(e)
 
         done_count = 0

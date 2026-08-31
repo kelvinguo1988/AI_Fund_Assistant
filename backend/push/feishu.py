@@ -228,5 +228,7 @@ class FeishuPush(BasePush):
             logger.error("飞书推送超时")
             return False
         except Exception as e:
-            logger.error(f"飞书推送异常: {e}")
+            logger.error(
+                f"飞书推送异常: {type(e).__name__}: {e}", exc_info=True
+            )
             return False

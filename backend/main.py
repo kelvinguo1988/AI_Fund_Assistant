@@ -2,10 +2,62 @@
 
 import asyncio
 import logging
+import logging.handlers
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from backend.config import settings
+
+
+def _setup_logging() -> None:
+    """统一日志配置：控制台 + 文件（TimedRotatingFileHandler，保留 7 天）
+
+    - 文件日志每天午夜轮转，自动删除 7 天前的旧文件（增量覆盖语义）；
+    - uvicorn/access/access_error 三个 logger 一并接管，请求日志同样落盘；
+    - 文件不可写（如只读容器）时降级为仅控制台，不阻塞启动。
+    """
+    level = logging.DEBUG if settings.DEBUG else logging.INFO
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s"
+    )
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    # 清掉可能已存在的 handler（uvicorn --reload 重载时防重复输出）
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(fmt)
+    root.addHandler(console)
+
+    try:
+        log_dir = Path(settings.DATABASE_DIR) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.TimedRotatingFileHandler(
+            log_dir / "app.log",
+            when="midnight",       # 每天午夜切割
+            backupCount=7,         # 保留 7 天：新日志写入 app.log，
+                                   # 7 天前的旧文件在轮转时被自动删除
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(fmt)
+        root.addHandler(file_handler)
+    except OSError as e:
+        root.warning(f"日志文件初始化失败，仅使用控制台输出: {e}")
+
+    # 接管 uvicorn 的三个 logger，统一走 root 的 handler 与格式
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        lg.handlers = []
+        lg.propagate = True
+
+
 logger = logging.getLogger(__name__)
+
+# 模块导入即配置（须早于其他业务模块的首次 getLogger 使用）
+_setup_logging()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

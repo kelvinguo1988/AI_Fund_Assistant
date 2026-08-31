@@ -322,7 +322,11 @@ class PushService:
                     push_results[channel.name] = False
 
             except Exception as e:
-                logger.error(f"推送渠道 {channel.name} 失败: {e}")
+                logger.error(
+                    f"推送渠道 {channel.name}({channel.channel_type}) 失败: "
+                    f"{type(e).__name__}: {e}",
+                    exc_info=True,
+                )
                 push_results[channel.name] = False
 
         return push_results

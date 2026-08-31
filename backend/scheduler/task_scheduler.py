@@ -1,6 +1,7 @@
 from __future__ import annotations
 """APScheduler 封装 — 启动/停止/热更新"""
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -108,9 +109,34 @@ class TaskScheduler:
         return None
 
     async def _run_task(self, schedule_id: int) -> None:
-        """执行调度任务"""
+        """执行调度任务
+
+        失败重试：网络抖动类瞬时故障重试 1 次（间隔 60s），
+        重试仍失败记 ERROR（含堆栈），不再无限重试（防雪崩）。
+        """
         logger.info(f"调度任务开始执行: schedule_id={schedule_id}")
 
+        try:
+            await self._execute_task_once(schedule_id)
+        except Exception as e:
+            logger.error(
+                f"调度任务首次执行失败 schedule_id={schedule_id}，60s 后重试 1 次: "
+                f"{type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            await asyncio.sleep(60)
+            try:
+                await self._execute_task_once(schedule_id)
+                logger.info(f"调度任务重试成功: schedule_id={schedule_id}")
+            except Exception as retry_e:
+                logger.error(
+                    f"调度任务重试仍失败 schedule_id={schedule_id}（已重试 1 次，放弃）: "
+                    f"{type(retry_e).__name__}: {retry_e}",
+                    exc_info=True,
+                )
+
+    async def _execute_task_once(self, schedule_id: int) -> None:
+        """调度任务单次执行（分析 + 推送），供 _run_task 重试调用"""
         try:
             from backend.services.analysis_service import AnalysisService
             from backend.data_sources.trading_calendar import (
@@ -165,17 +191,45 @@ class TaskScheduler:
                         rt_svc = FundRealtimeService(session)
                         await rt_svc.get_realtime(rt_funds, force=True)
                 except Exception as rt_err:
-                    logger.warning(f"实时估值预热失败（不影响推送）: {rt_err}")
+                    logger.warning(
+                        f"实时估值预热失败（不影响推送）: "
+                        f"{type(rt_err).__name__}: {rt_err}",
+                        exc_info=True,
+                    )
 
                 # 推送
                 if sched and sched.channel_id:
                     from backend.services.push_service import PushService
                     push_svc = PushService(session)
-                    await push_svc.push_analysis_results(results, sched.channel_id)
+                    try:
+                        push_results = await push_svc.push_analysis_results(
+                            results, sched.channel_id
+                        )
+                        failed = [k for k, ok in push_results.items() if not ok]
+                        if failed:
+                            logger.error(
+                                f"推送部分失败 schedule_id={schedule_id} "
+                                f"channel_id={sched.channel_id} "
+                                f"失败项: {failed}（共 {len(failed)}/{len(push_results)}）"
+                            )
+                    except Exception as push_err:
+                        logger.error(
+                            f"推送整体失败 schedule_id={schedule_id} "
+                            f"channel_id={sched.channel_id} "
+                            f"results={len(results)} 只: "
+                            f"{type(push_err).__name__}: {push_err}",
+                            exc_info=True,
+                        )
+                        raise  # 推送失败上抛触发 _run_task 重试
 
             logger.info(f"调度任务完成: schedule_id={schedule_id}")
         except Exception as e:
-            logger.error(f"调度任务执行失败 schedule_id={schedule_id}: {e}")
+            logger.error(
+                f"调度任务执行失败 schedule_id={schedule_id}: "
+                f"{type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            raise  # 上抛给 _run_task 决定是否重试
 
 
     async def _register_holiday_sync(self) -> None:

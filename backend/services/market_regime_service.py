@@ -111,19 +111,28 @@ class MarketRegimeService:
         try:
             await self._fill_valuation_percentile(snap)
         except Exception as e:
-            logger.warning(f"大盘估值分位获取失败: {e}")
+            logger.warning(
+                f"大盘估值分位获取失败（该项置空，因子中性分）: "
+                f"{type(e).__name__}: {e}"
+            )
 
         # 2. 市场情绪（涨跌家数比）
         try:
             await self._fill_adv_decline(snap)
         except Exception as e:
-            logger.warning(f"市场情绪获取失败: {e}")
+            logger.warning(
+                f"市场情绪获取失败（该项置空，因子中性分）: "
+                f"{type(e).__name__}: {e}"
+            )
 
         # 3. 资金面（两融余额 7 日变化率）
         try:
             await self._fill_margin_flow(snap)
         except Exception as e:
-            logger.warning(f"资金面获取失败: {e}")
+            logger.warning(
+                f"资金面获取失败（该项置空，因子中性分）: "
+                f"{type(e).__name__}: {e}"
+            )
 
         logger.info(
             "市场环境快照: 估值分位=%s, 涨跌比=%s, 两融7日变化=%s",

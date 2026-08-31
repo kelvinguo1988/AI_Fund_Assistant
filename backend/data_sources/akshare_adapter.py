@@ -14,6 +14,25 @@ from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, g
 
 logger = logging.getLogger(__name__)
 
+
+# 限连/封禁类错误特征：请求被服务端主动断开或明确拒绝。
+# 这类错误继续重试只会加重反爬封禁，应立即降级。
+_RATE_LIMIT_MARKERS = (
+    "remote end closed",        # http.client.RemoteDisconnected
+    "connection reset by peer",  # ConnectionResetError
+    "429",                       # Too Many Requests
+    "too many requests",
+    "forbidden",                # 403（部分接口以 HTML 返回）
+    "verify",                    # 极验/滑块验证页文案
+)
+
+
+def _is_rate_limited(e: BaseException) -> bool:
+    """判断异常是否为限连/封禁类（重试会加重封禁的错误）"""
+    msg = str(e).lower()
+    return any(marker in msg for marker in _RATE_LIMIT_MARKERS)
+
+
 # User-Agent 池用于反爬虫
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -116,6 +135,11 @@ class AKShareAdapter(BaseDataSource):
         - 使用独立线程池，避免 akshare 卡住时孤儿线程耗尽默认线程池。
         - 超时从 30s 降为 25s（配合 patch 的 20s requests 超时）。
 
+        重试策略（2026-08-31 优化：按错误类型区分，防加重封禁）：
+        - 限连/封禁类错误（RemoteDisconnected / ConnectionError / 429）：
+          重试只会加重反爬，单次失败立即放弃（不重试），由上层降级链兜底；
+        - 瞬时抖动类错误（Timeout 等）：指数退避重试，最多 3 次。
+
         支持 _max_attempts 参数覆盖最大重试次数：
         - 有降级接口的调用（如 ETF→OTC）设 1，失败立即切接口
         - 无降级的独立调用保持默认 3 次
@@ -132,10 +156,19 @@ class AKShareAdapter(BaseDataSource):
                 return result
             except (asyncio.TimeoutError, ConnectionError, ConnectionResetError, Exception) as e:
                 last_exc = e
+                reason = type(e).__name__
+                msg = str(e) or "(no error message)"
+
+                # 限连/封禁类错误：重试会加重反爬，立即放弃走降级链
+                if _is_rate_limited(e) and max_attempts > 1:
+                    logger.warning(
+                        f"{func_name} 疑似被限连 (attempt {attempt}/{max_attempts}): "
+                        f"[{reason}] {msg}，跳过重试直接降级（防加重封禁）"
+                    )
+                    break
+
                 if attempt < max_attempts:
                     delay = self.BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 1)
-                    reason = type(e).__name__
-                    msg = str(e) or "(no error message)"
                     logger.warning(
                         f"{func_name} 失败 (attempt {attempt}/{max_attempts}): "
                         f"[{reason}] {msg}, {delay:.1f}s 后重试..."
@@ -143,7 +176,7 @@ class AKShareAdapter(BaseDataSource):
                     await asyncio.sleep(delay)
         reason = type(last_exc).__name__
         msg = str(last_exc) or "(no error message)"
-        logger.error(f"{func_name} 重试 {max_attempts} 次后仍然失败: [{reason}] {msg}")
+        logger.error(f"{func_name} 重试后仍然失败: [{reason}] {msg}")
         raise last_exc
 
     async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
