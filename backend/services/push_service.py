@@ -21,6 +21,8 @@ MARKET_ITEMS = {
     "signal_summary", "top_buy_sell", "adv_decline", "turnover",
     "market_flow", "hsgt_flow",
     "sector_flow_day", "sector_flow_week", "sector_flow_month",
+    # fund_realtime_top10 2026-08-31 加入：全景报告尾部基金实时涨跌 TOP10
+    "fund_realtime_top10",
 }
 # 基金维度项（top10_change 2026-08-29 / fund_daily_change 2026-08-31 加入：
 # 推送报告含前十大持仓当日涨跌 + 基金本身当日实时涨跌）
@@ -190,10 +192,11 @@ class PushService:
 
         push_results: dict[str, bool] = {}
 
-        # 基金当日实时涨跌（fund_daily_change 启用时）：一次批量预取全部基金，
-        # 逐只报告复用（共享快照缓存，不逐只重复请求）
+        # 基金当日实时涨跌：一次批量预取全部基金（推送任何报告文本前完成），
+        # 逐只报告复用（共享快照缓存，不逐只重复请求）。
+        # 触发条件：单基金报告需要（fund_daily_change）或全景报告需要 TOP10
         realtime_map: dict[str, dict] = {}
-        if "fund_daily_change" in enabled_fund:
+        if "fund_daily_change" in enabled_fund or "fund_realtime_top10" in enabled_market:
             try:
                 from backend.models.fund import Fund as _Fund
                 from backend.services.fund_realtime_service import FundRealtimeService
@@ -206,6 +209,35 @@ class PushService:
                     logger.info(f"推送预取基金当日涨跌: {len(realtime_map)}/{len(fund_rows)} 只")
             except Exception as rt_err:
                 logger.warning(f"推送预取基金当日涨跌失败（报告该项置空）: {rt_err}")
+
+        # 基金实时涨跌 TOP10（涨/跌各最多 10 只）——追加在市场全景报告尾部
+        if "fund_realtime_top10" in enabled_market and realtime_map:
+            try:
+                ranked = sorted(
+                    (r for r in realtime_map.values() if r.get("growth_pct") is not None),
+                    key=lambda r: r["growth_pct"],
+                    reverse=True,
+                )
+                if ranked:
+                    def _line(r: dict) -> str:
+                        return (
+                            f"- {r.get('name') or r.get('code')}({r.get('code')}) "
+                            f"{r['growth_pct']:+.2f}%"
+                        )
+
+                    lines = ["**基金实时涨跌 TOP10**", "", "涨幅居前："]
+                    lines += [_line(r) for r in ranked[:10]]
+                    if len(ranked) > 10:
+                        lines += ["", "跌幅居前："]
+                        lines += [_line(r) for r in ranked[-10:][::-1]]
+                    top10_md = "\n".join(lines)
+                    if market_summary_md:
+                        market_summary_md = f"{market_summary_md}\n\n{top10_md}"
+                    else:
+                        market_summary_md = top10_md
+                    logger.info(f"基金实时涨跌 TOP10 已加入全景报告（{len(ranked)} 只有数据）")
+            except Exception as top_err:
+                logger.warning(f"基金实时涨跌 TOP10 生成失败: {top_err}")
 
         for channel in channels:
             try:

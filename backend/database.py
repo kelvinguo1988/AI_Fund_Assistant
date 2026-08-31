@@ -734,6 +734,13 @@ async def init_db() -> None:
                     sort_order=16,
                     created_at=now,
                 ),
+                ReportConfig(
+                    name="基金实时涨跌TOP10",
+                    item_key="fund_realtime_top10",
+                    enabled=True,
+                    sort_order=17,
+                    created_at=now,
+                ),
         ]
         # 逐条检查缺失的配置项，避免覆盖已有数据
         for cfg in default_report_configs:
