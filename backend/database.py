@@ -727,6 +727,13 @@ async def init_db() -> None:
                     sort_order=15,
                     created_at=now,
                 ),
+                ReportConfig(
+                    name="基金当日涨跌",
+                    item_key="fund_daily_change",
+                    enabled=True,
+                    sort_order=16,
+                    created_at=now,
+                ),
         ]
         # 逐条检查缺失的配置项，避免覆盖已有数据
         for cfg in default_report_configs:

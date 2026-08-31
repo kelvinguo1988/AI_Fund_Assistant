@@ -44,6 +44,7 @@ class ReportEngine:
         enabled_items: list[str] | None = None,
         top10_changes: list[dict] | None = None,
         top10_quote_time: str | None = None,
+        fund_daily_change: dict | None = None,
     ) -> str:
         """生成 Markdown 格式报告
 
@@ -56,6 +57,8 @@ class ReportEngine:
             enabled_items: 启用的报告项列表，None 表示全部
             top10_changes: 前十大持仓当日涨跌 [{"stock_name","stock_code","ratio","pct"}]
                            （top10_change 报告项启用时由调用方传入）
+            fund_daily_change: 基金当日实时涨跌 {growth_pct, source, est_model,
+                              coverage, quote_time}（fund_daily_change 项启用时传入）
 
         Returns:
             Markdown 文本
@@ -67,6 +70,7 @@ class ReportEngine:
                 "operation_advice",
                 "signal_strength",
                 "risk_warning",
+                "fund_daily_change",
             ]
 
         lines: list[str] = []
@@ -75,6 +79,15 @@ class ReportEngine:
         signal_emoji = self._signal_emoji(signal.signal_direction)
         lines.append(f"# {signal_emoji} {fund_name}({fund_code}) 量化分析报告")
         lines.append(f"**分析日期**: {analysis_date}")
+
+        # 当日实时涨跌（2026-08-31 新增：报告头部直给出基金当日涨跌）
+        if "fund_daily_change" in enabled_items and fund_daily_change:
+            pct = fund_daily_change.get("growth_pct")
+            if pct is not None:
+                lines.append(
+                    f"**当日涨跌**: {pct:+.2f}%"
+                    f"{self._daily_change_note(fund_daily_change)}"
+                )
         lines.append("")
 
         # 因子详情
@@ -193,6 +206,20 @@ class ReportEngine:
         html = html.replace("| ", "<td>")
         html = html.replace(" |", "</td>")
         return html
+
+    @staticmethod
+    def _daily_change_note(d: dict) -> str:
+        """当日涨跌的来源注释（口径透明：官方估值/场内行情/持仓估算）"""
+        source = d.get("source", "")
+        if source == "etf_spot":
+            return "（场内实时行情）"
+        if source == "fundgz":
+            return "（官方盘中估值）"
+        if source == "holdings_est":
+            coverage = d.get("coverage")
+            cov_str = f"，覆盖率 {coverage:.0%}" if coverage is not None else ""
+            return f"（持仓估算{cov_str}，仅供参考）"
+        return ""
 
     def _signal_emoji(self, direction: str) -> str:
         """信号方向对应 emoji"""

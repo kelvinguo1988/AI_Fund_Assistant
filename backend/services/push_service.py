@@ -22,10 +22,11 @@ MARKET_ITEMS = {
     "market_flow", "hsgt_flow",
     "sector_flow_day", "sector_flow_week", "sector_flow_month",
 }
-# 基金维度项（top10_change 2026-08-29 加入：推送报告含前十大持仓当日涨跌）
+# 基金维度项（top10_change 2026-08-29 / fund_daily_change 2026-08-31 加入：
+# 推送报告含前十大持仓当日涨跌 + 基金本身当日实时涨跌）
 FUND_ITEMS = {
     "factor_detail", "weighted_score", "operation_advice",
-    "signal_strength", "risk_warning", "top10_change",
+    "signal_strength", "risk_warning", "top10_change", "fund_daily_change",
 }
 
 
@@ -189,6 +190,23 @@ class PushService:
 
         push_results: dict[str, bool] = {}
 
+        # 基金当日实时涨跌（fund_daily_change 启用时）：一次批量预取全部基金，
+        # 逐只报告复用（共享快照缓存，不逐只重复请求）
+        realtime_map: dict[str, dict] = {}
+        if "fund_daily_change" in enabled_fund:
+            try:
+                from backend.models.fund import Fund as _Fund
+                from backend.services.fund_realtime_service import FundRealtimeService
+                fund_rows = (await self.db.execute(
+                    select(_Fund).where(_Fund.status == "active")
+                )).scalars().all()
+                if fund_rows:
+                    rt_svc = FundRealtimeService(self.db)
+                    realtime_map = await rt_svc.get_realtime(list(fund_rows), force=True)
+                    logger.info(f"推送预取基金当日涨跌: {len(realtime_map)}/{len(fund_rows)} 只")
+            except Exception as rt_err:
+                logger.warning(f"推送预取基金当日涨跌失败（报告该项置空）: {rt_err}")
+
         for channel in channels:
             try:
                 if channel.channel_type == "feishu":
@@ -255,6 +273,7 @@ class PushService:
                                 enabled_items=enabled_fund,
                                 top10_changes=top10_changes,
                                 top10_quote_time=top10_quote_time,
+                                fund_daily_change=realtime_map.get(r.fund_code),
                             )
 
                             success = await pusher.send_analysis_report(

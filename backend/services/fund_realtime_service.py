@@ -5,7 +5,8 @@
 
   OTC 场外（主路径）:
     1. fundgz 天天基金官方估值 JSONP（gsz 估算净值 / gszzl 估算涨跌幅）
-       —— 精度最高，但部分网络环境被反爬拦截（返回 HTML），失败进 5min 冷却
+       —— 2026-08-28 实测接口已下线（返回 HTML 错误页），冷却 24h 每日探活；
+       官方恢复前实际由 2 兜底
     2. holdings_est 持仓×个股快照自算（主力兜底，永远可用）:
          growth = Σ(占净值比ᵢ × 涨跌幅ᵢ) 按覆盖率归一 / 低覆盖时指数混合
        持仓来自库内 fund_holdings 最新季报 top10；个股涨跌幅来自
@@ -47,7 +48,9 @@ logger = logging.getLogger(__name__)
 
 SPOT_CACHE_TTL = 60.0          # 全市场快照缓存（秒）
 ESTIMATE_CACHE_TTL = 60.0      # 单基金估值结果缓存（秒）
-FUNDGZ_FAIL_COOLDOWN = 300.0   # fundgz 失败冷却（防每分钟重试被反爬盯上）
+FUNDGZ_FAIL_COOLDOWN = 86400.0  # fundgz 失败冷却（2026-08-28 实测接口已下线，
+                                # 返回 HTML 错误页；冷却升至 24h，每日探活一次，
+                                # 若官方恢复可自动生效，平时不再逐请求撞死链）
 FUNDGZ_TIMEOUT = 8.0
 
 # 数据源熔断冷却（防封禁）：请求失败后 N 秒内不再尝试该源。
