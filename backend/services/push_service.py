@@ -31,12 +31,56 @@ FUND_ITEMS = {
     "signal_strength", "risk_warning", "top10_change", "fund_daily_change",
 }
 
+# 推送取数优先复用实时估值缓存（调度已预热/分析轮已取过快照），
+# 仅当缓存覆盖率低于该比例时才真正强刷一次行情源。
+# 背景：一次调度内"分析轮 + 预热轮 + 推送轮"会连打三轮行情源，东财反爬
+# 触发 600s 熔断后，最后一轮（推送）拿不到数据 → 实时估值整块消失。
+# 缓存优先可以让推送对熔断免疫（吃前两轮留下的快照）。
+REALTIME_CACHE_MIN_COVERAGE = 0.5
+
 
 class PushService:
     """推送编排服务"""
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    async def _fetch_realtime_map(self) -> dict[str, dict]:
+        """取全池基金当日实时涨跌 —— 缓存优先，覆盖率不足才强刷
+
+        一次调度会依次经过「分析轮 → 预热轮 → 推送轮」，若每轮都 force=True
+        强刷，东财反爬触发 600s 熔断后，轮到推送时已无源可用 → 实时估值整块
+        消失且无任何报错。故此处先读缓存（吃预热/分析轮写入的 _estimate_cache），
+        仅在覆盖率低于 REALTIME_CACHE_MIN_COVERAGE 时才真正强刷一次，
+        让推送对熔断免疫。
+        """
+        from backend.models.fund import Fund as _Fund
+        from backend.services.fund_realtime_service import FundRealtimeService
+
+        fund_rows = list(
+            (await self.db.execute(
+                select(_Fund).where(_Fund.status == "active")
+            )).scalars().all()
+        )
+        if not fund_rows:
+            return {}
+
+        rt_svc = FundRealtimeService(self.db)
+        realtime_map = await rt_svc.get_realtime(fund_rows, force=False)
+        # 覆盖率过低 → 缓存已过期或上一轮全败，才真正强刷一次
+        if len(realtime_map) < len(fund_rows) * REALTIME_CACHE_MIN_COVERAGE:
+            realtime_map = await rt_svc.get_realtime(fund_rows, force=True)
+
+        logger.info(f"推送取基金当日涨跌: {len(realtime_map)}/{len(fund_rows)} 只")
+        if not realtime_map:
+            # 静默失败会让推送"成功但实时估值凭空消失"，必须留痕
+            logger.warning(
+                f"推送取基金当日涨跌为空（{len(fund_rows)} 只全部无数据），"
+                f"报告中的实时涨跌项将整块缺失。"
+                f"常见原因：行情源熔断/反爬、持仓数据缺失、"
+                f"或 ETF 行情与持仓自算双双取不到"
+            )
+        return realtime_map
 
     async def push_analysis_results(
         self,
@@ -198,15 +242,7 @@ class PushService:
         realtime_map: dict[str, dict] = {}
         if "fund_daily_change" in enabled_fund or "fund_realtime_top10" in enabled_market:
             try:
-                from backend.models.fund import Fund as _Fund
-                from backend.services.fund_realtime_service import FundRealtimeService
-                fund_rows = (await self.db.execute(
-                    select(_Fund).where(_Fund.status == "active")
-                )).scalars().all()
-                if fund_rows:
-                    rt_svc = FundRealtimeService(self.db)
-                    realtime_map = await rt_svc.get_realtime(list(fund_rows), force=True)
-                    logger.info(f"推送预取基金当日涨跌: {len(realtime_map)}/{len(fund_rows)} 只")
+                realtime_map = await self._fetch_realtime_map()
             except Exception as rt_err:
                 logger.warning(f"推送预取基金当日涨跌失败（报告该项置空）: {rt_err}")
 

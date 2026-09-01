@@ -179,7 +179,11 @@ class TaskScheduler:
                 results = await svc.run_analysis()
 
                 # 预热实时估值缓存：推送后用户打开仪表盘即可见当日实时涨跌，
-                # 无需前端轮询（页面加载/刷新时也会触发，此处保证推送后数据新鲜）
+                # 无需前端轮询（页面加载/刷新时也会触发，此处保证推送后数据新鲜）。
+                # 契约：本轮是调度内【唯一】的 force=True 强刷轮。PushService 取数时
+                # 走缓存优先（覆盖率不足才强刷），直接消费这里写入的 _estimate_cache。
+                # 若把推送改回 force=True，一次调度会连打三轮行情源 → 东财反爬
+                # 熔断 600s → 推送反而拿不到数据（2026-09-01 修复）。
                 try:
                     from backend.services.fund_realtime_service import FundRealtimeService
                     from backend.models.fund import Fund as _Fund

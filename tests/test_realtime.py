@@ -244,6 +244,188 @@ class TestTop10ReportRendering:
         assert by_code["00981"] == 1.23
 
 
+# ── 持仓自算：港股持仓覆盖（2026-09-01 修复）────────────────────────────
+
+def _fake_holdings_db(holdings):
+    """构造返回指定持仓的假 DB（_fill_from_holdings 只查 fund_holdings）"""
+    from backend.models.fund_holding import FundHolding
+
+    class _FakeDB:
+        async def execute(self, stmt):
+            class R:
+                def all(self):
+                    return [(1, "2026年2季度股票投资明细")]
+
+                def scalars(self):
+                    class S:
+                        def all(self_inner):
+                            return [
+                                FundHolding(
+                                    fund_id=1, stock_code=c, stock_name=n,
+                                    ratio=r, quarter_label="2026年2季度股票投资明细",
+                                )
+                                for c, n, r in holdings
+                            ]
+                    return S()
+            return R()
+    return _FakeDB()
+
+
+@pytest.mark.asyncio
+async def test_fill_from_holdings_merges_hk_quotes(monkeypatch):
+    """持仓含港股(5 位代码)时，应同时取 A 股与港股行情并合并加权"""
+    FundRealtimeService._fundgz_fail_until = float("inf")
+    FundRealtimeService._estimate_cache.clear()
+    try:
+        svc = FundRealtimeService(db=_fake_holdings_db([
+            ("600000", "浦发银行", 30.0),
+            ("00981", "中芯国际", 30.0),
+        ]))
+
+        hk_calls = []
+
+        async def _fake_stock(self, codes=None):
+            return {"600000": 2.0}
+
+        async def _fake_hk(self, codes=None):
+            hk_calls.append(list(codes or []))
+            return {"00981": 4.0}
+
+        async def _fake_index(self):
+            return 1.0
+
+        monkeypatch.setattr(FundRealtimeService, "_get_stock_spot", _fake_stock)
+        monkeypatch.setattr(FundRealtimeService, "_get_hk_spot", _fake_hk)
+        monkeypatch.setattr(FundRealtimeService, "_get_index_pct", _fake_index)
+
+        results = await svc.get_realtime([_FakeFund(1, "000001", "测试基金")])
+        r = results.get("000001")
+        assert r is not None
+        assert hk_calls == [["00981"]], "5 位港股代码必须走港股行情源"
+        # (30*2 + 30*4) / 60 = 3.0，覆盖率 60%
+        assert r["growth_pct"] == pytest.approx(3.0)
+        assert r["coverage"] == pytest.approx(0.6)
+        assert r["est_model"] == "normalized"
+    finally:
+        FundRealtimeService._fundgz_fail_until = 0.0
+        FundRealtimeService._estimate_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_hk_quotes_survive_a_share_source_failure(monkeypatch):
+    """A 股行情源熔断返回空时，纯港股持仓基金仍应算出估值
+
+    原逻辑 `if not stock_pct: return` 会因 A 股源失败整批放弃，
+    含港股的基金估值随之全部消失。
+    """
+    FundRealtimeService._fundgz_fail_until = float("inf")
+    FundRealtimeService._estimate_cache.clear()
+    try:
+        svc = FundRealtimeService(db=_fake_holdings_db([
+            ("00981", "中芯国际", 30.0),
+        ]))
+
+        async def _fake_stock(self, codes=None):
+            return None  # 模拟 A 股源熔断
+
+        async def _fake_hk(self, codes=None):
+            return {"00981": 3.0}
+
+        async def _fake_index(self):
+            return 1.0
+
+        monkeypatch.setattr(FundRealtimeService, "_get_stock_spot", _fake_stock)
+        monkeypatch.setattr(FundRealtimeService, "_get_hk_spot", _fake_hk)
+        monkeypatch.setattr(FundRealtimeService, "_get_index_pct", _fake_index)
+
+        results = await svc.get_realtime([_FakeFund(1, "000001", "港股基金")])
+        r = results.get("000001")
+        assert r is not None, "A 股源失败不应连港股数据一起丢弃"
+        # 覆盖率 30% < 0.5 → 指数混合: 30*3/100 + 0.7*0.6*1.0 = 0.9 + 0.42
+        assert r["growth_pct"] == pytest.approx(1.32)
+        assert r["est_model"] == "index_blend"
+    finally:
+        FundRealtimeService._fundgz_fail_until = 0.0
+        FundRealtimeService._estimate_cache.clear()
+
+
+# ── 推送取数：缓存优先，避免与调度预热重复强刷（2026-09-01 修复）────────
+
+def _fake_push_db(n: int):
+    """构造返回 n 只 active 基金的假 DB"""
+
+    class _FakeDB:
+        async def execute(self, stmt):
+            class R:
+                def scalars(self):
+                    class S:
+                        def all(self_inner):
+                            return [_FakeFund(i, f"{i:06d}") for i in range(1, n + 1)]
+                    return S()
+            return R()
+    return _FakeDB()
+
+
+@pytest.mark.asyncio
+async def test_push_prefers_cache_and_skips_force(monkeypatch):
+    """缓存覆盖率足够时，推送只读缓存，不再强刷行情源"""
+    from backend.services.push_service import PushService
+
+    calls = []
+
+    async def _fake_get_realtime(self, funds, force=False):
+        calls.append(force)
+        # 缓存轮返回全部 4 只，覆盖率 100%
+        return {f"{i:06d}": {"code": f"{i:06d}", "growth_pct": 1.0}
+                for i in range(1, 5)}
+
+    monkeypatch.setattr(FundRealtimeService, "get_realtime", _fake_get_realtime)
+    svc = PushService(db=_fake_push_db(4))
+    m = await svc._fetch_realtime_map()
+    assert calls == [False], "覆盖率足够时不应再发起 force=True 强刷"
+    assert len(m) == 4
+
+
+@pytest.mark.asyncio
+async def test_push_forces_refresh_when_cache_empty(monkeypatch):
+    """缓存为空（源熔断/预热全败）时才强刷一次"""
+    from backend.services.push_service import PushService
+
+    def _empty():
+        return {}
+
+    calls = []
+
+    async def _fake_get_realtime(self, funds, force=False):
+        calls.append(force)
+        if force:
+            return {f"{i:06d}": {"code": f"{i:06d}", "growth_pct": 2.0}
+                    for i in range(1, 5)}
+        return {}
+
+    monkeypatch.setattr(FundRealtimeService, "get_realtime", _fake_get_realtime)
+    svc = PushService(db=_fake_push_db(4))
+    m = await svc._fetch_realtime_map()
+    assert calls == [False, True], "缓存为空应补一次强刷"
+    assert len(m) == 4
+
+
+@pytest.mark.asyncio
+async def test_push_warns_when_realtime_empty(monkeypatch, caplog):
+    """两轮都取不到数据时必须告警，不能静默丢失实时估值"""
+    from backend.services.push_service import PushService
+
+    async def _fake_get_realtime(self, funds, force=False):
+        return {}
+
+    monkeypatch.setattr(FundRealtimeService, "get_realtime", _fake_get_realtime)
+    svc = PushService(db=_fake_push_db(3))
+    with caplog.at_level("WARNING", logger="backend.services.push_service"):
+        m = await svc._fetch_realtime_map()
+    assert m == {}
+    assert any("实时涨跌项将整块缺失" in r.message for r in caplog.records)
+
+
 # ── 数据源熔断（防封禁）────────────────────────────────────────────────
 
 class TestSourceCircuitBreaker:

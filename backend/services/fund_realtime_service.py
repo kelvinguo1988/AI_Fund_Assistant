@@ -753,7 +753,8 @@ class FundRealtimeService:
         """持仓×个股快照自算估值（OTC 主力兜底路径）
 
         一次查询所有待估基金的最新季度持仓 + 一份全市场个股快照，
-        避免 N+1 网络请求。
+        避免 N+1 网络请求。持仓同时覆盖 A 股（6 位代码）与港股（5 位代码），
+        两个行情源分别取数后合并，任一源熔断时另一个仍可用于估算。
         """
         from sqlalchemy import select
         from backend.models.fund_holding import FundHolding
@@ -788,10 +789,30 @@ class FundRealtimeService:
         if not by_fund:
             return
 
-        # 收集所需个股代码 → 快照降级链可用腾讯按需（只查所需，轻量）
+        # 收集所需个股代码 → 快照降级链可用腾讯按需（只查所需，轻量）。
+        # 5 位纯数字代码为港股（A 股 6 位），需走港股行情接口；
+        # 与 get_top10_changes 的口径保持一致，否则含港股的基金覆盖率被拉低、
+        # 纯港股基金直接返回 None。
         needed_codes = sorted({c for holdings in by_fund.values() for c, _ in holdings})
-        stock_pct = await self._get_stock_spot(codes=needed_codes)
-        if not stock_pct:
+        hk_codes = [c for c in needed_codes if len(c) == 5 and c.isdigit()]
+        a_codes = [c for c in needed_codes if c not in hk_codes]
+
+        # 合并 A 股 + 港股行情：任一源熔断时另一个仍可用，
+        # 不再因 A 股源失败而整批放弃（原逻辑 `if not stock_pct: return`）
+        pct_map: dict[str, float] = {}
+        if a_codes:
+            stock_pct = await self._get_stock_spot(codes=a_codes)
+            if stock_pct:
+                pct_map.update(stock_pct)
+        if hk_codes:
+            hk_pct = await self._get_hk_spot(codes=hk_codes)
+            if hk_pct:
+                pct_map.update(hk_pct)
+        if not pct_map:
+            logger.info(
+                f"持仓自算: 行情快照为空（A股 {len(a_codes)} 只 / "
+                f"港股 {len(hk_codes)} 只均取不到），跳过"
+            )
             return
         index_pct = await self._get_index_pct()
 
@@ -800,7 +821,7 @@ class FundRealtimeService:
             if not holdings:
                 continue
             growth, coverage, model = compute_holdings_growth(
-                holdings, stock_pct, index_pct
+                holdings, pct_map, index_pct
             )
             if growth is None:
                 continue
@@ -817,6 +838,8 @@ class FundRealtimeService:
                 "est_model": model,
             }
             self._cache_estimate(f.code, results[f.code])
+        # 行情时点兜底填充（腾讯路径已在快照成功时记录可信时间）
+        FundRealtimeService._update_quote_time()
 
     # ── 缓存 ────────────────────────────────────────────────────────────
 
