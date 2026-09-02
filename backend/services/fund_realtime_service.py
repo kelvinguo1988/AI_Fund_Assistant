@@ -47,7 +47,11 @@ logger = logging.getLogger(__name__)
 # ── 常量 ──────────────────────────────────────────────────────────────
 
 SPOT_CACHE_TTL = 60.0          # 全市场快照缓存（秒）
-ESTIMATE_CACHE_TTL = 60.0      # 单基金估值结果缓存（秒）
+# 单基金估值结果缓存（秒）。原为 60s，调度链路上偏紧：一次调度要跑
+# 分析轮(数十秒~数分钟) → 预热轮 → 推送轮，若预热与推送之间间隔超过
+# TTL，缓存失效会让推送重新强刷行情源，正好撞上东财 600s 熔断窗口 →
+# 估值整块消失。放宽到 180s：既覆盖一次调度周期，盘中数据也不至于过旧。
+ESTIMATE_CACHE_TTL = 180.0
 FUNDGZ_FAIL_COOLDOWN = 86400.0  # fundgz 失败冷却（2026-08-28 实测接口已下线，
                                 # 返回 HTML 错误页；冷却升至 24h，每日探活一次，
                                 # 若官方恢复可自动生效，平时不再逐请求撞死链）
@@ -66,6 +70,15 @@ SINA_SOURCE = "sina"
 TENCENT_SOURCE = "tencent"
 
 TENCENT_URL = "http://qt.gtimg.cn/q={codes}"
+
+# 腾讯按需批量参数（降级链主力：东财熔断时 2583 只持仓股全靠它）
+# 全池持仓约 2756 只 → 50/批 ≈ 56 批。串行时任一批网络抖动会拖垮整轮，
+# 且原实现用单个 try 包裹全部批次，一批失败即把整个腾讯源熔断 600s，
+# 导致"偶发抖动 → 全池无估值"。改为有限并发 + 单批独立容错。
+TENCENT_BATCH_SIZE = 50        # 单批代码数（腾讯接口上限约 60）
+TENCENT_MAX_CONCURRENCY = 6    # 并发批数（兼顾速度与被封风险）
+TENCENT_BATCH_RETRY = 2        # 单批最多尝试次数
+TENCENT_FAIL_RATIO = 0.5       # 失败批次占比超过该值才熔断整个腾讯源
 
 FUNDGZ_URL = "https://fundgz.1234567.com.cn/js/{code}.js"
 
@@ -678,35 +691,76 @@ class FundRealtimeService:
             return {}
         if not self._source_available(TENCENT_SOURCE):
             return {}
-        # 单次批量 ≤ 60 只（腾讯接口上限约 60，稳妥取 50 分批）
-        batches = [codes[i:i + 50] for i in range(0, len(codes), 50)]
+
+        batches = [
+            codes[i:i + TENCENT_BATCH_SIZE]
+            for i in range(0, len(codes), TENCENT_BATCH_SIZE)
+        ]
+
+        def _do_request(url: str) -> str:
+            # 腾讯接口无 UA 时是 python-requests 指纹，易被封
+            resp = requests.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+                timeout=FUNDGZ_TIMEOUT,
+            )
+            resp.encoding = "gbk"
+            return resp.text
+
+        async def _fetch_batch(batch: list[str]) -> dict[str, dict]:
+            """单批取数：失败重试，全败返回空 dict（不向外抛异常）
+
+            关键：异常必须在批内终结。若抛到外层，56 批中的一次抖动
+            会让调用方把整个腾讯源熔断 600s → 全池基金无估值。
+            """
+            url = TENCENT_URL.format(
+                codes=",".join(tencent_code(c) for c in batch)
+            )
+            for attempt in range(TENCENT_BATCH_RETRY):
+                try:
+                    text = await asyncio.to_thread(_do_request, url)
+                    return parse_tencent_quotes(text)
+                except Exception:
+                    if attempt == TENCENT_BATCH_RETRY - 1:
+                        return {}
+                    await asyncio.sleep(0.3 * (attempt + 1))
+            return {}
+
+        sem = asyncio.Semaphore(TENCENT_MAX_CONCURRENCY)
+
+        async def _guarded(batch: list[str]) -> dict[str, dict]:
+            async with sem:
+                return await _fetch_batch(batch)
+
+        gathered = await asyncio.gather(
+            *[_guarded(b) for b in batches], return_exceptions=True
+        )
+
         all_quotes: dict[str, dict] = {}
-        try:
-            for batch in batches:
-                prefixed = ",".join(tencent_code(c) for c in batch)
-                url = TENCENT_URL.format(codes=prefixed)
+        failed = 0
+        for item in gathered:
+            if isinstance(item, Exception) or not item:
+                failed += 1
+                continue
+            all_quotes.update(item)
 
-                def _do_request() -> str:
-                    # 腾讯接口无 UA 时是 python-requests 指纹，易被封
-                    resp = requests.get(
-                        url,
-                        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
-                        timeout=FUNDGZ_TIMEOUT,
-                    )
-                    resp.encoding = "gbk"
-                    return resp.text
-
-                text = await asyncio.to_thread(_do_request)
-                all_quotes.update(parse_tencent_quotes(text))
+        # 熔断判定改为"失败批次占比"：仅全败或过半失败才熔断。
+        # 部分批次失败属正常网络抖动，其余批次数据照常可用，
+        # 不应因此把稳定源封 600s（原策略：一批异常即整体熔断）。
+        if batches and (
+            failed == len(batches)
+            or failed / len(batches) > TENCENT_FAIL_RATIO
+        ):
+            self._mark_source_fail(TENCENT_SOURCE, f"{failed}/{len(batches)} 批失败")
+        else:
             self._mark_source_ok(TENCENT_SOURCE)
+
+        if all_quotes:
             # 腾讯响应自带行情时间（14 位），是"涨跌是哪天的"最可信来源
             first = next(iter(all_quotes.values()), None)
             if first:
                 self._update_quote_time(first.get("time", ""), trusted=True)
-            return all_quotes
-        except Exception as e:
-            self._mark_source_fail(TENCENT_SOURCE, str(e)[:80])
-            return all_quotes
+        return all_quotes
 
     async def _get_tencent_pct(self, codes: list[str]) -> dict[str, float]:
         """腾讯行情涨跌幅简化版 → {code: pct%}"""

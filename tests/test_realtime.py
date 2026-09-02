@@ -579,6 +579,98 @@ class TestTencentQuotes:
             FundRealtimeService._stock_spot_cache = None
 
 
+class TestTencentBatchResilience:
+    """腾讯批量降级链韧性——单批抖动不得熔断整个源
+
+    背景：全池持仓约 2756 只 → 56 批。原实现用单个 try 包住全部批次，
+    任一批网络抖动即把腾讯源整体熔断 600s，表现为"偶发抖动 → 全池基金
+    无估值"。修复后：单批独立重试，仅当全败或过半失败才熔断。
+    """
+
+    @staticmethod
+    def _fake_text(codes):
+        """构造腾讯行情响应文本（字段 [30] 时间 / [32] 涨跌幅）"""
+        lines = []
+        for c in codes:
+            fields = (
+                ["1", f"股票{c}", c, "10.00", "9.90"]
+                + [""] * 25
+                + ["20260828161437", "0.05", "1.01"]
+            )
+            lines.append(f'v_{tencent_code(c)}="' + "~".join(fields) + '"')
+        return ";".join(lines) + ";"
+
+    def _patch_requests(self, monkeypatch, fail_first_batch_of=None):
+        """替换 requests.get；fail_first_batch_of 的首批代码所在批次抛异常"""
+        from backend.services import fund_realtime_service as m
+
+        class _Resp:
+            def __init__(self, text):
+                self.text = text
+
+        def _fake_get(url, headers=None, timeout=None):
+            batch = [x[2:] for x in url.split("q=")[1].split(",")]
+            if fail_first_batch_of is not None and batch[0] == fail_first_batch_of:
+                raise OSError("模拟网络抖动")
+            return _Resp(self._fake_text(batch))
+
+        monkeypatch.setattr(m.requests, "get", _fake_get)
+
+    def test_partial_batch_failure_keeps_source_alive(self, monkeypatch):
+        """部分批次失败：其余批次数据照常返回，腾讯源不熔断"""
+        import asyncio
+
+        FundRealtimeService._source_fail_until.clear()
+        try:
+            svc = FundRealtimeService(db=None)
+            codes = [f"{600000 + i}" for i in range(150)]  # 3 批
+            self._patch_requests(monkeypatch, fail_first_batch_of=codes[0])
+
+            out = asyncio.run(svc._get_tencent_quotes(codes))
+            # 第 2、3 批共 100 只应正常返回
+            assert len(out) == 100
+            # 关键：多数批次成功 → 腾讯源保持可用（原策略会在此熔断 600s）
+            assert not FundRealtimeService._source_fail_until.get("tencent")
+        finally:
+            FundRealtimeService._source_fail_until.clear()
+
+    def test_all_batches_fail_trips_breaker(self, monkeypatch):
+        """全部批次失败 → 熔断腾讯源，避免持续撞死链"""
+        import asyncio
+
+        FundRealtimeService._source_fail_until.clear()
+        try:
+            svc = FundRealtimeService(db=None)
+            codes = [f"{600000 + i}" for i in range(100)]  # 2 批
+
+            from backend.services import fund_realtime_service as m
+
+            def _boom(url, headers=None, timeout=None):
+                raise OSError("模拟全链路失败")
+
+            monkeypatch.setattr(m.requests, "get", _boom)
+            out = asyncio.run(svc._get_tencent_quotes(codes))
+            assert out == {}
+            # 全败 → 熔断生效
+            assert FundRealtimeService._source_fail_until.get("tencent", 0) > 0
+        finally:
+            FundRealtimeService._source_fail_until.clear()
+
+    def test_batch_size_produces_multiple_batches(self, monkeypatch):
+        """超过单批上限时确实拆成多批，全部成功则数据完整"""
+        import asyncio
+
+        FundRealtimeService._source_fail_until.clear()
+        try:
+            svc = FundRealtimeService(db=None)
+            codes = [f"{600000 + i}" for i in range(150)]
+            self._patch_requests(monkeypatch)
+            out = asyncio.run(svc._get_tencent_quotes(codes))
+            assert len(out) == 150
+        finally:
+            FundRealtimeService._source_fail_until.clear()
+
+
 class TestQuoteTime:
     def setup_method(self):
         FundRealtimeService._spot_quote_time = ""
