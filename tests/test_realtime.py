@@ -71,6 +71,28 @@ class TestComputeHoldingsGrowth:
         assert cov == 0.0
         assert model == ""
 
+    def test_ultra_low_coverage_returns_none_not_fake_number(self):
+        """覆盖率过低（ETF联接只披露 0.1% 股票仓位）→ 不估值，拒绝假数字
+
+        此类基金主要资产是母 ETF，算出来的实质是「0.6 × 沪深300涨跌」，
+        与基金实际跟踪的指数无关（稀土/稀有金属联接都跟着沪深300走）。
+        推送看似精确、实则无关的数字比留空更有害。
+        """
+        holdings = [("600000", 0.1)]  # 覆盖率 0.001
+        pct = {"600000": 2.0}
+        growth, cov, model = compute_holdings_growth(holdings, pct, index_pct=1.0)
+        assert growth is None
+        assert model == ""
+        assert cov < 0.1
+
+    def test_moderate_coverage_still_blends(self):
+        """覆盖率 30%（≥10% 下限）仍走指数混合法，不被误伤"""
+        holdings = [("600000", 30.0)]
+        pct = {"600000": 2.0}
+        growth, cov, model = compute_holdings_growth(holdings, pct, index_pct=1.0)
+        assert growth is not None
+        assert model == "index_blend"
+
     def test_null_ratio_skipped(self):
         growth, _, _ = compute_holdings_growth(
             [("600000", None), ("600036", 40.0)], {"600036": 1.0, "600000": 5.0}

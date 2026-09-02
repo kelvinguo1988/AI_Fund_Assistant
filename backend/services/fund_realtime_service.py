@@ -85,6 +85,12 @@ FUNDGZ_URL = "https://fundgz.1234567.com.cn/js/{code}.js"
 # 估值模型参数
 LOW_COVERAGE_THRESHOLD = 0.5   # 低于此覆盖率切换指数混合法
 INDEX_EQUITY_SHARE = 0.6       # 混合法中未披露部分按 60% 股票仓位跟随指数
+# 可估值下限：覆盖率低于此值时直接放弃，不返回任何估值。
+# 场景：ETF 联接基金主要资产是母 ETF，季报只披露 0.1%~8% 的股票仓位，
+# 此时归一法/指数混合法算出的实质都是「0.6 × 沪深300涨跌」，与基金
+# 实际跟踪的指数无关（稀土/稀有金属/电池主题联接全都跟着沪深300走）。
+# 推送一个看似精确、实则无关的数字，比留空更有害 —— 宁缺毋滥。
+MIN_VIABLE_COVERAGE = 0.1
 
 _JSONP_RE = re.compile(r"jsonpgz\((.*)\)")
 
@@ -177,6 +183,7 @@ def compute_holdings_growth(
         (growth_pct, coverage, est_model)
         - 归一法 "normalized"（coverage ≥ 0.5）
         - 指数混合法 "index_blend"（coverage < 0.5 且 index_pct 可用）
+        - 覆盖率 < MIN_VIABLE_COVERAGE → (None, coverage, "")  # 不产生假数字
         - 无可用持仓/行情 → (None, 0.0, "")
     """
     weighted_sum = 0.0
@@ -194,6 +201,9 @@ def compute_holdings_growth(
         return None, 0.0, ""
 
     coverage = weight_total / 100.0
+    # 覆盖率过低时不估值：结果实质是沪深300涨跌，与基金本身无关（假数字）
+    if coverage < MIN_VIABLE_COVERAGE:
+        return None, coverage, ""
     if coverage >= LOW_COVERAGE_THRESHOLD:
         return weighted_sum / weight_total, coverage, "normalized"
 
