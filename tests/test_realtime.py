@@ -572,6 +572,20 @@ class TestTencentQuotes:
         assert tencent_code("159915") == "sz159915"
         assert tencent_code("00981") == "hk00981"
 
+    def test_explicit_market_overrides_prefix_rule(self):
+        """指数等首位数字无法区分归属的场景必须显式传 market
+
+        实测（2026-09-02）：sz000300 → v_pv_none_match（查无此码），
+        sh000300 → 沪深300 实时行情。但默认规则不能为指数特化 ——
+        "000001" 既是上证指数(sh) 也是平安银行(sz)，默认必须服务个股。
+        """
+        from backend.services.fund_realtime_service import tencent_code
+        assert tencent_code("000300", market="sh") == "sh000300"
+        assert tencent_code("000300") == "sz000300", "默认规则服务个股"
+        assert tencent_code("000001", market="sh") == "sh000001", "上证指数"
+        assert tencent_code("000001") == "sz000001", "平安银行"
+        assert tencent_code("00981", market="hk") == "hk00981"
+
     def test_em_breaker_falls_to_tencent(self, monkeypatch):
         """东财+新浪都熔断 → 腾讯按需接管"""
         import asyncio
@@ -691,6 +705,98 @@ class TestTencentBatchResilience:
             assert len(out) == 150
         finally:
             FundRealtimeService._source_fail_until.clear()
+
+
+class TestTencentOptionalPath:
+    """可选路径（指数指标）不得熔断共享源
+
+    沪深300 只是低覆盖混合法的精度补偿项，取不到仅影响少量基金的估值精度。
+    但它与 ETF/个股行情**共用腾讯源**——若它失败就触发熔断，
+    一次指数查询抖动会连累整个行情链（2026-09-02 实测的级联故障）。
+    """
+
+    def setup_method(self):
+        FundRealtimeService._source_fail_until.clear()
+        FundRealtimeService._index_pct_cache = None
+        FundRealtimeService._spot_ts = 0.0
+
+    def teardown_method(self):
+        FundRealtimeService._source_fail_until.clear()
+        FundRealtimeService._index_pct_cache = None
+        FundRealtimeService._spot_ts = 0.0
+
+    def test_market_prefix_reaches_request_url(self, monkeypatch):
+        """显式 market 必须体现在实际请求代码上"""
+        import asyncio
+        from backend.services import fund_realtime_service as m
+
+        urls = []
+
+        class _Resp:
+            text = ""
+
+        def _fake_get(url, headers=None, timeout=None):
+            urls.append(url)
+            return _Resp()
+
+        monkeypatch.setattr(m.requests, "get", _fake_get)
+        svc = FundRealtimeService(db=None)
+        asyncio.run(
+            svc._get_tencent_quotes(["000300"], market="sh", trip_breaker=False)
+        )
+        assert urls, "应发起请求"
+        assert "sh000300" in urls[0], f"显式 market 未生效: {urls[0]}"
+
+    def test_optional_failure_does_not_trip_breaker(self, monkeypatch):
+        """可选路径全败也不得熔断共享源"""
+        import asyncio
+        from backend.services import fund_realtime_service as m
+
+        def _boom(url, headers=None, timeout=None):
+            raise OSError("模拟指数查询失败")
+
+        monkeypatch.setattr(m.requests, "get", _boom)
+        svc = FundRealtimeService(db=None)
+        out = asyncio.run(
+            svc._get_tencent_quotes(["000300"], market="sh", trip_breaker=False)
+        )
+        assert out == {}
+        assert not FundRealtimeService._source_fail_until.get("tencent", 0), \
+            "可选路径失败熔断共享源会连累 ETF/个股行情"
+
+    def test_critical_path_still_trips_breaker(self, monkeypatch):
+        """同一接口在关键路径（默认 trip_breaker=True）下仍要熔断"""
+        import asyncio
+        from backend.services import fund_realtime_service as m
+
+        def _boom(url, headers=None, timeout=None):
+            raise OSError("模拟行情全链路失败")
+
+        monkeypatch.setattr(m.requests, "get", _boom)
+        svc = FundRealtimeService(db=None)
+        out = asyncio.run(svc._get_tencent_quotes(["600000", "600001"]))
+        assert out == {}
+        assert FundRealtimeService._source_fail_until.get("tencent", 0) > 0
+
+    def test_index_pct_uses_sh_market_and_no_breaker(self, monkeypatch):
+        """_get_index_pct 必须带 market='sh' 且 trip_breaker=False"""
+        import asyncio, time as _t
+
+        FundRealtimeService._source_fail_until = {"eastmoney": _t.time() + 600}
+        captured = {}
+
+        async def _fake_quotes(self, codes, market=None, trip_breaker=True):
+            captured.update(codes=codes, market=market, trip_breaker=trip_breaker)
+            return {"000300": {"name": "沪深300", "price": 4552.58, "pct": 0.10,
+                               "time": "20260903161413"}}
+
+        monkeypatch.setattr(FundRealtimeService, "_get_tencent_quotes", _fake_quotes)
+        svc = FundRealtimeService(db=None)
+        pct = asyncio.run(svc._get_index_pct())
+        assert pct == pytest.approx(0.10)
+        assert captured["codes"] == ["000300"]
+        assert captured["market"] == "sh", "指数须显式沪市，否则腾讯查无此码"
+        assert captured["trip_breaker"] is False, "指数为可选路径，失败不得熔断共享源"
 
 
 class TestQuoteTime:

@@ -135,12 +135,19 @@ def parse_tencent_quotes(text: str) -> dict[str, dict]:
     return out
 
 
-def tencent_code(code: str) -> str:
+def tencent_code(code: str, market: Optional[str] = None) -> str:
     """纯数字代码 → 腾讯带市场前缀代码
 
     - 6 位: 6/5 开头→sh（股票/沪ETF），0/1/3 开头→sz，4/8/9 开头→bj（尽力而为）
     - 5 位: 港股 hk 前缀
+    - market: 显式指定市场（"sh"/"sz"/"hk"）。用于首位数字无法区分归属的
+      场景：指数 000300（沪深300）属沪市，按首位 "0" 会误判为 sz，
+      腾讯对 sz000300 返回 v_pv_none_match（查无此代码）。
+      注意：不可把指数映射写进默认规则 —— "000001" 既是上证指数(sh)
+      也是平安银行(sz)，默认规则必须服务个股，指数请显式传 market。
     """
+    if market:
+        return f"{market}{code}"
     if len(code) == 5 and code.isdigit():
         return f"hk{code}"
     if code and code[0] in ("5", "6", "9"):
@@ -659,7 +666,12 @@ class FundRealtimeService:
             if not self._source_available(EM_SOURCE):
                 # 东财熔断 → 腾讯
                 if self._source_available(TENCENT_SOURCE):
-                    pct_map = await self._get_tencent_pct(["000300"])
+                    # 指数必须显式指定沪市：tencent_code 按首位 "0" 会判成 sz，
+                    # 腾讯对 sz000300 返回 v_pv_none_match。同时 trip_breaker=False，
+                    # 指数取不到只降低混合法精度，不该熔断共享源连累个股行情。
+                    pct_map = await self._get_tencent_pct(
+                        ["000300"], market="sh", trip_breaker=False
+                    )
                     if "000300" in pct_map:
                         FundRealtimeService._index_pct_cache = pct_map["000300"]
                         FundRealtimeService._spot_ts = time.time()
@@ -684,15 +696,28 @@ class FundRealtimeService:
             except Exception as e:
                 self._mark_source_fail(EM_SOURCE, str(e)[:80])
                 if self._source_available(TENCENT_SOURCE):
-                    pct_map = await self._get_tencent_pct(["000300"])
+                    # 指数必须显式指定沪市：tencent_code 按首位 "0" 会判成 sz，
+                    # 腾讯对 sz000300 返回 v_pv_none_match。同时 trip_breaker=False，
+                    # 指数取不到只降低混合法精度，不该熔断共享源连累个股行情。
+                    pct_map = await self._get_tencent_pct(
+                        ["000300"], market="sh", trip_breaker=False
+                    )
                     if "000300" in pct_map:
                         FundRealtimeService._index_pct_cache = pct_map["000300"]
                         FundRealtimeService._spot_ts = time.time()
                         return pct_map["000300"]
                 return None
 
-    async def _get_tencent_quotes(self, codes: list[str]) -> dict[str, dict]:
+    async def _get_tencent_quotes(
+        self, codes: list[str], market: Optional[str] = None,
+        trip_breaker: bool = True,
+    ) -> dict[str, dict]:
         """腾讯行情按需批量查询（熔断保护）→ {纯数字code: {name,price,pct,...}}
+
+        market: 显式市场前缀（指数等首位数字无法区分归属时必须传）
+        trip_breaker: 失败时是否熔断整个腾讯源。可选指标（如沪深300）
+            应传 False —— 它取不到只影响低覆盖混合法精度，若因此熔断
+            共享源会连累 ETF/个股行情（2026-09-02 实测的级联故障）。
 
         稳定源：无需鉴权、单次请求、覆盖 A股/ETF/港股/指数（2026-08-29 实测）。
         按需模式只查所需代码（top10 场景 10 只一次请求），比全市场分页轻量得多。
@@ -724,7 +749,7 @@ class FundRealtimeService:
             会让调用方把整个腾讯源熔断 600s → 全池基金无估值。
             """
             url = TENCENT_URL.format(
-                codes=",".join(tencent_code(c) for c in batch)
+                codes=",".join(tencent_code(c, market) for c in batch)
             )
             for attempt in range(TENCENT_BATCH_RETRY):
                 try:
@@ -761,7 +786,14 @@ class FundRealtimeService:
             failed == len(batches)
             or failed / len(batches) > TENCENT_FAIL_RATIO
         ):
-            self._mark_source_fail(TENCENT_SOURCE, f"{failed}/{len(batches)} 批失败")
+            if trip_breaker:
+                self._mark_source_fail(TENCENT_SOURCE, f"{failed}/{len(batches)} 批失败")
+            else:
+                # 可选路径（如指数指标）取数失败：只告警，绝不熔断共享源。
+                # 否则一次指数查询失败会连累 ETF/个股行情（2026-09-02 级联故障）。
+                logger.warning(
+                    f"腾讯行情 {failed}/{len(batches)} 批失败（可选路径，不熔断共享源）"
+                )
         else:
             self._mark_source_ok(TENCENT_SOURCE)
 
@@ -772,9 +804,17 @@ class FundRealtimeService:
                 self._update_quote_time(first.get("time", ""), trusted=True)
         return all_quotes
 
-    async def _get_tencent_pct(self, codes: list[str]) -> dict[str, float]:
-        """腾讯行情涨跌幅简化版 → {code: pct%}"""
-        quotes = await self._get_tencent_quotes(codes)
+    async def _get_tencent_pct(
+        self, codes: list[str], market: Optional[str] = None,
+        trip_breaker: bool = True,
+    ) -> dict[str, float]:
+        """腾讯行情涨跌幅简化版 → {code: pct%}
+
+        market/trip_breaker 透传给 _get_tencent_quotes，语义见其文档。
+        """
+        quotes = await self._get_tencent_quotes(
+            codes, market=market, trip_breaker=trip_breaker
+        )
         return {c: q["pct"] for c, q in quotes.items() if q.get("pct") is not None}
 
     async def _fetch_fundgz(self, code: str) -> Optional[dict]:
