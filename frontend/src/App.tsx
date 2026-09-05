@@ -36,6 +36,8 @@ import {
   Security as QualityIcon,
   Settings as SettingsIcon,
   Science as BacktestIcon,
+
+  Insights as ReviewIcon,
 } from '@mui/icons-material';
 import { useAppStore } from './store';
 import AIChatWidget from './components/AIChatWidget';
@@ -53,6 +55,7 @@ import QualityConfig from './pages/QualityConfig';
 import SystemPage from './pages/System';
 import FundDetailPage from './pages/FundDetailPage';
 import SignalBacktest from './pages/SignalBacktest';
+import ReviewPage from './pages/ReviewPage';
 
 /* ── MUI 主题（红涨绿跌） ─────────────────────────────────────────── */
 const theme = createTheme({
@@ -82,6 +85,7 @@ const NAV_ITEMS = [
   { key: 'quality', label: '质量过滤', icon: <QualityIcon />, path: '/quality-config' },
   { key: 'history', label: '历史报告', icon: <HistoryIcon />, path: '/history' },
   { key: 'backtest', label: '信号回测', icon: <BacktestIcon />, path: '/backtest' },
+  { key: 'review', label: '投资复盘', icon: <ReviewIcon />, path: '/review' },
   { key: 'system', label: '系统设置', icon: <SettingsIcon />, path: '/system' },
 ];
 
@@ -204,6 +208,7 @@ const AppLayout: React.FC = () => {
           <Route path="/quality-config" element={<QualityConfig />} />
           <Route path="/history" element={<HistoryReports />} />
           <Route path="/backtest" element={<SignalBacktest />} />
+          <Route path="/review" element={<ReviewPage />} />
           <Route path="/system" element={<SystemPage />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>

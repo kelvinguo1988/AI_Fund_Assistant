@@ -69,3 +69,36 @@ class AnalysisImportResult(BaseModel):
     updated: int = 0
     skipped: int = 0
     errors: list[str] = []
+
+
+# ── 投资复盘（组合区间收益复盘，2026-08-30 新增）──────────────────────
+
+class FundReviewItem(BaseModel):
+    """单只基金区间复盘明细"""
+    fund_code: str
+    fund_name: str
+    nav_start: Optional[float] = None       # 区间起点净值（起点日或之前最近交易日）
+    nav_end: Optional[float] = None
+    growth_pct: Optional[float] = None      # 区间涨跌 %
+    score_start: Optional[float] = None     # 区间首日前最近一次评分
+    score_end: Optional[float] = None
+    signal_start: Optional[str] = None
+    signal_end: Optional[str] = None
+    contribution_pct: Optional[float] = None  # 等权贡献 = growth/N
+    error: Optional[str] = None             # 净值获取失败原因
+
+
+class ReviewReport(BaseModel):
+    """组合区间复盘报告"""
+    start_date: str
+    end_date: str
+    fund_count: int
+    portfolio_growth_pct: Optional[float] = None   # 等权组合区间收益 %
+    benchmark_growth_pct: Optional[float] = None   # 沪深300 同区间 %
+    excess_pct: Optional[float] = None             # 超额 %
+    best: Optional[FundReviewItem] = None
+    worst: Optional[FundReviewItem] = None
+    items: list[FundReviewItem] = []
+    # 信号复盘：区间首日前最近信号与区间实际涨跌的同向率
+    signal_stats: dict = {}
+    summary_md: str = ""                            # Markdown 复盘报告（可直接喂 AI 解读）

@@ -18,6 +18,7 @@ from backend.schemas.common import ApiResponse
 from backend.schemas.analysis import (
     FactorScore, AnalysisResultOut,
     AnalysisExportPayload, AnalysisImportResult,
+    ReviewReport,
 )
 from backend.schemas.market import MarketSummaryOut, SignalSummary, MarketCapitalFlow, SectorFlowRanking, HSGTFlow, MarketAdvDecline, MarketTurnover, MarketRegimeOut
 
@@ -375,3 +376,25 @@ async def trigger_analysis_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/review", response_model=ApiResponse[ReviewReport])
+async def review_portfolio(
+    start_date: str = Query(..., description="起始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    fund_ids: Optional[str] = Query(None, description="逗号分隔基金 ID，空=全部活跃基金"),
+    db: AsyncSession = Depends(get_db),
+):
+    """投资复盘 — 组合区间收益 vs 沪深300 + 信号命中率（等权买入持有口径）"""
+    from backend.services.review_service import ReviewService
+
+    ids = (
+        [int(x) for x in fund_ids.split(",") if x.strip().isdigit()]
+        if fund_ids else None
+    )
+    svc = ReviewService(db)
+    try:
+        report = await svc.review(start_date, end_date, fund_ids=ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ApiResponse(data=report)

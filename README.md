@@ -53,6 +53,7 @@ AI_Fund_Assistant/
 - **"先展示缓存，手动/定时触发刷新"模式**：仪表盘行情数据、基金阶段涨幅均持久化缓存到数据库，页面加载直接展示缓存数据 + 时间戳；数据仅在手动手动刷新或定时推送任务触发时更新，推送后自动同步仪表盘缓存
 - **定时分析**：交易日自动执行 + 手动触发
 - **流式分析**：手动触发时分块处理基金数据，SSE 逐块推送结果至仪表盘，实时展示进度与中间结果
+- **投资复盘**：选区间一键复盘——组合等权收益 vs 沪深300 官方指数、逐只基金涨跌/评分变化/信号（始→末）、区间首日信号命中率（buy 涨/sell 跌同向率），生成 Markdown 报告并支持一键 AI 解读
 - **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析），推送内容严格跟随报告配置项过滤，未启用的报告项不会推送
 - **AI 多模型配置**：支持 DeepSeek、智谱 GLM、通义千问、OpenAI 四种模型，系统设置页可视化配置供应商/API Key/Base URL，并支持**模型 ID 覆盖**（如 glm-4-plus / qwen-max / deepseek-reasoner，留空用预设默认）
 - **AI Skills 分析技能**：可导入的提示词扩展包，前端一键启停/删除；对话时按序注入系统提示词，支持 `{{fund_pool}}`（基金池+最新分析）/ `{{market_regime}}`（市场环境）/ `{{fund:<id>}}`（单基金详情）三个数据占位符自动渲染，详见下方「AI Skills」章节
@@ -211,6 +212,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/factors/export` | GET | 因子导出 JSON |
 | `/api/factors/import` | POST | 因子导入 JSON |
 | `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
+| `/api/analysis/review` | GET | 投资复盘（start_date/end_date/fund_ids） |
 | `/api/ai/chat` | POST | AI 对话 |
 | `/api/ai/skills` | GET/POST | AI Skill 列表 / 新建 |
 | `/api/ai/skills/import` | POST | Skill 批量导入 JSON（按名称 upsert） |
