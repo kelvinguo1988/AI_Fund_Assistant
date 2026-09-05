@@ -57,7 +57,8 @@ AI_Fund_Assistant/
 - **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析），推送内容严格跟随报告配置项过滤，未启用的报告项不会推送
 - **AI 多模型配置**：支持 DeepSeek、智谱 GLM、通义千问、OpenAI 四种模型，系统设置页可视化配置供应商/API Key/Base URL，并支持**模型 ID 覆盖**（如 glm-4-plus / qwen-max / deepseek-reasoner，留空用预设默认）
 - **AI Skills 分析技能**：可导入的提示词扩展包，前端一键启停/删除；对话时按序注入系统提示词，支持 `{{fund_pool}}`（基金池+最新分析）/ `{{market_regime}}`（市场环境）/ `{{fund:<id>}}`（单基金详情）三个数据占位符自动渲染，详见下方「AI Skills」章节
-- **信号回测**：历史信号与基金净值按日期对齐，仓位策略模拟累计收益，信号有效性评分（买入看 N 日上涨/卖出看 N 日下跌），ECharts 双轴图表+评分明细表格
+- **信号回测**：历史信号与基金净值按日期对齐（非交易日信号前向对齐下一交易日），next-bar 执行 + 几何复利模拟仓位策略累计收益，信号有效性评分（买入看 N 日上涨/卖出看 N 日下跌），ECharts 双轴图表+评分明细表格
+- **自动全量回测**：开关控制每周日 00:00（Asia/Shanghai）自动对全部活跃基金跑一遍信号回测；周末低峰逐只随机间隔（默认 20~60s 可调）防数据源封禁，60 只基金约 30~60 分钟（12 小时兜底上限）；结果逐基金落库覆盖并标注完成时间，信号回测首页批量展示，支持手动立即触发
 - **东方财富反爬虫补丁**：NID 授权令牌 + User-Agent 轮换 + 请求频率控制 + 全局默认请求超时（20s，防止死连接无限挂起耗尽线程池导致仪表盘数据更新 TimeoutError）
 - **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
 - **数据源连通性检测**：一键测试东方财富系列域名 + AI API 可达性，SSRF 防护，结果含延迟与状态汇总
@@ -213,6 +214,9 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/factors/import` | POST | 因子导入 JSON |
 | `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
 | `/api/analysis/review` | GET | 投资复盘（start_date/end_date/fund_ids） |
+| `/api/backtest/batch/results` | GET/DELETE | 自动回测批量结果（逐基金完成时间） |
+| `/api/backtest/batch/config` | GET/PUT | 自动回测配置（开关/防封间隔） |
+| `/api/backtest/batch/run` | POST | 手动触发全量回测（409=运行中） |
 | `/api/ai/chat` | POST | AI 对话 |
 | `/api/ai/skills` | GET/POST | AI Skill 列表 / 新建 |
 | `/api/ai/skills/import` | POST | Skill 批量导入 JSON（按名称 upsert） |

@@ -35,6 +35,8 @@ class TaskScheduler:
         asyncio.create_task(self.reload_jobs())
         # 注册调休自动同步任务（每日检查一次，同步成功后自动停用）
         asyncio.create_task(self._register_holiday_sync())
+        # 注册自动全量回测（每周日 0 点，受 system_config 开关控制）
+        asyncio.create_task(self._register_auto_backtest())
 
     def shutdown(self) -> None:
         """停止调度器"""
@@ -235,6 +237,62 @@ class TaskScheduler:
             )
             raise  # 上抛给 _run_task 决定是否重试
 
+
+    async def register_auto_backtest_now(self) -> None:
+        """供系统配置保存后立即重载自动回测任务（开关变更生效）"""
+        try:
+            await self._register_auto_backtest()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"重载自动回测任务失败: {e}")
+
+    async def _register_auto_backtest(self) -> None:
+        """注册自动全量回测定时任务（每周日 0 点 Asia/Shanghai）
+
+        开关关闭时移除已注册任务；注册/移除均幂等。
+        """
+        from backend.database import async_session_factory
+        from backend.services.auto_backtest_service import (
+            get_auto_config, CFG_ENABLED,
+        )
+
+        async with async_session_factory() as session:
+            cfg = await get_auto_config(session)
+        enabled = cfg["enabled"]
+
+        job_id = "auto_full_backtest"
+        existing = self._scheduler.get_job(job_id)
+        if not enabled:
+            if existing:
+                self._scheduler.remove_job(job_id)
+                logger.info("自动全量回测已按开关关闭移除")
+            return
+
+        trigger = CronTrigger(
+            day_of_week="sun", hour=0, minute=0, timezone="Asia/Shanghai"
+        )
+        self._scheduler.add_job(
+            self._run_auto_backtest,
+            trigger=trigger,
+            id=job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,  # 周日 0 点错过（NAS 重启）1 小时内补跑
+        )
+        logger.info("已注册自动全量回测任务（每周日 00:00 Asia/Shanghai）")
+
+    async def _run_auto_backtest(self) -> None:
+        """执行自动全量回测（独立 DB 会话）"""
+        try:
+            from backend.database import async_session_factory
+            from backend.services.auto_backtest_service import AutoBacktestService
+
+            async with async_session_factory() as session:
+                svc = AutoBacktestService(session)
+                stats = await svc.run_full_backtest()
+                logger.info(f"自动回测任务退出: {stats}")
+        except Exception as e:
+            logger.error(f"自动全量回测任务异常: {e}")
 
     async def _register_holiday_sync(self) -> None:
         """注册调休自动同步任务（每日在 holiday_auto_sync_time 触发一次）"""

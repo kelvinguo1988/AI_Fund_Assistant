@@ -22,12 +22,22 @@ import {
   TableRow,
   TableCell,
   Chip,
+  TableContainer,
 } from '@mui/material';
-import { PlayArrow as RunIcon } from '@mui/icons-material';
+import {
+  PlayArrow as RunIcon,
+  Schedule as ScheduleIcon,
+  Delete as DeleteIcon,
+} from '@mui/icons-material';
+import {
+  Switch,
+  FormControlLabel,
+  Tooltip,
+} from '@mui/material';
 import ReactECharts from 'echarts-for-react';
 import type { EChartsOption } from 'echarts';
 import { fundApi } from '../api/fund';
-import { backtestApi } from '../api/backtest';
+import { backtestApi, backtestBatchApi, type BacktestBatchItem, type AutoBacktestConfig } from '../api/backtest';
 import type { FundOut, BacktestSummary } from '../types';
 
 const STRENGTH_LABELS: Record<string, string> = {
@@ -46,6 +56,36 @@ const SignalBacktest: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestSummary | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+
+  // ── 自动全量回测状态 ──
+  const [autoCfg, setAutoCfg] = useState<AutoBacktestConfig | null>(null);
+  const [batchRows, setBatchRows] = useState<BacktestBatchItem[]>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchRunning, setBatchRunning] = useState(false);
+
+  const loadBatch = async () => {
+    setBatchLoading(true);
+    try {
+      const res = await backtestBatchApi.listResults();
+      setBatchRows(res.data || []);
+    } catch {
+      // 静默：批量面板失败不影响单基金回测
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    backtestBatchApi.getConfig()
+      .then((r) => setAutoCfg(r.data))
+      .catch(() => { /* 配置加载失败保持 null */ });
+    loadBatch();
+    // 批量结果 60s 轮询：手动触发一轮全量回测后逐只落库，可实时看到进度
+    const t = setInterval(() => {
+      if (batchRunning) loadBatch();
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [batchRunning]);
 
   useEffect(() => {
     fundApi.list().then((res) => {
@@ -184,11 +224,147 @@ const SignalBacktest: React.FC = () => {
   /* ── 统计卡片颜色 ──────────────────────────────────────────── */
   const statColor = (val: number) => (val >= 0 ? '#e53935' : '#43a047');
 
+
+  const saveAutoCfg = async (patch: Partial<AutoBacktestConfig>) => {
+    try {
+      const res = await backtestBatchApi.updateConfig(patch);
+      setAutoCfg(res.data);
+      setSnackbar({ open: true, message: '自动回测配置已保存并生效', severity: 'success' });
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err?.message || '保存失败', severity: 'error' });
+    }
+  };
+
+  const triggerBatch = async () => {
+    setBatchRunning(true);
+    try {
+      await backtestBatchApi.trigger();
+      setSnackbar({ open: true, message: '全量回测已启动（后台逐只执行，结果实时落库）', severity: 'success' });
+      loadBatch();
+    } catch (err: any) {
+      setBatchRunning(false);
+      setSnackbar({ open: true, message: err?.message || '触发失败', severity: 'error' });
+    }
+  };
+
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h5" sx={{ mb: 2 }}>
         信号回测
       </Typography>
+
+      {/* ── 自动全量回测 ── */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, flexWrap: 'wrap', gap: 1 }}>
+            <Typography variant="h6">
+              <ScheduleIcon sx={{ verticalAlign: 'middle', mr: 1 }} />
+              自动全量回测
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <Button
+                size="small" variant="contained" startIcon={<RunIcon />}
+                disabled={batchRunning}
+                onClick={triggerBatch}
+              >
+                {batchRunning ? '运行中…' : '立即全量回测'}
+              </Button>
+              <Button size="small" startIcon={<DeleteIcon />} onClick={async () => {
+                if (!window.confirm('清空全部批量回测结果？')) return;
+                await backtestBatchApi.clearResults();
+                loadBatch();
+              }}>
+                清空
+              </Button>
+            </Box>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 1 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={!!autoCfg?.enabled}
+                  onChange={async (e) => {
+                    setAutoCfg((c) => (c ? { ...c, enabled: e.target.checked } : c));
+                    await saveAutoCfg({ enabled: e.target.checked });
+                  }}
+                  disabled={!autoCfg}
+                />
+              }
+              label={autoCfg?.enabled ? '已开启：每周日 00:00 自动全量回测' : '已关闭'}
+            />
+            <Tooltip title="每只基金之间的随机等待区间（秒）。周末低峰拉长间隔防数据源封禁；60 只基金约 30~60 分钟，上限 12 小时">
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                <TextField
+                  label="间隔下限(秒)" size="small" type="number" sx={{ width: 120 }}
+                  value={autoCfg?.min_interval ?? 20}
+                  onChange={(e) => setAutoCfg((c) => (c ? { ...c, min_interval: Number(e.target.value) } : c))}
+                  onBlur={() => autoCfg && saveAutoCfg({ min_interval: autoCfg.min_interval })}
+                />
+                <TextField
+                  label="间隔上限(秒)" size="small" type="number" sx={{ width: 120 }}
+                  value={autoCfg?.max_interval ?? 60}
+                  onChange={(e) => setAutoCfg((c) => (c ? { ...c, max_interval: Number(e.target.value) } : c))}
+                  onBlur={() => autoCfg && saveAutoCfg({ max_interval: autoCfg.max_interval })}
+                />
+              </Box>
+            </Tooltip>
+          </Box>
+
+          {batchLoading && <CircularProgress size={20} sx={{ mb: 1 }} />}
+          <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 420 }}>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  <TableCell>基金</TableCell>
+                  <TableCell align="right">策略收益</TableCell>
+                  <TableCell align="right">净值收益</TableCell>
+                  <TableCell align="right">超额</TableCell>
+                  <TableCell align="right">回撤落差</TableCell>
+                  <TableCell align="right">有效率</TableCell>
+                  <TableCell>完成时间</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {batchRows.map((r) => (
+                  <TableRow key={r.fund_id} hover>
+                    <TableCell>
+                      {r.fund_name}
+                      <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{r.fund_code}</Typography>
+                    </TableCell>
+                    <TableCell align="right" sx={{ color: (r.total_strategy_return ?? 0) >= 0 ? '#f44336' : '#4caf50' }}>
+                      {r.total_strategy_return != null ? `${r.total_strategy_return.toFixed(2)}%` : '—'}
+                    </TableCell>
+                    <TableCell align="right">
+                      {r.total_nav_return != null ? `${r.total_nav_return.toFixed(2)}%` : '—'}
+                    </TableCell>
+                    <TableCell align="right">
+                      {r.excess_return != null ? `${r.excess_return.toFixed(2)}pp` : '—'}
+                    </TableCell>
+                    <TableCell align="right">
+                      {r.max_drawdown != null ? `${r.max_drawdown.toFixed(2)}pp` : '—'}
+                    </TableCell>
+                    <TableCell align="right">
+                      {r.avg_effectiveness != null ? `${r.avg_effectiveness.toFixed(1)}` : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {r.ok
+                        ? (r.finished_at ?? '—')
+                        : <Typography variant="caption" color="error">失败: {r.error}</Typography>}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {batchRows.length === 0 && !batchLoading && (
+                  <TableRow>
+                    <TableCell colSpan={7} align="center">
+                      暂无批量结果 — 开启自动回测（每周日 00:00）或点击"立即全量回测"
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </CardContent>
+      </Card>
 
       {/* ── 控制栏 ── */}
       <Paper sx={{ p: 2, mb: 3, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>

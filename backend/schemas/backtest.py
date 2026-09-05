@@ -34,3 +34,26 @@ class BacktestSummary(BaseModel):
     sell_effectiveness: Optional[float] = None      # 卖出信号平均有效性
     effectiveness_rate: Optional[float] = None      # 有效率 (%)
     points: List[BacktestPoint]
+
+
+class BacktestBatchItem(BaseModel):
+    """自动全量回测的逐基金汇总（不含逐日 points）"""
+    model_config = {"protected_namespaces": ()}
+
+    fund_id: int
+    fund_code: str
+    fund_name: str
+    period: int
+    effectiveness_window: int
+    total_nav_return: Optional[float] = None
+    total_strategy_return: Optional[float] = None
+    excess_return: Optional[float] = None
+    max_drawdown: Optional[float] = None
+    signal_count: Optional[int] = None
+    avg_effectiveness: Optional[float] = None
+    buy_effectiveness: Optional[float] = None
+    sell_effectiveness: Optional[float] = None
+    effectiveness_rate: Optional[float] = None
+    finished_at: Optional[str] = None
+    error: Optional[str] = None
+    ok: bool = True
