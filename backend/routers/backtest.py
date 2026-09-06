@@ -1,6 +1,9 @@
 """信号回测路由"""
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -9,6 +12,8 @@ from backend.schemas.backtest import BacktestSummary
 from backend.services.backtest_service import BacktestService
 
 router = APIRouter()
+
+_batch_task_ref = None  # 后台任务强引用（防 GC 取消）
 
 
 @router.get("/{fund_id}", response_model=ApiResponse[BacktestSummary])
@@ -76,9 +81,16 @@ async def get_auto_config(db: AsyncSession = Depends(get_db)):
     return ApiResponse(data=await get_auto_config(db))
 
 
+class AutoBacktestConfigUpdate(BaseModel):
+    """自动回测配置更新（Pydantic 校验，杜绝非法值 500）"""
+    enabled: Optional[bool] = None
+    min_interval: Optional[float] = Field(None, ge=1, description="间隔下限(秒)")
+    max_interval: Optional[float] = Field(None, ge=1, description="间隔上限(秒)")
+
+
 @router.put("/batch/config")
 async def update_auto_config(
-    body: dict,
+    body: AutoBacktestConfigUpdate,
     db: AsyncSession = Depends(get_db),
 ):
     """更新自动回测配置（enabled/interval_min/interval_max），保存后立即重载调度"""
@@ -87,21 +99,22 @@ async def update_auto_config(
     )
     from backend.models.system_config import SystemConfig
 
-    allowed = {
-        CFG_ENABLED: lambda v: str(bool(v)).lower(),
-        CFG_MIN_INTERVAL: lambda v: str(max(1.0, float(v))),
-        CFG_MAX_INTERVAL: lambda v: str(max(1.0, float(v))),
-    }
-    for key, conv in allowed.items():
-        if key in body:
-            value = conv(body[key])
-            row = (await db.execute(
-                select(SystemConfig).where(SystemConfig.config_key == key)
-            )).scalars().first()
-            if row:
-                row.config_value = value
-            else:
-                db.add(SystemConfig(config_key=key, config_value=value))
+    update_map: dict[str, str] = {}
+    if body.enabled is not None:
+        update_map[CFG_ENABLED] = str(body.enabled).lower()
+    if body.min_interval is not None:
+        update_map[CFG_MIN_INTERVAL] = str(max(1.0, body.min_interval))
+    if body.max_interval is not None:
+        update_map[CFG_MAX_INTERVAL] = str(max(1.0, body.max_interval))
+
+    for key, value in update_map.items():
+        row = (await db.execute(
+            select(SystemConfig).where(SystemConfig.config_key == key)
+        )).scalars().first()
+        if row:
+            row.config_value = value
+        else:
+            db.add(SystemConfig(config_key=key, config_value=value))
     await db.commit()
     # 开关变更立即生效（注册/移除周日任务）
     from backend.scheduler.task_scheduler import task_scheduler
@@ -122,9 +135,15 @@ async def trigger_batch_backtest(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=409, detail="全量回测正在运行中，请等待完成")
 
     async def _job():
-        async with async_session_factory() as session:
-            svc = AutoBacktestService(session)
-            await svc.run_full_backtest()
+        try:
+            async with async_session_factory() as session:
+                svc = AutoBacktestService(session)
+                stats = await svc.run_full_backtest()
+                if stats.get("skipped"):
+                    logger.warning("手动触发被防重入跳过（已有回测在运行）")
+        except Exception:
+            logger.exception("手动全量回测任务异常")
 
-    asyncio.create_task(_job())
+    global _batch_task_ref
+    _batch_task_ref = asyncio.create_task(_job())
     return ApiResponse(data={"accepted": True})

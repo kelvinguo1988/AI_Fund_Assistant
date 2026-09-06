@@ -30,23 +30,36 @@ class TaskScheduler:
         """启动调度器"""
         self._scheduler.start()
         logger.info("调度器已启动")
-        # 启动后加载任务
+        # 启动后加载任务（持强引用防 GC 取消 + 异常可见）
         import asyncio
-        asyncio.create_task(self.reload_jobs())
-        # 注册调休自动同步任务（每日检查一次，同步成功后自动停用）
-        asyncio.create_task(self._register_holiday_sync())
-        # 注册自动全量回测（每周日 0 点，受 system_config 开关控制）
-        asyncio.create_task(self._register_auto_backtest())
+
+        def _log_task_err(t):
+            if not t.cancelled() and t.exception():
+                logger.error(f"调度器后台任务异常: {t.exception()}", exc_info=t.exception())
+
+        self._startup_tasks = [
+            asyncio.create_task(self.reload_jobs()),
+            asyncio.create_task(self._register_holiday_sync()),
+            asyncio.create_task(self._register_auto_backtest()),
+        ]
+        for t in self._startup_tasks:
+            t.add_done_callback(_log_task_err)
 
     def shutdown(self) -> None:
         """停止调度器"""
         self._scheduler.shutdown(wait=False)
         logger.info("调度器已停止")
 
+    # 固定注册任务（start() 时注册，reload_jobs 不得移除）
+    _FIXED_JOB_IDS = {"auto_full_backtest", "holiday_auto_sync"}
+
     async def reload_jobs(self) -> None:
         """从数据库重新加载所有调度任务"""
-        # 移除所有已有任务
+        # 移除调度表任务（保留固定任务，否则任何调度 CRUD 都会
+        # 静默杀掉周日自动回测和调休同步）
         for job in self._scheduler.get_jobs():
+            if job.id in self._FIXED_JOB_IDS:
+                continue
             self._scheduler.remove_job(job.id)
 
         # 从数据库加载

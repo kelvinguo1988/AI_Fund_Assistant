@@ -30,8 +30,10 @@ import {
 import { reviewApi, type ReviewReport } from '../api/review';
 import { aiApi } from '../api/ai';
 
-const today = () => new Date().toISOString().slice(0, 10);
-const monthAgo = () => new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+// 本地日期（UTC ISO 串在北京时间 0-8 点会显示昨天）
+const localDate = (d: Date) => d.toLocaleDateString('en-CA');
+const today = () => localDate(new Date());
+const monthAgo = () => localDate(new Date(Date.now() - 30 * 86400000));
 
 const pct = (v?: number | null, digits = 2) =>
   v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(digits)}%`;

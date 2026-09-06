@@ -328,7 +328,7 @@ class FundRealtimeService:
         for f in funds:
             hit = FundRealtimeService._estimate_cache.get(f.code)
             if not force and hit and now - hit[0] < ESTIMATE_CACHE_TTL:
-                results[f.code] = hit[1]
+                results[f.code] = dict(hit[1])
             else:
                 pending.append(f)
 
@@ -337,22 +337,31 @@ class FundRealtimeService:
 
         # ── OTC 场外（主路径）──
         otc_funds = [f for f in pending if guess_fund_type(f.code) != "etf"]
-        for f in otc_funds:
-            est = await self._fetch_fundgz(f.code)
-            if est is not None:
-                results[f.code] = {
-                    "code": f.code,
-                    "name": f.name or est.get("name", ""),
-                    "source": "fundgz",
-                    "nav_date": est.get("jzrq", ""),
-                    "nav": _to_float(est.get("dwjz")),
-                    "estimated_nav": _to_float(est.get("gsz")),
-                    "growth_pct": _to_float(est.get("gszzl")),
-                    "quote_time": est.get("gztime", ""),
-                    "coverage": None,
-                    "est_model": "official",
-                }
-                self._cache_estimate(f.code, results[f.code])
+        if otc_funds:
+            # 2026-08-30 修复：原逐只串行（60 只=60 次串行往返，页面请求
+            # 等待数十秒），改并发（信号量 10，fundgz 为轻量接口）
+            gz_sem = asyncio.Semaphore(10)
+
+            async def _gz_one(fund: Fund):
+                async with gz_sem:
+                    return fund, await self._fetch_fundgz(fund.code)
+
+            for fut in asyncio.as_completed([_gz_one(f) for f in otc_funds]):
+                f, est = await fut
+                if est is not None:
+                    results[f.code] = {
+                        "code": f.code,
+                        "name": f.name or est.get("name", ""),
+                        "source": "fundgz",
+                        "nav_date": est.get("jzrq", ""),
+                        "nav": _to_float(est.get("dwjz")),
+                        "estimated_nav": _to_float(est.get("gsz")),
+                        "growth_pct": _to_float(est.get("gszzl")),
+                        "quote_time": est.get("gztime", ""),
+                        "coverage": None,
+                        "est_model": "official",
+                    }
+                    self._cache_estimate(f.code, results[f.code])
 
         # fundgz 未覆盖的场外基金 → 持仓自算（主力兜底）
         otc_missing = [f for f in otc_funds if f.code not in results]
@@ -394,19 +403,36 @@ class FundRealtimeService:
         行情与股票同接口，实测 sh510300 可用）。
         """
         now = time.time()
+        # 快路径：缓存新鲜且覆盖全部所需代码（腾讯按需写入的是部分市场缓存）
+        _cache = FundRealtimeService._etf_spot_cache
         if (
-            FundRealtimeService._etf_spot_cache is not None
+            _cache is not None
             and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
+            and all(c in _cache for c in (codes or []))
         ):
-            return FundRealtimeService._etf_spot_cache
+            return _cache
 
         async with FundRealtimeService._spot_lock:
             now = time.time()
+            _cache = FundRealtimeService._etf_spot_cache
             if (
-                FundRealtimeService._etf_spot_cache is not None
+                _cache is not None
                 and now - FundRealtimeService._spot_ts < SPOT_CACHE_TTL
             ):
-                return FundRealtimeService._etf_spot_cache
+                # 部分缓存 → 腾讯补缺（镜像 _get_stock_spot 路径）
+                missing = [c for c in (codes or []) if c not in _cache]
+                if missing and self._source_available(TENCENT_SOURCE):
+                    quotes = await self._get_tencent_quotes(missing)
+                    if quotes:
+                        for c, q in quotes.items():
+                            _cache[c] = {
+                                "name": q.get("name", ""), "price": q.get("price"),
+                                "pct": q.get("pct"), "time": q.get("time", ""),
+                                "date": "",
+                            }
+                        FundRealtimeService._spot_ts = now
+                        logger.info(f"ETF 行情(腾讯补缺): +{len(quotes)} 只")
+                return _cache
 
             if not self._source_available(EM_SOURCE):
                 # 东财熔断 → 腾讯按需构造兼容结构
@@ -828,7 +854,7 @@ class FundRealtimeService:
         try:
             url = FUNDGZ_URL.format(code=code)
 
-            def _do_request() -> Optional[dict]:
+            def _do_request_full() -> tuple[str, Optional[dict]]:
                 resp = requests.get(
                     url,
                     headers={
@@ -837,14 +863,20 @@ class FundRealtimeService:
                     },
                     timeout=FUNDGZ_TIMEOUT,
                 )
-                return parse_fundgz_jsonp(resp.text)
+                return resp.text, parse_fundgz_jsonp(resp.text)
 
-            data = await asyncio.to_thread(_do_request)
+            text, data = await asyncio.to_thread(_do_request_full)
             if data and data.get("gszzl") is not None:
                 return data
-            # 反爬页/空数据 → 触发冷却
-            FundRealtimeService._fundgz_fail_until = now + FUNDGZ_FAIL_COOLDOWN
-            logger.info(f"fundgz 估值不可用(code={code})，进入 {FUNDGZ_FAIL_COOLDOWN}s 冷却")
+            if "jsonpgz" in text:
+                # 有效 JSONP 但无估值（货基/暂停估值/QDII）→ 不冷却，仅跳过该基金
+                # 2026-08-30 修复：原先任何空数据都触发整池冷却，
+                # 一只特殊基金会把全池官方估值关停一整天
+                logger.info(f"fundgz 无估值数据(code={code})，跳过该基金")
+                return None
+            # 反爬页（无 jsonpgz 标记）→ 冷却
+            FundRealtimeService._fundgz_fail_until = time.time() + FUNDGZ_FAIL_COOLDOWN
+            logger.info(f"fundgz 反爬拦截(code={code})，进入 {FUNDGZ_FAIL_COOLDOWN}s 冷却")
             return None
         except Exception as e:
             FundRealtimeService._fundgz_fail_until = now + FUNDGZ_FAIL_COOLDOWN

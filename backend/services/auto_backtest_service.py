@@ -93,12 +93,24 @@ class AutoBacktestService:
                     break
                 total += 1
                 try:
-                    summary = await svc.run_backtest(fund_id=fund.id)
+                    # 2026-08-30 修复：单只 hang 死原会让循环永远到不了 12h
+                    # 检查点，_running 永久锁死（后续触发全部 409/跳过）。
+                    # 单只上限 10 分钟（净值拉取重试最坏 ~80s × 3 接口 + 余量）
+                    summary = await asyncio.wait_for(
+                        svc.run_backtest(fund_id=fund.id), timeout=600.0
+                    )
                     await self._upsert_result(fund, summary)
                     ok += 1
                     logger.info(
                         f"自动回测 [{i + 1}/{len(funds)}] {fund.code} 完成"
                     )
+                except asyncio.TimeoutError:
+                    failed += 1
+                    logger.error(f"自动回测 {fund.code} 超时(10 分钟)，记为失败")
+                    try:
+                        await self._upsert_error(fund, "回测超时(10 分钟)")
+                    except Exception as ue:
+                        logger.error(f"自动回测失败行落库失败 {fund.code}: {ue}")
                 except Exception as e:
                     failed += 1
                     logger.error(f"自动回测 {fund.code} 失败: {e}")

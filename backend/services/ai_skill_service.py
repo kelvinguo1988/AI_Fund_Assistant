@@ -81,7 +81,11 @@ async def render_skill_prompts(
         placeholders = set(extract_placeholders(prompt))
         for token in placeholders:
             rendered = await render_placeholder(token, db)
-            prompt = prompt.replace("{{" + token + "}}", rendered)
+            # 2026-08-30 修复：正则允许 {{ fund_pool }} 等空白变体，
+            # 但 str.replace 只匹配无空格形态 → 原文残留花括号。
+            # 改为按 token 构造同样的宽容正则做替换。
+            token_re = re.compile(r"\{\{\s*" + re.escape(token) + r"\s*\}\}")
+            prompt = token_re.sub(rendered.replace("\\", "\\\\"), prompt)
         out.append((sk.name, prompt))
     return out
 

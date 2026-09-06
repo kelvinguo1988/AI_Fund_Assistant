@@ -271,8 +271,12 @@ const SignalBacktest: React.FC = () => {
               </Button>
               <Button size="small" startIcon={<DeleteIcon />} onClick={async () => {
                 if (!window.confirm('清空全部批量回测结果？')) return;
-                await backtestBatchApi.clearResults();
-                loadBatch();
+                try {
+                  await backtestBatchApi.clearResults();
+                  loadBatch();
+                } catch (err: any) {
+                  setSnackbar({ open: true, message: err?.message || '清空失败', severity: 'error' });
+                }
               }}>
                 清空
               </Button>

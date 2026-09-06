@@ -201,32 +201,41 @@ def parse_exposure_tags(holdings: list[dict]) -> Optional[str]:
     return ", ".join(parts)
 
 
+class F10FetchError(RuntimeError):
+    """F10 网络抓取失败（区别于档案缺失）——调用方应保留旧标签而非降级"""
+
+
 def fetch_f10_profile(code: str) -> Optional[dict]:
-    """抓取 F10 基本概况 → {official_type, benchmark}；页面缺失（互认基金）返回 None"""
+    """抓取 F10 基本概况 → {official_type, benchmark}
+
+    页面缺失（互认基金等非内地公募）返回 None；
+    网络异常抛 F10FetchError（调用方保留既有标签，避免瞬时失败
+    被持久化为'互认基金'错误分类）。
+    """
     url = F10_URL.format(code=code)
     try:
         resp = requests.get(
             url, headers={"Referer": "https://fundf10.eastmoney.com/"}, timeout=15
         )
         resp.encoding = "utf-8"
-        if resp.status_code != 200 or len(resp.text) < 5000:
-            logger.info("F10 档案缺失 code=%s（可能为互认/非内地公募）", code)
-            return None
-
-        def field(label: str) -> str:
-            m = re.search(rf"<th>{label}</th>\s*<td[^>]*>(.*?)</td>", resp.text, re.S)
-            if not m:
-                return ""
-            return re.sub(r"<[^>]+>|\s+", " ", m.group(1)).strip()
-
-        official_type = field("基金类型")
-        benchmark = field("业绩比较基准")
-        if not official_type and not benchmark:
-            return None
-        return {"official_type": official_type, "benchmark": benchmark}
     except Exception as e:
-        logger.warning("F10 抓取失败 code=%s: %s", code, e)
+        raise F10FetchError(f"F10 网络抓取失败 code={code}: {e}") from e
+
+    if resp.status_code != 200 or len(resp.text) < 5000:
+        logger.info("F10 档案缺失 code=%s（可能为互认/非内地公募）", code)
         return None
+
+    def field(label: str) -> str:
+        m = re.search(rf"<th>{label}</th>\s*<td[^>]*>(.*?)</td>", resp.text, re.S)
+        if not m:
+            return ""
+        return re.sub(r"<[^>]+>|\s+", " ", m.group(1)).strip()
+
+    official_type = field("基金类型")
+    benchmark = field("业绩比较基准")
+    if not official_type and not benchmark:
+        return None
+    return {"official_type": official_type, "benchmark": benchmark}
 
 
 def build_double_tags(
@@ -239,7 +248,13 @@ def build_double_tags(
     Returns:
         {tags, fund_type_official, benchmark_text, exposure_tags, is_mutual_fund}
     """
-    f10 = f10 if f10 is not None else fetch_f10_profile(code)
+    fetch_failed = False
+    if f10 is None:
+        try:
+            f10 = fetch_f10_profile(code)
+        except F10FetchError as e:
+            logger.warning(f"{e}；保留既有标签，仅用名称解析")
+            fetch_failed = True
     is_mutual = False
     official_type = benchmark = None
 
@@ -249,7 +264,7 @@ def build_double_tags(
         if official_type in ("", "---"):
             official_type = None
         benchmark = f10.get("benchmark") or None
-    elif official_type is None and code.startswith("968"):
+    elif not fetch_failed and official_type is None and code.startswith("968"):
         # 档案页存在但类型为空（如 968 开头香港互认基金，值为 ---）
         is_mutual = True
         official_type = "互认基金"
@@ -272,4 +287,5 @@ def build_double_tags(
         "exposure_tags": exposure,
         "position_tag": position_tag,
         "is_mutual_fund": is_mutual,
+        "_fetch_failed": fetch_failed,  # 调用方据此保留旧 official/benchmark
     }

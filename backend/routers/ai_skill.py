@@ -66,6 +66,9 @@ async def import_skills(
     body: list[AISkillImportItem], db: AsyncSession = Depends(get_db)
 ):
     """批量导入 Skill — 按 name upsert（存在则更新内容与启停，不存在则创建）"""
+    # 上限保护：skill 会注入每次对话的系统提示词，防超大导入
+    if len(body) > 100:
+        raise HTTPException(status_code=400, detail="单次导入最多 100 条 Skill")
     result = AISkillImportResult()
     for item in body:
         if not item.name or not item.name.strip():
@@ -90,7 +93,8 @@ async def import_skills(
                 ))
                 result.created += 1
         except Exception as e:
-            await db.rollback()
+            # 2026-08-30 修复：循环内 rollback 会连带丢弃此前条目的变更
+            # 而计数器仍报告成功——改为只记 error，事务边界留给最终 commit
             result.errors.append(f"{item.name}: {e}")
     try:
         await db.commit()

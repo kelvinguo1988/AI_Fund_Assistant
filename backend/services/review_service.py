@@ -90,7 +90,10 @@ class ReviewService:
                 if nav_start is not None and nav_end is not None and nav_start[1] > 0:
                     item.nav_start, item.nav_end = nav_start[1], nav_end[1]
                     item.growth_pct = round((nav_end[1] / nav_start[1] - 1) * 100, 2)
-            s0, s1 = await self._score_at(fund.id, start_date), await self._score_at(fund.id, end_date)
+            s0, s1 = await asyncio.gather(
+                self._score_at(fund.id, start_date),
+                self._score_at(fund.id, end_date),
+            )
             if s0:
                 item.score_start, item.signal_start = s0[0], s0[1]
             if s1:
@@ -180,10 +183,10 @@ class ReviewService:
             df = await adapter._call(_fetch)
             if df is None or df.empty:
                 return None
-            series = [
+            series = sorted(
                 (str(d)[:10], float(c))
                 for d, c in zip(df["date"], df["close"])
-            ]
+            )
             s0 = _nearest_on_or_before(series, start_date)
             s1 = _nearest_on_or_before(series, end_date)
             if s0 and s1 and s0[1] > 0:

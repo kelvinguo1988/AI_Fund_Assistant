@@ -270,9 +270,13 @@ class FundService:
             fund.code, fund.name or "", fund.fund_type, holds_payload,
             timeout=25.0,
         )
+        # F10 瞬时失败：保留旧 official/benchmark，避免瞬时网络错误
+        # 把已正确的分类冲掉（2026-08-30 复查修复）
         fund.tags = result["tags"]
-        fund.fund_type_official = result["fund_type_official"]
-        fund.benchmark_text = result["benchmark_text"]
+        if not result.get("_fetch_failed") or fund.fund_type_official is None:
+            fund.fund_type_official = result["fund_type_official"]
+        if not result.get("_fetch_failed") or fund.benchmark_text is None:
+            fund.benchmark_text = result["benchmark_text"]
         fund.exposure_tags = result["exposure_tags"]
         await self.db.commit()
         await self.db.refresh(fund)
@@ -325,8 +329,10 @@ async def enrich_fund_themes(codes: list[str]) -> None:
                     timeout=25.0,
                 )
                 fund.tags = tags_result["tags"]
-                fund.fund_type_official = tags_result["fund_type_official"]
-                fund.benchmark_text = tags_result["benchmark_text"]
+                if not tags_result.get("_fetch_failed") or fund.fund_type_official is None:
+                    fund.fund_type_official = tags_result["fund_type_official"]
+                if not tags_result.get("_fetch_failed") or fund.benchmark_text is None:
+                    fund.benchmark_text = tags_result["benchmark_text"]
                 fund.exposure_tags = tags_result["exposure_tags"]
                 await session.flush()
                 logger.info("基金 %s 标签补全: %s", code, fund.tags)

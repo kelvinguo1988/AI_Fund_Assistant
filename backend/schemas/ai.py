@@ -29,7 +29,7 @@ class AISkillBase(BaseModel):
     """AI Skill 基础字段"""
     name: str = Field(..., max_length=100, description="Skill 名称（唯一）")
     description: Optional[str] = Field(None, max_length=500, description="功能描述")
-    system_prompt: str = Field(..., description="系统提示词（支持 {{fund_pool}}/{{market_regime}}/{{fund:<id>}} 占位符）")
+    system_prompt: str = Field(..., max_length=50_000, description="系统提示词（支持 {{fund_pool}}/{{market_regime}}/{{fund:<id>}} 占位符）")
     enabled: bool = Field(True, description="是否启用")
 
 
