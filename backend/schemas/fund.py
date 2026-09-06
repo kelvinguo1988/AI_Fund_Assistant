@@ -30,6 +30,9 @@ class FundOut(BaseModel):
     name: str
     fund_type: str
     tags: Optional[str]
+    fund_type_official: Optional[str] = None
+    benchmark_text: Optional[str] = None
+    exposure_tags: Optional[str] = None
     starred: bool = False
     status: str
     created_at: datetime

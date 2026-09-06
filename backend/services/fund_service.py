@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.data_sources.base import guess_fund_type as _guess_fund_type
 from backend.models.fund import Fund
 from backend.schemas.fund import FundCreate, FundUpdate
-from backend.services.fund_theme_service import fetch_related_themes
 from backend.utils.concurrency import run_with_timeout
 
 logger = logging.getLogger(__name__)
@@ -107,14 +106,23 @@ class FundService:
         await self.db.commit()
         await self.db.refresh(fund)
 
-        # 仅当未手动填写标签时，自动抓取天天基金相关主题
+        # 仅当未手动填写标签时，自动生成双层标签（官方类型+基准定位 / 持仓暴露）
         if not fund.tags:
-            themes = await run_with_timeout(fetch_related_themes, fund.code, timeout=20.0)
-            merged = _merge_tags(fund.tags, themes)
-            if merged != fund.tags:
-                fund.tags = merged
+            try:
+                from backend.services.fund_tag_service import build_double_tags
+                tags_result = await run_with_timeout(
+                    build_double_tags,
+                    fund.code, fund.name or "", fund.fund_type, None,
+                    timeout=25.0,
+                )
+                fund.tags = tags_result["tags"]
+                fund.fund_type_official = tags_result["fund_type_official"]
+                fund.benchmark_text = tags_result["benchmark_text"]
+                fund.exposure_tags = tags_result["exposure_tags"]
                 await self.db.commit()
                 await self.db.refresh(fund)
+            except Exception as e:
+                logger.warning("新建基金自动标签失败 %s: %s", fund.code, e)
 
         return fund
 
@@ -248,12 +256,26 @@ class FundService:
         if fund is None:
             return None
 
-        themes = await run_with_timeout(fetch_related_themes, fund.code, timeout=20.0)
-        merged = _merge_tags(fund.tags, themes)
-        if merged != fund.tags:
-            fund.tags = merged
-            await self.db.commit()
-            await self.db.refresh(fund)
+        # 2026-08-30 重构：双层标签（主=官方类型+基准定位，副=持仓赛道暴露）
+        # 原抓"相关主题基金"区当分类用，实测严重失真（固收+ 被标 CPO）
+        from backend.services.fund_holding_service import get_latest_holdings
+        from backend.services.fund_tag_service import build_double_tags
+
+        holdings = await get_latest_holdings(self.db, fund.id, limit=50)
+        holds_payload = [
+            {"stock_name": h.stock_name, "ratio": h.ratio} for h in holdings
+        ]
+        result = await run_with_timeout(
+            build_double_tags,
+            fund.code, fund.name or "", fund.fund_type, holds_payload,
+            timeout=25.0,
+        )
+        fund.tags = result["tags"]
+        fund.fund_type_official = result["fund_type_official"]
+        fund.benchmark_text = result["benchmark_text"]
+        fund.exposure_tags = result["exposure_tags"]
+        await self.db.commit()
+        await self.db.refresh(fund)
         return fund
 
     async def batch_update_status(self, ids: list[int], action: str) -> None:
@@ -283,6 +305,9 @@ async def enrich_fund_themes(codes: list[str]) -> None:
     from backend.database import async_session_factory
 
     async with async_session_factory() as session:
+        from backend.services.fund_holding_service import get_latest_holdings
+        from backend.services.fund_tag_service import build_double_tags
+
         for code in codes:
             try:
                 result = await session.execute(select(Fund).where(Fund.code == code))
@@ -290,15 +315,23 @@ async def enrich_fund_themes(codes: list[str]) -> None:
                 # 仅当确实无标签时补全，用户手动填写的不覆盖
                 if fund is None or fund.tags:
                     continue
-                themes = await run_with_timeout(fetch_related_themes, code, timeout=20.0)
-                if themes:
-                    merged = _merge_tags(None, themes)
-                    if merged and merged != fund.tags:
-                        fund.tags = merged
-                        await session.flush()
-                        logger.info("基金 %s 主题补全: %s", code, merged)
+                holdings = await get_latest_holdings(session, fund.id, limit=50)
+                holds_payload = [
+                    {"stock_name": h.stock_name, "ratio": h.ratio} for h in holdings
+                ]
+                tags_result = await run_with_timeout(
+                    build_double_tags,
+                    code, fund.name or "", fund.fund_type, holds_payload,
+                    timeout=25.0,
+                )
+                fund.tags = tags_result["tags"]
+                fund.fund_type_official = tags_result["fund_type_official"]
+                fund.benchmark_text = tags_result["benchmark_text"]
+                fund.exposure_tags = tags_result["exposure_tags"]
+                await session.flush()
+                logger.info("基金 %s 标签补全: %s", code, fund.tags)
             except Exception as e:
-                logger.warning("后台主题补全失败 %s: %s", code, e)
+                logger.warning("后台标签补全失败 %s: %s", code, e)
         try:
             await session.commit()
         except Exception as e:

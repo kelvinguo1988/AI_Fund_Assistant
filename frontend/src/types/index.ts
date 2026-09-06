@@ -40,6 +40,9 @@ export interface FundOut {
   name: string;
   fund_type: string;
   tags: string | null;
+  fund_type_official?: string | null;
+  benchmark_text?: string | null;
+  exposure_tags?: string | null;
   starred: boolean;
   status: string;
   created_at: string;

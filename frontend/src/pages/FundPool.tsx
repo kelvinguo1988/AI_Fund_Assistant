@@ -6,6 +6,7 @@ import React, { useEffect, useState, useRef, useMemo, Fragment } from 'react';
 import {
   Box,
   Typography,
+  Tooltip,
   Button,
   Table,
   TableBody,
@@ -162,6 +163,14 @@ const groupByClassification = (funds: FundOut[], pinStarred: boolean) => {
   return { starred, groups };
 };
 
+/** 风格漂移检测：官方定位偏固收/红利/宽基，但当前重仓押注成长赛道 */
+const DEFENSIVE = /固收|偏债|稳健|红利|宽基|货币|债券/;
+const AGGRESSIVE = /光模块|CPO|算力|半导体|芯片|数字经济|机器人|AI服务器|新能源/;
+const isStyleDrift = (f: FundOut): boolean => {
+  if (!f.exposure_tags || !f.tags) return false;
+  return DEFENSIVE.test(f.tags) && AGGRESSIVE.test(f.exposure_tags);
+};
+
 /** 分类分组表头样式 */
 const groupHeaderSx = {
   backgroundColor: '#f0f4ff',
@@ -273,6 +282,22 @@ const FundPool: React.FC = () => {
           <Chip key={tag} label={tag} size="small"
             sx={{ backgroundColor: getThemeColor(tag), color: '#fff', mr: 0.5, mb: 0.3 }} />
         ))}
+        {/* 副标签：当前持仓赛道暴露（随季报变动）+ 风格漂移提示 */}
+        {(fund.exposure_tags || '').split(',').filter(Boolean).slice(0, 2).map((tag) => (
+          <Chip key={`ex-${tag}`} label={tag} size="small" variant="outlined"
+            sx={{ mr: 0.5, mb: 0.3, fontSize: '0.7rem' }} />
+        ))}
+        {isStyleDrift(fund) && (
+          <Tooltip title={`主标签与持仓暴露不一致——官方定位「${fund.fund_type_official ?? fund.tags}」但当前重仓押注其他赛道，注意风格漂移风险`}>
+            <Chip label="漂移" size="small" color="warning"
+              sx={{ mr: 0.5, mb: 0.3, fontSize: '0.7rem' }} />
+          </Tooltip>
+        )}
+        {fund.benchmark_text && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
+            基准: {fund.benchmark_text.length > 28 ? fund.benchmark_text.slice(0, 28) + '…' : fund.benchmark_text}
+          </Typography>
+        )}
       </TableCell>
       <TableCell>
         <Chip label={fund.status === 'active' ? '启用' : '停用'} size="small"
