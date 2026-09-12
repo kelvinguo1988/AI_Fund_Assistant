@@ -82,6 +82,32 @@ _NAME_RULES: list[tuple[str, str]] = [
     (r"纳指|标普|美元|中概|恒生|港股|全球|海外|亚洲", "QDII跨境"),
 ]
 
+# 行业板块词表（THS 90 行业，2026-08 快照）——基准/名称中出现即提取为板块标签
+INDUSTRY_WORDS: list[str] = [
+    "半导体", "白酒", "白色家电", "保险", "包装印刷", "厨卫电器", "电池", "电机",
+    "电力", "电网设备", "多元金融", "电子化学品", "房地产", "风电设备", "非金属材料",
+    "服装家纺", "纺织制造", "工程机械", "光伏设备", "贵金属", "轨交设备", "港口航运",
+    "公路铁路运输", "钢铁", "光学光电子", "工业金属", "环保设备", "环境治理",
+    "互联网电商", "黑色家电", "化学纤维", "化学原料", "化学制品", "化学制药",
+    "IT服务", "机场航运", "军工电子", "军工装备", "家居用品", "计算机设备",
+    "金属新材料", "建筑材料", "建筑装饰", "零售", "旅游及酒店", "美容护理",
+    "煤炭开采加工", "农化制品", "能源金属", "汽车零部件", "汽车整车", "其他电源设备",
+    "软件开发", "燃气", "塑料制品", "食品加工制造", "生物制品", "石油加工贸易",
+    "通信服务", "通信设备", "通用设备", "文化传媒", "物流", "消费电子", "小家电",
+    "小金属", "橡胶制品", "元件", "医疗服务", "医疗器械", "饮料制造",
+    "油气开采及服务", "游戏", "银行", "医药商业", "养殖业", "自动化设备",
+    "证券", "中药", "专用设备", "造纸", "种植业与林业",
+]
+
+def extract_industry_words(text: str) -> list[str]:
+    """从基准/名称中提取行业板块词（词表匹配，长词优先）"""
+    if not text:
+        return []
+    # 剔除存款利率上下文："银行活期存款利率" 字面含"银行"，非行业信息
+    text = re.sub(r"银行?(?:活期|定期)?存款利率", "", text)
+    found = [w for w in INDUSTRY_WORDS if w in text]
+    return found
+
 # ── 副标签：持仓赛道关键词映射（股票名称 → 产业链）──────────────────
 _EXPOSURE_RULES: list[tuple[str, str]] = [
     (r"旭创|新易盛|源杰|天孚|光迅|仕佳|德科立|太辰光|剑桥", "光模块/CPO"),
@@ -136,6 +162,18 @@ def parse_primary_tags(
             position_tag = "固收+/偏债"
             if position_tag not in tags:
                 tags.append(position_tag)
+
+    # 2a2. 行业板块提取：基准/名称中出现的行业词（如 电网设备/白酒/半导体）
+    #     —— 指数基金的基准指数名直接给出板块（用户期望的"具体板块标签"）
+    sector_hits = extract_industry_words(benchmark or "")
+    for w in extract_industry_words(fund_name or ""):
+        if w not in sector_hits:
+            sector_hits.append(w)
+    for w in sector_hits:
+        if w not in tags:
+            tags.append(w)
+    if sector_hits and position_tag is None:
+        position_tag = sector_hits[0]
 
     # 2b. 业绩基准 → 主题/风格定位（position_tag 未定时才判）
     if benchmark and position_tag is None:
