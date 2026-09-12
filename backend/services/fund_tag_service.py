@@ -288,6 +288,26 @@ def fetch_f10_profile(code: str) -> Optional[dict]:
     return {"official_type": official_type, "benchmark": benchmark}
 
 
+# 雪球类型 → F10 口径归一化（语义等价的命名差异）
+_XQ_TYPE_NORMALIZE = {
+    "混合型-灵活配置": "混合型-灵活",
+    "股票型-标准指数": "指数型-股票",
+    "股票型-普通": "股票型",
+    "股票型-增强指数": "指数型-股票",
+    "债券型-普通债": "债券型",
+    "混合型-平衡": "混合型-平衡",
+}
+
+
+def _types_equivalent(a: str, b: str) -> bool:
+    """两源基金类型语义等价判断（归一化后比较）"""
+    if a == b:
+        return True
+    na = _XQ_TYPE_NORMALIZE.get(a, a)
+    nb = _XQ_TYPE_NORMALIZE.get(b, b)
+    return na == nb
+
+
 def fetch_xq_basic(code: str) -> Optional[dict]:
     """雪球基金基本信息（第二数据源交叉）→ {fund_type, scale, manager}
 
@@ -354,15 +374,23 @@ def build_double_tags(
     if is_mutual and "互认基金" not in tags:
         tags.insert(0, "互认基金")
 
-    # 双源类型交叉验证：F10 与雪球不一致 → 记入错误日志（data 类）
+    # 双源类型交叉验证：归一化后仍不一致才告警
+    # 2026-09-12 修复：F10 与雪球对同一类型命名口径不同（如 混合型-灵活 vs
+    # 混合型-灵活配置、指数型-股票 vs 股票型-标准指数），原字面比较
+    # 把口径差异全当错误，4/4 误报污染日志
     if f10 and official_type:
         try:
             xq = fetch_xq_basic(code)
-            if xq and xq.get("fund_type") and xq["fund_type"] != official_type:
+            if xq and xq.get("fund_type") and not _types_equivalent(
+                official_type, xq["fund_type"]
+            ):
                 from backend.services.error_log_service import log_source_failure
                 log_source_failure(
                     module="tags.type_cross",
-                    message=f"基金类型不一致 code={code}: F10={official_type} 雪球={xq['fund_type']}",
+                    message=(
+                        f"基金类型语义冲突 code={code}: "
+                        f"F10={official_type} 雪球={xq['fund_type']}"
+                    ),
                     category="data", severity="warning",
                 )
         except Exception:
