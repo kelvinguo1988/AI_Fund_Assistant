@@ -378,6 +378,43 @@ class FundRealtimeService:
         if otc_missing:
             await self._fill_from_holdings(otc_missing, results)
 
+        # ── 模块 A'/C'：场外交易提示 + 高低估区间（2026-08-31）──
+        # 全部 OTC 基金（含 fundgz 命中的）都附加申购/赎回可执行性与估值区间提示
+        try:
+            from backend.services.index_valuation_service import (
+                IndexValuationService, OtcTradeStatusService,
+            )
+            status_map = await OtcTradeStatusService.get_status_map()
+            in_trading_hours = _in_trading_hours()
+            for f in otc_funds:
+                r = results.get(f.code)
+                if r is None:
+                    continue
+                hints = r.setdefault("hints", [])
+                # A': 申购/赎回可执行性 + 手续费
+                hints.extend(OtcTradeStatusService.trade_hints(f.code, status_map.get(f.code)))
+                # C': 跟踪指数高低估区间（名称/基准匹配支持的指数）
+                v_hint = IndexValuationService.match_fund_hint(
+                    f.name or "", _fund_benchmark_text(f.code)
+                )
+                if v_hint:
+                    hints.append(v_hint)
+                # A' 进阶：盘中估值显著偏离时的 15 点择时提示（未知价原则）
+                gp = r.get("growth_pct")
+                if in_trading_hours and gp is not None and abs(gp) >= 1.0:
+                    if gp <= -1.0:
+                        hints.append({
+                            "type": "timing", "level": "info",
+                            "message": f"盘中估算 {gp:+.2f}%——15:00 前申购按今日较低净值成交",
+                        })
+                    else:
+                        hints.append({
+                            "type": "timing", "level": "info",
+                            "message": f"盘中估算 {gp:+.2f}%——15:00 前赎回按今日较高净值成交",
+                        })
+        except Exception as e:
+            logger.warning(f"场外提示生成失败（不影响估值结果）: {e}")
+
         # ── ETF 场内（透明分支，真实价格非估算）──
         etf_funds = [f for f in pending if guess_fund_type(f.code) == "etf"]
         if etf_funds:
@@ -1072,3 +1109,29 @@ def _to_float(v) -> Optional[float]:
         return f if f == f else None  # NaN 检查
     except (ValueError, TypeError):
         return None
+
+
+def _in_trading_hours() -> bool:
+    """A 股盘中（周一~周五 09:30-11:30 / 13:00-15:00，按北京时间）"""
+    from datetime import datetime, timezone, timedelta
+    bj = datetime.now(timezone(timedelta(hours=8)))
+    if bj.weekday() >= 5:
+        return False
+    mins = bj.hour * 60 + bj.minute
+    return (570 <= mins < 690) or (780 <= mins < 900)
+
+
+def _fund_benchmark_text(code: str) -> str:
+    """查库取基金基准文本（指数匹配用；无记录返回空）"""
+    try:
+        import sqlite3
+        conn = sqlite3.connect("data/fund_quant.db", timeout=5)
+        try:
+            row = conn.execute(
+                "SELECT benchmark_text FROM funds WHERE code = ?", (code,)
+            ).fetchone()
+            return (row[0] or "") if row else ""
+        finally:
+            conn.close()
+    except Exception:
+        return ""

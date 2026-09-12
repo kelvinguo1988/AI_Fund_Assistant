@@ -572,3 +572,13 @@ export interface QualityConfigOut {
 export interface QualityConfigUpdate {
   parameters: Array<{ key: string; value: number }>;
 }
+
+/* ── 指数估值 ── */
+export interface IndexValuation {
+  index: string;
+  pe: number;
+  percentile_1y: number;
+  zone: '低估' | '合理' | '高估' | string;
+  advice: string;
+  updated: string;
+}

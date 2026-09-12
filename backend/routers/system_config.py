@@ -355,3 +355,11 @@ async def report_error(body: dict):
         detail=str(body.get("detail", ""))[:2000],
     )
     return ApiResponse(data={"accepted": True})
+
+
+@router.get("/index-valuations")
+async def index_valuations(force: bool = False):
+    """主要指数 PE 高低估区间（近一年分位口径；沪深300/中证500/上证50/中证1000）"""
+    from backend.services.index_valuation_service import IndexValuationService
+    rows = await IndexValuationService.get_valuations(force=force)
+    return ApiResponse(data=rows)

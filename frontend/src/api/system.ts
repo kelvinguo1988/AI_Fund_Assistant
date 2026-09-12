@@ -29,6 +29,9 @@ export const systemApi = {
   updateScoringConfig: (data: ScoringConfigUpdate) =>
     apiClient.put<ApiResponse<ScoringConfigOut>>(`${BASE}/scoring-config`, data).then((r) => r.data),
 
+  getIndexValuations: () =>
+    apiClient.get<ApiResponse<unknown>>('/api/system/index-valuations').then((r) => r.data),
+
   testConnectivity: () =>
     apiClient.get<ApiResponse<ConnectivityResult>>(`${BASE}/connectivity`).then((r) => r.data),
 

@@ -41,6 +41,8 @@ import FactorRadarChart from '../components/FactorRadarChart';
 import { analysisApi } from '../api/analysis';
 import { fundApi } from '../api/fund';
 import type { FundRealtimeOut } from '../api/fund';
+import { systemApi } from '../api/system';
+import type { IndexValuation } from '../types';
 import type { AnalysisResultOut, FundOut, MarketSummaryOut, MarketRegimeOut, SectorFlowItem } from '../types';
 
 const STRENGTH_COLOR_MAP: Record<string, 'error' | 'success' | 'default'> = {
@@ -92,6 +94,8 @@ const Dashboard: React.FC = () => {
   // 触发时机：页面加载/刷新时一次（force 取新）+ 定时推送任务预热缓存。
   // 不做前端轮询（2026-08-29 设计变更）；后端快照 60s 缓存防刷新风暴。
   const [realtimeMap, setRealtimeMap] = useState<Record<string, FundRealtimeOut>>({});
+  // ── 指数高低估（模块 C'）──
+  const [indexValuations, setIndexValuations] = useState<IndexValuation[]>([]);
 
   const loadRealtime = useCallback(async (force = false) => {
     try {
@@ -106,6 +110,9 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     loadRealtime(true);
+    systemApi.getIndexValuations()
+      .then((r) => setIndexValuations((r.data as IndexValuation[]) || []))
+      .catch(() => { /* 估值卡片失败静默 */ });
   }, [loadRealtime]);
 
   /** 格式化更新时间为北京时间显示
@@ -380,6 +387,46 @@ const Dashboard: React.FC = () => {
           </Card>
         </Grid>
       </Grid>
+
+      {/* ── 指数高低估（近一年 PE 分位）── */}
+      {indexValuations.length > 0 && (
+        <Card variant="outlined" sx={{ mb: 3 }}>
+          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Typography variant="subtitle2" sx={{ minWidth: 90 }}>
+                指数高低估
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  近一年 PE 分位
+                </Typography>
+              </Typography>
+              {indexValuations.map((v) => {
+                const zoneColor =
+                  v.zone === '低估' ? '#4caf50' : v.zone === '高估' ? '#f44336' : '#ff9800';
+                return (
+                  <Box key={v.index} sx={{ minWidth: 130 }}>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{v.index}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      PE {v.pe}
+                    </Typography>
+                    <br />
+                    <Chip
+                      size="small"
+                      label={`${v.zone} ${v.percentile_1y}%`}
+                      sx={{
+                        mt: 0.5, height: 20, fontSize: '0.7rem',
+                        backgroundColor: zoneColor, color: '#fff',
+                      }}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      {v.advice}
+                    </Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── 涨跌分布 + 两市成交额 ── */}
       <Grid container spacing={2} sx={{ mb: 3 }}>
