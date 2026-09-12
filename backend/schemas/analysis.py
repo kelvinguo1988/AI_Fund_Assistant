@@ -102,3 +102,32 @@ class ReviewReport(BaseModel):
     # 信号复盘：区间首日前最近信号与区间实际涨跌的同向率
     signal_stats: dict = {}
     summary_md: str = ""                            # Markdown 复盘报告（可直接喂 AI 解读）
+
+
+# ── 基金 PK（多基金业绩/风险/归因对比，2026-08-31）─────────────────────
+
+class FundCompareMetrics(BaseModel):
+    """单窗口业绩风险指标"""
+    window_label: str                       # 近2年 / 成立以来
+    days: int                               # 实际样本天数
+    annual_return_pct: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    sharpe: Optional[float] = None
+    beta: Optional[float] = None            # 对基准（默认沪深300）
+    alpha_annual_pct: Optional[float] = None
+    info_ratio: Optional[float] = None
+
+
+class FundCompareItem(BaseModel):
+    fund_code: str
+    fund_name: str
+    scale_growth: Optional[float] = None    # 份额/规模变化倍数（首末季报比）
+    institution_pct: Optional[float] = None # 最新机构持有占比 %
+    windows: list[FundCompareMetrics] = []
+    error: Optional[str] = None
+
+
+class CompareReport(BaseModel):
+    baseline: str = "沪深300"
+    items: list[FundCompareItem] = []
+    summary_md: str = ""

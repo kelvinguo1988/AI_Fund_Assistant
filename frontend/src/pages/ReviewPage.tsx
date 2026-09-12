@@ -2,7 +2,7 @@
  * 投资复盘页面 — 组合区间收益 vs 沪深300 + 信号命中率
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box,
   Typography,
@@ -28,6 +28,13 @@ import {
   AutoAwesome as AiIcon,
 } from '@mui/icons-material';
 import { reviewApi, type ReviewReport } from '../api/review';
+import { compareApi, type CompareReport, type FundCompareItem } from '../api/compare';
+import { fundApi } from '../api/fund';
+import {
+  Tab as MuiTab,
+  Tabs as MuiTabs,
+} from '@mui/material';
+import { reviewApi as _unusedGuard } from '../api/review';
 import { aiApi } from '../api/ai';
 
 // 本地日期（UTC ISO 串在北京时间 0-8 点会显示昨天）
@@ -51,6 +58,58 @@ const ReviewPage: React.FC = () => {
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false, message: '', severity: 'success',
   });
+
+  // ── 基金 PK 状态 ──
+  const [pageTab, setPageTab] = useState(0);
+  const [allFunds, setAllFunds] = useState<{ id: number; code: string; name: string }[]>([]);
+  const [pkSelected, setPkSelected] = useState<number[]>([]);
+  const [pkYears, setPkYears] = useState(2);
+  const [pkLoading, setPkLoading] = useState(false);
+  const [pkReport, setPkReport] = useState<CompareReport | null>(null);
+
+  useEffect(() => {
+    fundApi.list('active')
+      .then((r) => setAllFunds((r.data || []).map((f) => ({ id: f.id, code: f.code, name: f.name }))))
+      .catch(() => { /* 静默 */ });
+  }, []);
+
+  const togglePk = (id: number) => {
+    setPkSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 10 ? prev : [...prev, id],
+    );
+  };
+
+  const runPk = async () => {
+    if (pkSelected.length < 2) {
+      setSnackbar({ open: true, message: '请至少选择 2 只基金', severity: 'error' });
+      return;
+    }
+    setPkLoading(true);
+    try {
+      const res = await compareApi.run(pkSelected, pkYears);
+      setPkReport(res.data);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || err?.message || 'PK 失败');
+    } finally {
+      setPkLoading(false);
+    }
+  };
+
+  const askAiPk = async () => {
+    if (!pkReport) return;
+    setAiReading(true);
+    try {
+      await aiApi.chat({
+        content: `请解读以下基金 PK 对比报告（Beta/Alpha/IR/规模/机构视角，指出谁有真实选股能力与规模风险）：\n\n${pkReport.summary_md}`,
+        context_type: 'pool',
+      });
+      setSnackbar({ open: true, message: 'AI 解读已生成，请到 AI 对话窗口查看', severity: 'success' });
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err?.message || 'AI 解读失败', severity: 'error' });
+    } finally {
+      setAiReading(false);
+    }
+  };
 
   const runReview = async () => {
     setLoading(true);
@@ -87,7 +146,13 @@ const ReviewPage: React.FC = () => {
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h5" gutterBottom>投资复盘</Typography>
+      <MuiTabs value={pageTab} onChange={(_, v) => setPageTab(v)} sx={{ mb: 2 }}>
+        <MuiTab label="组合复盘" />
+        <MuiTab label={`基金 PK${pkSelected.length ? `（已选 ${pkSelected.length}）` : ''}`} />
+      </MuiTabs>
 
+{pageTab === 0 && (
+      <>
       {/* ── 运行条件 ── */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
@@ -224,6 +289,124 @@ const ReviewPage: React.FC = () => {
             </CardContent>
           </Card>
         </>
+      )}
+
+      </>
+      )}
+
+      {pageTab === 1 && (
+      <>
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            选 2~10 只基金对比：双窗口（近 N 年 / 成立以来）年化收益、最大回撤、夏普，
+            基准归因 Beta/Alpha/信息比率（默认沪深300），规模变化倍数与机构占比（季报）。
+            无风险利率 2%，仅供参考。
+          </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 2 }}>
+            {allFunds.map((f) => (
+              <Chip
+                key={f.id}
+                label={`${f.name}(${f.code})`}
+                size="small"
+                clickable
+                color={pkSelected.includes(f.id) ? 'primary' : 'default'}
+                onClick={() => togglePk(f.id)}
+                sx={{ mb: 0.5 }}
+              />
+            ))}
+          </Box>
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+            <TextField
+              label="近期窗口（年）" type="number" size="small" sx={{ width: 140 }}
+              value={pkYears}
+              onChange={(e) => setPkYears(Math.max(1, Math.min(5, Number(e.target.value) || 2)))}
+              inputProps={{ min: 1, max: 5 }}
+            />
+            <Button variant="contained" onClick={runPk} disabled={pkLoading || pkSelected.length < 2}>
+              {pkLoading ? '对比计算中…' : `开始 PK（${pkSelected.length} 只）`}
+            </Button>
+            {pkReport && (
+              <Button startIcon={aiReading ? <CircularProgress size={16} /> : <AiIcon />} onClick={askAiPk} disabled={aiReading}>
+                AI 解读
+              </Button>
+            )}
+          </Box>
+        </CardContent>
+      </Card>
+
+      {pkReport && (
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>基金</TableCell>
+                <TableCell>窗口</TableCell>
+                <TableCell align="right">年化收益</TableCell>
+                <TableCell align="right">最大回撤</TableCell>
+                <TableCell align="right">夏普</TableCell>
+                <TableCell align="right">Beta</TableCell>
+                <TableCell align="right">Alpha(年化)</TableCell>
+                <TableCell align="right">信息比率</TableCell>
+                <TableCell align="right">规模变化</TableCell>
+                <TableCell align="right">机构占比</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {pkReport.items.map((it: FundCompareItem) =>
+                it.error ? (
+                  <TableRow key={it.fund_code}>
+                    <TableCell>{it.fund_name}({it.fund_code})</TableCell>
+                    <TableCell colSpan={9}>
+                      <Typography variant="caption" color="error">失败: {it.error}</Typography>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  it.windows.map((w, wi) => (
+                    <TableRow key={`${it.fund_code}-${w.window_label}`} hover>
+                      <TableCell>
+                        {wi === 0 ? it.fund_name : ''}
+                        {wi === 0 && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            {it.fund_code}
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>{w.window_label}</TableCell>
+                      <TableCell align="right" sx={{ color: growthColor(w.annual_return_pct), fontWeight: wi === 0 ? 500 : 400 }}>
+                        {pct(w.annual_return_pct)}
+                      </TableCell>
+                      <TableCell align="right" sx={{ color: growthColor(w.max_drawdown_pct) }}>
+                        {pct(w.max_drawdown_pct)}
+                      </TableCell>
+                      <TableCell align="right">{w.sharpe ?? '—'}</TableCell>
+                      <TableCell align="right">{w.beta ?? '—'}</TableCell>
+                      <TableCell align="right" sx={{ color: growthColor(w.alpha_annual_pct) }}>
+                        {pct(w.alpha_annual_pct)}
+                      </TableCell>
+                      <TableCell align="right">{w.info_ratio ?? '—'}</TableCell>
+                      <TableCell align="right">{it.scale_growth != null ? `${it.scale_growth}×` : '—'}</TableCell>
+                      <TableCell align="right">{it.institution_pct != null ? `${it.institution_pct.toFixed(1)}%` : '—'}</TableCell>
+                    </TableRow>
+                  ))
+                )
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {pkReport && (
+        <Card sx={{ mt: 3 }}>
+          <CardContent>
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>PK 报告原文</Typography>
+            <Box component="pre" sx={{ whiteSpace: 'pre-wrap', fontSize: 13, m: 0, fontFamily: 'inherit' }}>
+              {pkReport.summary_md}
+            </Box>
+          </CardContent>
+        </Card>
+      )}
+      </>
       )}
 
       <Snackbar

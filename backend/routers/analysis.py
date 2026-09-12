@@ -19,6 +19,7 @@ from backend.schemas.analysis import (
     FactorScore, AnalysisResultOut,
     AnalysisExportPayload, AnalysisImportResult,
     ReviewReport,
+    CompareReport,
 )
 from backend.schemas.market import MarketSummaryOut, SignalSummary, MarketCapitalFlow, SectorFlowRanking, HSGTFlow, MarketAdvDecline, MarketTurnover, MarketRegimeOut
 
@@ -395,6 +396,26 @@ async def review_portfolio(
     svc = ReviewService(db)
     try:
         report = await svc.review(start_date, end_date, fund_ids=ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ApiResponse(data=report)
+
+
+@router.get("/compare", response_model=ApiResponse[CompareReport])
+async def compare_funds(
+    fund_ids: str = Query(..., description="逗号分隔基金 ID（2~10 只）"),
+    years: int = Query(2, ge=1, le=5, description="近期窗口年数（另一窗口为成立以来）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """基金 PK — 多基金业绩/风险/基准归因（Beta/Alpha/IR）+ 规模/机构对比"""
+    from backend.services.fund_compare_service import FundCompareService
+
+    ids = [int(x) for x in fund_ids.split(",") if x.strip().isdigit()]
+    if not (2 <= len(ids) <= 10):
+        raise HTTPException(status_code=400, detail="请选择 2~10 只基金")
+    svc = FundCompareService(db)
+    try:
+        report = await svc.compare(ids, years=years)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return ApiResponse(data=report)
