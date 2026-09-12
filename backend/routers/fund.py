@@ -411,3 +411,27 @@ async def get_funds_realtime(
     svc = FundRealtimeService(db)
     data = await svc.get_realtime(funds, force=force)
     return ApiResponse(data=data)
+
+
+@router.get("/etf-scan", response_model=ApiResponse[dict])
+async def etf_scan(db: AsyncSession = Depends(get_db)):
+    """潜力场内基金扫描 — 全市场 ETF 量价/资金三榜单（模块 B）
+
+    榜单为量价特征排名，仅供参考不构成投资建议。
+    """
+    from backend.services.etf_signal_service import scan_potential
+    from backend.services.fund_realtime_service import FundRealtimeService
+
+    # 基金池代码集合（交叉标注 已持有）
+    pool = (await db.execute(select(Fund).where(Fund.status == "active"))).scalars().all()
+    pool_codes = {f.code for f in pool}
+
+    svc = FundRealtimeService(db)
+    spot_map = await svc._get_etf_spot()  # 全市场快照（60s 缓存/熔断链路复用）
+    if not spot_map:
+        return ApiResponse(data={"scanned": 0, "movers": [], "inflow": [],
+                                 "unusual": [], "pool_codes": list(pool_codes)})
+
+    result = scan_potential(spot_map, pool_codes)
+    result["pool_codes"] = list(pool_codes)
+    return ApiResponse(data=result)

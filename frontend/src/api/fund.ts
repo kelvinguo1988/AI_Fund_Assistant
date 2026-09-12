@@ -93,6 +93,12 @@ export const fundApi = {
         params: force ? { force: true } : undefined,
       })
       .then((r) => r.data),
+
+  /** 潜力 ETF 扫描（全市场量价/资金三榜单） */
+  etfScan: () =>
+    apiClient
+      .get<ApiResponse<ETFScanResult>>('/api/funds/etf-scan', { timeout: 120000 })
+      .then((r) => r.data),
 };
 
 export interface FundRealtimeOut {
@@ -106,4 +112,27 @@ export interface FundRealtimeOut {
   quote_time: string | null;
   coverage: number | null;
   est_model: 'official' | 'normalized' | 'index_blend' | 'market_price' | null;
+  hints?: { type: string; level: string; message: string }[];
+}
+
+
+/* ── ETF 扫描 ── */
+export interface ETFScanItem {
+  code: string;
+  name: string;
+  price?: number | null;
+  pct?: number | null;
+  turnover_rate?: number | null;
+  volume_ratio?: number | null;
+  main_inflow_pct?: number | null;
+  amount?: number | null;
+  in_pool: boolean;
+}
+
+export interface ETFScanResult {
+  scanned: number;
+  movers: ETFScanItem[];
+  inflow: ETFScanItem[];
+  unusual: ETFScanItem[];
+  pool_codes: string[];
 }

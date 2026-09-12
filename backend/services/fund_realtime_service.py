@@ -383,6 +383,8 @@ class FundRealtimeService:
         if etf_funds:
             spot = await self._get_etf_spot(codes=[f.code for f in etf_funds])
             if spot is not None:
+                # 模块 A：场内交易提示（溢价/流动性/量价资金，字段缺失自动跳过）
+                from backend.services.etf_signal_service import evaluate_etf_hints
                 for f in etf_funds:
                     row = spot.get(f.code)
                     if row:
@@ -397,6 +399,7 @@ class FundRealtimeService:
                             "quote_time": row.get("time", ""),
                             "coverage": 1.0,
                             "est_model": "market_price",
+                            "hints": evaluate_etf_hints(row),
                         }
                         self._cache_estimate(f.code, results[f.code])
 
@@ -439,6 +442,9 @@ class FundRealtimeService:
                                 "name": q.get("name", ""), "price": q.get("price"),
                                 "pct": q.get("pct"), "time": q.get("time", ""),
                                 "date": "",
+                                "iopv": None, "premium_discount": None,
+                                "turnover_rate": None, "volume_ratio": None,
+                                "main_inflow_pct": None, "amount": None,
                             }
                         FundRealtimeService._spot_ts = now
                         logger.info(f"ETF 行情(腾讯补缺): +{len(quotes)} 只")
@@ -483,6 +489,13 @@ class FundRealtimeService:
                         "pct": _to_float(row.get("涨跌幅")),
                         "time": str(row.get("更新时间", "")),
                         "date": str(row.get("数据日期", "")),
+                        # 场内特有字段（2026-08-31 模块 A/B：折溢价/流动性/资金面）
+                        "iopv": _to_float(row.get("IOPV实时估值")),
+                        "premium_discount": _to_float(row.get("基金折价率")),
+                        "turnover_rate": _to_float(row.get("换手率")),
+                        "volume_ratio": _to_float(row.get("量比")),
+                        "main_inflow_pct": _to_float(row.get("主力净流入-净占比")),
+                        "amount": _to_float(row.get("成交额")),
                     }
                 self._mark_source_ok(EM_SOURCE)
                 FundRealtimeService._etf_spot_cache = spot
