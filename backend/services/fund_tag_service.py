@@ -288,6 +288,26 @@ def fetch_f10_profile(code: str) -> Optional[dict]:
     return {"official_type": official_type, "benchmark": benchmark}
 
 
+def fetch_xq_basic(code: str) -> Optional[dict]:
+    """雪球基金基本信息（第二数据源交叉）→ {fund_type, scale, manager}
+
+    2026-08-31 验证可用（WorkBuddy 同法）；失败返回 None 不影响主流程。
+    """
+    try:
+        import akshare as ak
+        b = ak.fund_individual_basic_info_xq(symbol=code)
+        d = b.set_index("item")["value"].to_dict()
+        return {
+            "fund_type": d.get("基金类型"),
+            "scale": d.get("最新规模"),
+            "manager": d.get("基金经理"),
+            "benchmark": d.get("业绩比较基准"),
+        }
+    except Exception as e:
+        logger.info("雪球基本信息获取失败 code=%s: %s", code, e)
+        return None
+
+
 def build_double_tags(
     code: str, name: str, fund_type: str,
     holdings: Optional[list[dict]] = None,
@@ -303,8 +323,13 @@ def build_double_tags(
         try:
             f10 = fetch_f10_profile(code)
         except F10FetchError as e:
-            logger.warning(f"{e}；保留既有标签，仅用名称解析")
+            # F10 网络失败 → 雪球基本信息兜底类型（2026-08-31 第二数据源）
+            logger.warning(f"{e}；尝试雪球基本信息兜底")
             fetch_failed = True
+            xq = fetch_xq_basic(code)
+            if xq and xq.get("fund_type"):
+                f10 = {"official_type": xq["fund_type"], "benchmark": xq.get("benchmark")}
+                logger.info(f"雪球类型兜底 code={code}: {xq['fund_type']}")
     is_mutual = False
     official_type = benchmark = None
 
@@ -328,6 +353,20 @@ def build_double_tags(
     )
     if is_mutual and "互认基金" not in tags:
         tags.insert(0, "互认基金")
+
+    # 双源类型交叉验证：F10 与雪球不一致 → 记入错误日志（data 类）
+    if f10 and official_type:
+        try:
+            xq = fetch_xq_basic(code)
+            if xq and xq.get("fund_type") and xq["fund_type"] != official_type:
+                from backend.services.error_log_service import log_source_failure
+                log_source_failure(
+                    module="tags.type_cross",
+                    message=f"基金类型不一致 code={code}: F10={official_type} 雪球={xq['fund_type']}",
+                    category="data", severity="warning",
+                )
+        except Exception:
+            pass
 
     exposure = parse_exposure_tags(holdings) if holdings else None
     return {

@@ -27,3 +27,6 @@ def _block_heavy_network(monkeypatch):
 
     monkeypatch.setattr(_iv.OtcTradeStatusService, "get_status_map", _empty_map)
     monkeypatch.setattr(_iv.IndexValuationService, "get_valuations", _empty_vals)
+    # 雪球基本信息交叉源（每次标签刷新逐基金请求）
+    import backend.services.fund_tag_service as _ft
+    monkeypatch.setattr(_ft, "fetch_xq_basic", lambda code: None)
