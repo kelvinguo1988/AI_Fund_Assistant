@@ -40,6 +40,7 @@ import {
   Save as SaveIcon,
 } from '@mui/icons-material';
 import { systemApi } from '../api/system';
+import { errorLogApi, CATEGORY_META, type ErrorLogItem } from '../api/errorLog';
 import { aiSkillApi, SKILL_EXAMPLE, type AISkillPayload } from '../api/aiSkill';
 import type { AISkill } from '../types';
 import type { ConnectivityResult, AIConfigOut } from '../types';
@@ -59,6 +60,28 @@ const SystemPage: React.FC = () => {
   const [aiBaseUrl, setAiBaseUrl] = useState('');
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiModelId, setAiModelId] = useState('');
+
+  // 错误日志状态
+  const [errLogs, setErrLogs] = useState<ErrorLogItem[]>([]);
+  const [errCategory, setErrCategory] = useState<string>('');
+  const [errLoading, setErrLoading] = useState(false);
+
+  const loadErrLogs = async (category = errCategory) => {
+    setErrLoading(true);
+    try {
+      const res = await errorLogApi.list(200, category || undefined);
+      setErrLogs(res.data || []);
+    } catch {
+      setErrLogs([]);
+    } finally {
+      setErrLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadErrLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // AI Skills 状态
   const [skills, setSkills] = useState<AISkill[]>([]);
@@ -249,6 +272,91 @@ const SystemPage: React.FC = () => {
           >
             {aiSaving ? '保存中...' : '保存配置'}
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* ── 错误日志 ── */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, flexWrap: 'wrap', gap: 1 }}>
+            <Typography variant="h6">错误日志</Typography>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+              <TextField
+                select size="small" label="分类" sx={{ minWidth: 120 }}
+                value={errCategory}
+                onChange={(e) => { setErrCategory(e.target.value); loadErrLogs(e.target.value); }}
+              >
+                <MenuItem value="">全部</MenuItem>
+                {Object.entries(CATEGORY_META).map(([k, v]) => (
+                  <MenuItem key={k} value={k}>{v.label}</MenuItem>
+                ))}
+              </TextField>
+              <Button size="small" onClick={() => loadErrLogs()}>刷新</Button>
+              <Button size="small" variant="contained" onClick={async () => {
+                try { await errorLogApi.download(); } catch (err: any) {
+                  setError(err?.message || '下载失败');
+                }
+              }}>
+                下载日志
+              </Button>
+              <Button size="small" color="error" onClick={async () => {
+                if (!window.confirm('清空全部错误日志？')) return;
+                try {
+                  await errorLogApi.clear();
+                  loadErrLogs();
+                } catch (err: any) {
+                  setError(err?.message || '清空失败');
+                }
+              }}>
+                清空
+              </Button>
+            </Box>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            系统功能报错自动记录（最多保留 2000 条）。<strong style={{ color: '#d32f2f' }}>限流/封禁</strong>类错误标识数据源被限制，
+            可据此排查是哪个模块触发限制；右上角铃铛会实时告警。
+          </Typography>
+          {errLoading && <LinearProgress sx={{ mb: 1 }} />}
+          <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 400 }}>
+            <Table size="small" stickyHeader>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ width: 150 }}>时间</TableCell>
+                  <TableCell sx={{ width: 90 }}>分类</TableCell>
+                  <TableCell sx={{ width: 130 }}>模块</TableCell>
+                  <TableCell>消息</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {errLogs.map((it) => {
+                  const meta = CATEGORY_META[it.category] || CATEGORY_META.other;
+                  return (
+                    <TableRow key={it.id} hover>
+                      <TableCell>{it.ts}</TableCell>
+                      <TableCell>
+                        <Chip size="small" label={meta.label} color={meta.color}
+                          sx={{ height: 20, fontSize: '0.7rem' }} />
+                      </TableCell>
+                      <TableCell>{it.module}</TableCell>
+                      <TableCell sx={{ fontSize: '0.78rem' }}>
+                        {it.message}
+                        {it.detail && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            {it.detail.length > 80 ? it.detail.slice(0, 80) + '…' : it.detail}
+                          </Typography>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {errLogs.length === 0 && !errLoading && (
+                  <TableRow>
+                    <TableCell colSpan={4} align="center">暂无错误记录 — 系统运行正常</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
         </CardContent>
       </Card>
 

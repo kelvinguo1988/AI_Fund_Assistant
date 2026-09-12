@@ -54,6 +54,7 @@ import ScoringConfig from './pages/ScoringConfig';
 import QualityConfig from './pages/QualityConfig';
 import SystemPage from './pages/System';
 import FundDetailPage from './pages/FundDetailPage';
+import ErrorBell from './components/ErrorBell';
 import SignalBacktest from './pages/SignalBacktest';
 import ReviewPage from './pages/ReviewPage';
 
@@ -163,6 +164,7 @@ const AppLayout: React.FC = () => {
               color="secondary"
               size="small"
             />
+            <ErrorBell />
           </Box>
         </Toolbar>
       </AppBar>

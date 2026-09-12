@@ -1,7 +1,10 @@
 """系统配置路由"""
 
+import asyncio
 import json
 import logging
+from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -292,3 +295,63 @@ async def update_quality_config(
 
     # 重新读取并返回
     return await get_quality_config(db)
+
+
+# ── 错误日志（2026-08-31）────────────────────────────────────────────
+
+@router.get("/error-logs", response_model=ApiResponse[list[dict]])
+async def list_error_logs(
+    limit: int = 100,
+    category: Optional[str] = None,
+    since: Optional[str] = None,
+):
+    """错误日志列表（时间倒序；since=只取该时间之后，供铃铛未读）"""
+    from backend.services.error_log_service import ErrorLogStore
+    rows = await asyncio.to_thread(
+        ErrorLogStore().query, min(limit, 1000), category, since
+    )
+    return ApiResponse(data=rows)
+
+
+@router.get("/error-logs/count")
+async def count_error_logs(since: Optional[str] = None):
+    """未读错误数（铃铛徽标轮询）"""
+    from backend.services.error_log_service import ErrorLogStore
+    count = await asyncio.to_thread(ErrorLogStore().count, since)
+    return ApiResponse(data={"count": count})
+
+
+@router.get("/error-logs/download")
+async def download_error_logs(category: Optional[str] = None):
+    """下载错误日志文本文件"""
+    from backend.services.error_log_service import ErrorLogStore
+    from fastapi.responses import Response
+    text = await asyncio.to_thread(ErrorLogStore().download_text, category)
+    filename = f"error_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    return Response(
+        content=text,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.delete("/error-logs", response_model=ApiResponse[int])
+async def clear_error_logs():
+    """清空错误日志"""
+    from backend.services.error_log_service import ErrorLogStore
+    n = await asyncio.to_thread(ErrorLogStore().clear)
+    return ApiResponse(data=n)
+
+
+@router.post("/error-logs", response_model=ApiResponse[dict])
+async def report_error(body: dict):
+    """前端错误上报（页面异常/请求失败）"""
+    from backend.services.error_log_service import ErrorLogStore
+    ErrorLogStore().log(
+        module=str(body.get("module", "frontend"))[:80],
+        message=str(body.get("message", ""))[:500],
+        category=str(body.get("category", "other"))[:20],
+        severity=str(body.get("severity", "error"))[:10],
+        detail=str(body.get("detail", ""))[:2000],
+    )
+    return ApiResponse(data={"accepted": True})

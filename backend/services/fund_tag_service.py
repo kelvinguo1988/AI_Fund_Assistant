@@ -257,6 +257,18 @@ def fetch_f10_profile(code: str) -> Optional[dict]:
         )
         resp.encoding = "utf-8"
     except Exception as e:
+        try:
+            from backend.services.error_log_service import (
+                log_source_failure, classify_source_error,
+            )
+            log_source_failure(
+                module="tags.F10",
+                message=f"F10 抓取失败 code={code}: {e}"[:200],
+                category=classify_source_error(str(e)),
+                severity="warning",
+            )
+        except Exception:
+            pass
         raise F10FetchError(f"F10 网络抓取失败 code={code}: {e}") from e
 
     if resp.status_code != 200 or len(resp.text) < 5000:

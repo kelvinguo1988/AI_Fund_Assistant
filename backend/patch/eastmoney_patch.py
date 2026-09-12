@@ -124,6 +124,18 @@ def _get_nid(user_agent: str) -> Optional[str]:
             logger.warning(f"东方财富 NID 授权失败: {e}")
             _cache.data = None
             _nid_fail_until = time.time() + 300  # 5 分钟冷却（独立于缓存 TTL）
+            try:
+                from backend.services.error_log_service import (
+                    log_source_failure, classify_source_error,
+                )
+                log_source_failure(
+                    module="patch.nid_auth",
+                    message=f"NID 授权失败: {e}"[:200],
+                    category=classify_source_error(str(e)),
+                    severity="warning",
+                )
+            except Exception:
+                pass
             return None
 
 

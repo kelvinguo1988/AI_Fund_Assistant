@@ -259,6 +259,16 @@ class FundRealtimeService:
             f"数据源 [{name}] 熔断 {SOURCE_FAIL_COOLDOWN:.0f}s（防封禁）"
             + (f": {reason}" if reason else "")
         )
+        # 2026-08-31 埋点：数据源熔断=被限流的最直接信号
+        try:
+            from backend.services.error_log_service import log_source_failure
+            log_source_failure(
+                module=f"realtime.{name}",
+                message=f"数据源熔断 {SOURCE_FAIL_COOLDOWN:.0f}s" + (f": {reason}" if reason else ""),
+                category="rate_limit",
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _mark_source_ok(name: str) -> None:
@@ -877,6 +887,15 @@ class FundRealtimeService:
             # 反爬页（无 jsonpgz 标记）→ 冷却
             FundRealtimeService._fundgz_fail_until = time.time() + FUNDGZ_FAIL_COOLDOWN
             logger.info(f"fundgz 反爬拦截(code={code})，进入 {FUNDGZ_FAIL_COOLDOWN}s 冷却")
+            try:
+                from backend.services.error_log_service import log_source_failure
+                log_source_failure(
+                    module="realtime.fundgz",
+                    message=f"fundgz 反爬拦截(code={code})",
+                    category="rate_limit", severity="warning",
+                )
+            except Exception:
+                pass
             return None
         except Exception as e:
             FundRealtimeService._fundgz_fail_until = now + FUNDGZ_FAIL_COOLDOWN

@@ -177,6 +177,20 @@ class AKShareAdapter(BaseDataSource):
         reason = type(last_exc).__name__
         msg = str(last_exc) or "(no error message)"
         logger.error(f"{func_name} 重试后仍然失败: [{reason}] {msg}")
+        # 2026-08-31 埋点：数据源失败落错误日志（限流类单独标记，供铃铛告警
+        # 与日志下载排查"哪个模块触发限制"；节流去重在 store 内部）
+        try:
+            from backend.services.error_log_service import (
+                log_source_failure, classify_source_error,
+            )
+            log_source_failure(
+                module=f"akshare.{func_name}",
+                message=f"[{reason}] {msg}"[:300],
+                category="rate_limit" if _is_rate_limited(last_exc) else classify_source_error(msg),
+                detail=f"attempts={max_attempts}",
+            )
+        except Exception:
+            pass
         raise last_exc
 
     async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:
