@@ -61,6 +61,23 @@ const SystemPage: React.FC = () => {
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiModelId, setAiModelId] = useState('');
 
+  // 功能开关状态
+  const [etfHintsOn, setEtfHintsOn] = useState(true);
+  const [otcHintsOn, setOtcHintsOn] = useState(true);
+
+  const saveFlags = async (patch: { etf_hints_enabled?: boolean; otc_hints_enabled?: boolean }) => {
+    try {
+      const res = await systemApi.updateFeatureFlags(patch);
+      if (res.data) {
+        setEtfHintsOn(res.data.etf_hints_enabled);
+        setOtcHintsOn(res.data.otc_hints_enabled);
+      }
+      setError(null);
+    } catch (err: any) {
+      setError(err?.message || '保存开关失败');
+    }
+  };
+
   // 错误日志状态
   const [errLogs, setErrLogs] = useState<ErrorLogItem[]>([]);
   const [errCategory, setErrCategory] = useState<string>('');
@@ -80,6 +97,14 @@ const SystemPage: React.FC = () => {
 
   useEffect(() => {
     loadErrLogs();
+    systemApi.getFeatureFlags()
+      .then((r) => {
+        if (r.data) {
+          setEtfHintsOn(r.data.etf_hints_enabled);
+          setOtcHintsOn(r.data.otc_hints_enabled);
+        }
+      })
+      .catch(() => { /* 开关加载失败保持默认 */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -272,6 +297,42 @@ const SystemPage: React.FC = () => {
           >
             {aiSaving ? '保存中...' : '保存配置'}
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* ── 提示功能开关 ── */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" sx={{ mb: 1 }}>提示功能开关</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            关闭后对应模块不再生成提示且不再发起其数据源请求（省资源）；关闭立即生效。
+          </Typography>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={etfHintsOn}
+                onChange={async (e) => {
+                  setEtfHintsOn(e.target.checked);
+                  await saveFlags({ etf_hints_enabled: e.target.checked });
+                }}
+              />
+            }
+            label={etfHintsOn ? '场内提示与扫描：已开启（ETF 溢价/流动性/量价提示 + 潜力 ETF 扫描）' : '场内提示与扫描：已关闭'}
+            sx={{ display: 'block', mb: 1 }}
+          />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={otcHintsOn}
+                onChange={async (e) => {
+                  setOtcHintsOn(e.target.checked);
+                  await saveFlags({ otc_hints_enabled: e.target.checked });
+                }}
+              />
+            }
+            label={otcHintsOn ? '场外提示与高低估：已开启（申购状态/费率/高低估区间/15 点择时）' : '场外提示与高低估：已关闭'}
+            sx={{ display: 'block' }}
+          />
         </CardContent>
       </Card>
 

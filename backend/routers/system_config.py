@@ -361,5 +361,50 @@ async def report_error(body: dict):
 async def index_valuations(force: bool = False):
     """主要指数 PE 高低估区间（近一年分位口径；沪深300/中证500/上证50/中证1000）"""
     from backend.services.index_valuation_service import IndexValuationService
+    # otc 开关关闭时不拉取（省资源）
+    from backend.services.fund_realtime_service import _feature_flag
+    if not await _feature_flag(db, "otc_hints_enabled", default=True):
+        return ApiResponse(data=[])
     rows = await IndexValuationService.get_valuations(force=force)
     return ApiResponse(data=rows)
+
+
+# ── 特性开关（场内/场外提示模块，2026-08-31）──────────────────────────
+
+_FEATURE_KEYS = {"etf_hints_enabled": True, "otc_hints_enabled": True}
+
+
+@router.get("/feature-flags")
+async def get_feature_flags(db: AsyncSession = Depends(get_db)):
+    """功能开关：场内提示与扫描 / 场外提示与高低估"""
+    rows = (await db.execute(select(SystemConfig))).scalars().all()
+    kv = {r.config_key: r.config_value for r in rows}
+    return ApiResponse(data={
+        k: kv.get(k, str(default)).lower() == "true"
+        for k, default in _FEATURE_KEYS.items()
+    })
+
+
+@router.put("/feature-flags")
+async def update_feature_flags(body: dict, db: AsyncSession = Depends(get_db)):
+    """更新功能开关（仅接受已知键，bool 校验）"""
+    for k, v in body.items():
+        if k not in _FEATURE_KEYS:
+            raise HTTPException(status_code=400, detail=f"未知开关: {k}")
+        if not isinstance(v, bool):
+            raise HTTPException(status_code=400, detail=f"开关值必须为 bool: {k}")
+        row = (await db.execute(
+            select(SystemConfig).where(SystemConfig.config_key == k)
+        )).scalars().first()
+        value = str(v).lower()
+        if row:
+            row.config_value = value
+        else:
+            db.add(SystemConfig(config_key=k, config_value=value))
+    await db.commit()
+    rows = (await db.execute(select(SystemConfig))).scalars().all()
+    kv = {r.config_key: r.config_value for r in rows}
+    return ApiResponse(data={
+        k: kv.get(k, str(default)).lower() == "true"
+        for k, default in _FEATURE_KEYS.items()
+    })

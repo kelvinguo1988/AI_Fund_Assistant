@@ -144,8 +144,23 @@ async def test_fundgz_failure_falls_back_to_holdings(monkeypatch):
         async def _fake_index(self):
             return 1.0
 
+        # OTC 提示分支的新依赖必须 mock：否则测试会真实拉取
+        # 24056 只全量申购状态表（触发数据源限流——用户红线）
+        import backend.services.fund_realtime_service as _mod
+
+        async def _fake_status_map(self):
+            return {}
+
+        async def _fake_flag(db, key, default=True):
+            return False  # 关闭 OTC hints 分支（本测试只验证持仓自算路径）
+
         monkeypatch.setattr(FundRealtimeService, "_get_stock_spot", _fake_stock_spot)
         monkeypatch.setattr(FundRealtimeService, "_get_index_pct", _fake_index)
+        monkeypatch.setattr(_mod, "_fund_benchmark_text", lambda code: "")
+        import backend.services.index_valuation_service as _iv_mod
+        monkeypatch.setattr(_iv_mod.OtcTradeStatusService,
+                            "get_status_map", _fake_status_map)
+        monkeypatch.setattr(_mod, "_feature_flag", _fake_flag)
 
         results = await svc.get_realtime([_FakeFund(1, "000001", "测试基金")])
         r = results.get("000001")

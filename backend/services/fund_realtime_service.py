@@ -378,50 +378,61 @@ class FundRealtimeService:
         if otc_missing:
             await self._fill_from_holdings(otc_missing, results)
 
-        # ── 模块 A'/C'：场外交易提示 + 高低估区间（2026-08-31）──
-        # 全部 OTC 基金（含 fundgz 命中的）都附加申购/赎回可执行性与估值区间提示
-        try:
-            from backend.services.index_valuation_service import (
-                IndexValuationService, OtcTradeStatusService,
-            )
-            status_map = await OtcTradeStatusService.get_status_map()
-            in_trading_hours = _in_trading_hours()
-            for f in otc_funds:
-                r = results.get(f.code)
-                if r is None:
-                    continue
-                hints = r.setdefault("hints", [])
-                # A': 申购/赎回可执行性 + 手续费
-                hints.extend(OtcTradeStatusService.trade_hints(f.code, status_map.get(f.code)))
-                # C': 跟踪指数高低估区间（名称/基准匹配支持的指数）
-                v_hint = IndexValuationService.match_fund_hint(
-                    f.name or "", _fund_benchmark_text(f.code)
+        # ── 模块 A'/C'：场外交易提示 + 高低估区间（受 otc_hints_enabled 开关控制）──
+        otc_hints_on = await _feature_flag(self.db, "otc_hints_enabled", default=True)
+        if otc_hints_on:
+            # 全部 OTC 基金（含 fundgz 命中的）都附加申购/赎回可执行性与估值区间提示
+            try:
+                from backend.services.index_valuation_service import (
+                    IndexValuationService, OtcTradeStatusService,
                 )
-                if v_hint:
-                    hints.append(v_hint)
-                # A' 进阶：盘中估值显著偏离时的 15 点择时提示（未知价原则）
-                gp = r.get("growth_pct")
-                if in_trading_hours and gp is not None and abs(gp) >= 1.0:
-                    if gp <= -1.0:
-                        hints.append({
-                            "type": "timing", "level": "info",
-                            "message": f"盘中估算 {gp:+.2f}%——15:00 前申购按今日较低净值成交",
-                        })
-                    else:
-                        hints.append({
-                            "type": "timing", "level": "info",
-                            "message": f"盘中估算 {gp:+.2f}%——15:00 前赎回按今日较高净值成交",
-                        })
-        except Exception as e:
-            logger.warning(f"场外提示生成失败（不影响估值结果）: {e}")
+                # 无场外基金时跳过全量状态拉取（省资源）
+                status_map = (
+                    await OtcTradeStatusService.get_status_map() if otc_funds else {}
+                )
+                # 近似映射依赖估值缓存（1h TTL，乐咕日频数据日内一次）
+                await IndexValuationService.get_valuations()
+                fund_tags_map = _fund_tags_map()
+                in_trading_hours = _in_trading_hours()
+                for f in otc_funds:
+                    r = results.get(f.code)
+                    if r is None:
+                        continue
+                    hints = r.setdefault("hints", [])
+                    # A': 申购/赎回可执行性 + 手续费
+                    hints.extend(OtcTradeStatusService.trade_hints(f.code, status_map.get(f.code)))
+                    # C': 高低估区间（直接映射 / 主动基金基准近似；固收+ 排除）
+                    is_fixed_income = "固收+/偏债" in (fund_tags_map.get(f.code) or "")
+                    v_hint = IndexValuationService.match_fund_hint(
+                        f.name or "", _fund_benchmark_text(f.code),
+                        is_fixed_income=is_fixed_income,
+                    )
+                    if v_hint:
+                        hints.append(v_hint)
+                    # A' 进阶：盘中估值显著偏离时的 15 点择时提示（未知价原则）
+                    gp = r.get("growth_pct")
+                    if in_trading_hours and gp is not None and abs(gp) >= 1.0:
+                        if gp <= -1.0:
+                            hints.append({
+                                "type": "timing", "level": "info",
+                                "message": f"盘中估算 {gp:+.2f}%——15:00 前申购按今日较低净值成交",
+                            })
+                        else:
+                            hints.append({
+                                "type": "timing", "level": "info",
+                                "message": f"盘中估算 {gp:+.2f}%——15:00 前赎回按今日较高净值成交",
+                            })
+            except Exception as e:
+                logger.warning(f"场外提示生成失败（不影响估值结果）: {e}")
 
         # ── ETF 场内（透明分支，真实价格非估算）──
         etf_funds = [f for f in pending if guess_fund_type(f.code) == "etf"]
         if etf_funds:
             spot = await self._get_etf_spot(codes=[f.code for f in etf_funds])
             if spot is not None:
-                # 模块 A：场内交易提示（溢价/流动性/量价资金，字段缺失自动跳过）
+                # 模块 A：场内交易提示（受 etf_hints_enabled 开关控制，估值行情保留）
                 from backend.services.etf_signal_service import evaluate_etf_hints
+                etf_hints_on = await _feature_flag(self.db, "etf_hints_enabled", default=True)
                 for f in etf_funds:
                     row = spot.get(f.code)
                     if row:
@@ -436,7 +447,7 @@ class FundRealtimeService:
                             "quote_time": row.get("time", ""),
                             "coverage": 1.0,
                             "est_model": "market_price",
-                            "hints": evaluate_etf_hints(row),
+                            "hints": evaluate_etf_hints(row) if etf_hints_on else [],
                         }
                         self._cache_estimate(f.code, results[f.code])
 
@@ -1135,3 +1146,32 @@ def _fund_benchmark_text(code: str) -> str:
             conn.close()
     except Exception:
         return ""
+
+
+async def _feature_flag(db, key: str, default: bool = True) -> bool:
+    """读 system_config 功能开关（缺省开）"""
+    try:
+        from sqlalchemy import select as _select
+        from backend.models.system_config import SystemConfig as _SC
+        row = (await db.execute(
+            _select(_SC).where(_SC.config_key == key)
+        )).scalars().first()
+        if row is None:
+            return default
+        return (row.config_value or "").lower() == "true"
+    except Exception:
+        return default
+
+
+def _fund_tags_map() -> dict:
+    """查库 {code: tags}（固收+ 判定用；查不到返回空）"""
+    try:
+        import sqlite3
+        conn = sqlite3.connect("data/fund_quant.db", timeout=5)
+        try:
+            return {c: (t or "") for c, t in
+                    conn.execute("SELECT code, tags FROM funds")}
+        finally:
+            conn.close()
+    except Exception:
+        return {}

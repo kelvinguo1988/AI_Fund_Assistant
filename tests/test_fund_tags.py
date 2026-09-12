@@ -122,3 +122,98 @@ async def db_session():
     async with maker() as session:
         yield session
     await engine.dispose()
+
+
+# ── 指数估值近似映射（模块 C' 增强，2026-08-31 用户确认）──────────────
+
+class TestBenchmarkApprox:
+    def test_direct_match(self):
+        from backend.services.index_valuation_service import IndexValuationService
+        IndexValuationService._cache = [{
+            "index": "沪深300", "pe": 12.8, "percentile_1y": 55.0,
+            "zone": "合理", "advice": "合理区间", "updated": "2026-08-31",
+        }]
+        try:
+            hint = IndexValuationService.match_fund_hint(
+                "天弘沪深300ETF联接C", "沪深300指数收益率*95%+活期*5%",
+            )
+            assert hint is not None and "跟踪指数" in hint["message"]
+        finally:
+            IndexValuationService._cache = None
+
+    def test_benchmark_approximate(self):
+        """主动基金基准近似映射：取占比最高的支持指数，标注近似"""
+        from backend.services.index_valuation_service import IndexValuationService
+        IndexValuationService._cache = [{
+            "index": "沪深300", "pe": 12.8, "percentile_1y": 55.0,
+            "zone": "合理", "advice": "合理区间", "updated": "2026-08-31",
+        }]
+        try:
+            hint = IndexValuationService.match_fund_hint(
+                "广发远见智选混合C",
+                "沪深300指数收益率*60%+人民币计价的恒生指数收益率*20%+中债-新综合财富(总值)指数收益率*20%",
+            )
+            assert hint is not None
+            assert hint.get("approximate") is True
+            assert "沪深300" in hint["message"] and "60%" in hint["message"]
+        finally:
+            IndexValuationService._cache = None
+
+    def test_fixed_income_excluded(self):
+        """固收+ 基金权益占比低，高低估不适用"""
+        from backend.services.index_valuation_service import IndexValuationService
+        hint = IndexValuationService.match_fund_hint(
+            "华泰柏瑞易利灵活配置混合C",
+            "中债-综合全价(总值)指数收益率*85%+中证A500指数收益率*15%",
+            is_fixed_income=True,
+        )
+        assert hint is None
+
+    def test_low_ratio_no_approx(self):
+        """支持指数占比 <20% 不近似（无意义）"""
+        from backend.services.index_valuation_service import IndexValuationService
+        IndexValuationService._cache = [{
+            "index": "沪深300", "pe": 12.8, "percentile_1y": 55.0,
+            "zone": "合理", "advice": "x", "updated": "d",
+        }]
+        try:
+            hint = IndexValuationService.match_fund_hint(
+                "x", "沪深300指数收益率*10%+其他*90%",
+            )
+            assert hint is None
+        finally:
+            IndexValuationService._cache = None
+
+
+# ── 特性开关 ─────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_feature_flags_roundtrip():
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from backend.database import Base
+    import backend.models
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+
+    from backend.routers.system_config import (
+        get_feature_flags, update_feature_flags,
+    )
+    async with Session() as db:
+        # 默认全开
+        r = await get_feature_flags(db)
+        assert r.data == {"etf_hints_enabled": True, "otc_hints_enabled": True}
+        # 关闭场内
+        r = await update_feature_flags({"etf_hints_enabled": False}, db)
+        assert r.data["etf_hints_enabled"] is False
+        assert r.data["otc_hints_enabled"] is True
+        # 非法键 → 400
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException):
+            await update_feature_flags({"bad_key": True}, db)
+        # 非 bool → 400
+        with pytest.raises(HTTPException):
+            await update_feature_flags({"etf_hints_enabled": "false"}, db)
+    await engine.dispose()

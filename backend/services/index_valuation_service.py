@@ -12,6 +12,7 @@
 """
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -91,25 +92,65 @@ class IndexValuationService:
             cls._ts = now
         return rows or (cls._cache or [])
 
+    # 基准指数占比提取（近似映射用）：指数名 ... ×占比%
+    _BENCH_RATIO_RE = r"({})[^0-9×*]*[×*](\d+(?:\.\d+)?)%"
+
     @classmethod
-    def match_fund_hint(cls, name: str, benchmark: Optional[str]) -> Optional[dict]:
-        """基金名称/基准匹配到支持指数 → 高低估区间提示"""
-        text = f"{name or ''} {benchmark or ''}"
+    def match_fund_hint(
+        cls, name: str, benchmark: Optional[str],
+        is_fixed_income: bool = False,
+    ) -> Optional[dict]:
+        """基金名称/基准匹配指数 → 高低估区间提示
+
+        2026-08-31 增强（用户确认）：主动基金（基准为宽基组合）用基准中
+        占比最高的支持指数**近似映射**，提示标注"近似"及依据；
+        固收+/偏债 基金权益占比低，高低估不适用，返回 None。
+        """
+        if is_fixed_income:
+            return None
+        # 1. 直接匹配：基金**名称**含支持指数词（如"天弘沪深300ETF联接"）
         for index_name, keywords in SUPPORTED_INDEXES.items():
-            if any(k in text for k in keywords):
+            if any(k in (name or "") for k in keywords):
                 for v in (cls._cache or []):
                     if v["index"] == index_name:
-                        zone = v["zone"]
-                        level = "positive" if zone == "低估" else "warning" if zone == "高估" else "info"
-                        return {
-                            "type": "valuation",
-                            "level": level,
-                            "message": (
-                                f"跟踪指数 {index_name}：PE {v['pe']}，近一年分位 "
-                                f"{v['percentile_1y']}%（{zone}）——{v['advice']}"
-                            ),
-                        }
+                        return cls._build_hint(v, "跟踪指数")
+        # 2. 基准占比解析（仅基准含指数词时——指数基金占 70%+ 为直接跟踪，
+        #    主动基金 20~70% 为业绩基准近似映射，<20% 无近似意义）
+        if benchmark:
+            best: Optional[tuple[str, float]] = None
+            for index_name, keywords in SUPPORTED_INDEXES.items():
+                m = re.search(
+                    cls._BENCH_RATIO_RE.format(keywords[0]), benchmark
+                )
+                if m:
+                    ratio = float(m.group(2))  # g1=指数名 g2=占比
+                    if best is None or ratio > best[1]:
+                        best = (index_name, ratio)
+            if best and best[1] >= 20.0:
+                for v in (cls._cache or []):
+                    if v["index"] == best[0]:
+                        if best[1] >= 70.0:
+                            return cls._build_hint(v, "跟踪指数")
+                        hint = cls._build_hint(
+                            v, f"按基准 {best[0]}（占比 {best[1]:.0f}%）近似"
+                        )
+                        if hint:
+                            hint["approximate"] = True
+                        return hint
         return None
+
+    @classmethod
+    def _build_hint(cls, v: dict, basis: str) -> Optional[dict]:
+        zone = v["zone"]
+        level = "positive" if zone == "低估" else "warning" if zone == "高估" else "info"
+        return {
+            "type": "valuation",
+            "level": level,
+            "message": (
+                f"{basis} {v['index']}：PE {v['pe']}，近一年分位 "
+                f"{v['percentile_1y']}%（{zone}）——{v['advice']}"
+            ),
+        }
 
 
 class OtcTradeStatusService:

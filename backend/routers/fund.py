@@ -422,6 +422,12 @@ async def etf_scan(db: AsyncSession = Depends(get_db)):
     from backend.services.etf_signal_service import scan_potential
     from backend.services.fund_realtime_service import FundRealtimeService
 
+    # 开关关闭：不发起全市场请求（省资源）
+    from backend.services.fund_realtime_service import _feature_flag
+    if not await _feature_flag(db, "etf_hints_enabled", default=True):
+        return ApiResponse(data={"enabled": False, "scanned": 0, "movers": [],
+                                 "inflow": [], "unusual": [], "pool_codes": []})
+
     # 基金池代码集合（交叉标注 已持有）
     pool = (await db.execute(select(Fund).where(Fund.status == "active"))).scalars().all()
     pool_codes = {f.code for f in pool}

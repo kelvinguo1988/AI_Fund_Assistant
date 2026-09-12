@@ -29,6 +29,12 @@ export const systemApi = {
   updateScoringConfig: (data: ScoringConfigUpdate) =>
     apiClient.put<ApiResponse<ScoringConfigOut>>(`${BASE}/scoring-config`, data).then((r) => r.data),
 
+  getFeatureFlags: () =>
+    apiClient.get<ApiResponse<{ etf_hints_enabled: boolean; otc_hints_enabled: boolean }>>(`${BASE}/feature-flags`).then((r) => r.data),
+
+  updateFeatureFlags: (data: { etf_hints_enabled?: boolean; otc_hints_enabled?: boolean }) =>
+    apiClient.put<ApiResponse<{ etf_hints_enabled: boolean; otc_hints_enabled: boolean }>>(`${BASE}/feature-flags`, data).then((r) => r.data),
+
   getIndexValuations: () =>
     apiClient.get<ApiResponse<unknown>>('/api/system/index-valuations').then((r) => r.data),
 
