@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path("data") / "fund_quant.db"
 MAX_ROWS = 2000
+RETENTION_DAYS = 30   # 保留期：超过 30 天的日志在下次写入时清理
 THROTTLE_WINDOW = 60.0
 
 _CATEGORY_SCHEMA = """
@@ -92,12 +93,17 @@ class ErrorLogStore:
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (ts, module[:80], category, severity, message[:500], detail[:2000]),
                 )
-                # 容量裁剪
+                # 容量裁剪（最多 2000 条）+ 时间保留期（超过 30 天清理）
                 self._conn.execute(
                     "DELETE FROM error_logs WHERE id NOT IN "
                     "(SELECT id FROM error_logs ORDER BY id DESC LIMIT ?)",
                     (MAX_ROWS,),
                 )
+                cutoff = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(now - RETENTION_DAYS * 86400),
+                )
+                self._conn.execute("DELETE FROM error_logs WHERE ts < ?", (cutoff,))
                 self._conn.commit()
                 return True
             except Exception as e:

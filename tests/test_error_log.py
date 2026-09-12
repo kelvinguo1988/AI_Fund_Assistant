@@ -75,6 +75,42 @@ class TestErrorLogStore:
         filtered = store.download_text(category="timeout")
         assert "被限流" not in filtered
 
+    def test_retention_30_days(self, store, monkeypatch):
+        """时间保留期：30 天前的记录在下次写入时清理（用户确认的覆盖需求）"""
+        import time
+        # 直接造一条 40 天前的旧记录
+        old_ts = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 40 * 86400)
+        )
+        store._conn.execute(
+            "INSERT INTO error_logs (ts, module, category, severity, message) "
+            "VALUES (?, 'legacy', 'other', 'error', '四十天前的旧日志')",
+            (old_ts,),
+        )
+        store._conn.commit()
+        assert store.count() == 1
+        # 新写入触发清理
+        store.log("m", "新日志")
+        assert store.count() == 1
+        assert store.query()[0]["message"] == "新日志"
+
+    def test_retention_keeps_recent(self, store):
+        """30 天内的记录不受影响"""
+        import time
+        recent_ts = time.strftime(
+            "%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 5 * 86400)
+        )
+        store._conn.execute(
+            "INSERT INTO error_logs (ts, module, category, severity, message) "
+            "VALUES (?, 'recent', 'rate_limit', 'error', '五天前的限流日志')",
+            (recent_ts,),
+        )
+        store._conn.commit()
+        store.log("m", "新日志")
+        rows = store.query()
+        assert len(rows) == 2
+        assert any("五天前的限流日志" == r["message"] for r in rows)
+
     def test_clear(self, store):
         store.log("m", "x")
         n = store.clear()
