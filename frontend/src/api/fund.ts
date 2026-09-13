@@ -136,3 +136,36 @@ export interface ETFScanResult {
   unusual: ETFScanItem[];
   pool_codes: string[];
 }
+
+/* ── 概念映射（THS 渐进获取）── */
+export interface ConceptMapProgress {
+  concepts_mapped: number;
+  concepts_total: number;
+  stocks_mapped: number;
+  latest_update?: string | null;
+}
+
+export const conceptMapApi = {
+  progress: () =>
+    apiClient.get<ApiResponse<ConceptMapProgress>>('/api/funds/concept-map/progress').then((r) => r.data),
+
+  importJson: (payload: { concepts: Record<string, string[]> }) =>
+    apiClient.post<ApiResponse<{ imported: number }>>('/api/funds/concept-map/import', payload, { timeout: 60000 }).then((r) => r.data),
+
+  fetchBatch: () =>
+    apiClient.post<ApiResponse<{ fetched: number; stocks: number; failed: number; remaining_hint: string }>>('/api/funds/concept-map/fetch', {}, { timeout: 300000 }).then((r) => r.data),
+};
+
+export interface HoldingOverlap {
+  funds_count: number;
+  overlaps: { stock_code: string; stock_name: string; funds_count: number; total_ratio?: number | null }[];
+}
+
+export const overlapApi = {
+  get: (fundIds?: number[]) =>
+    apiClient
+      .get<ApiResponse<HoldingOverlap>>('/api/funds/holding-overlap', {
+        params: fundIds?.length ? { fund_ids: fundIds.join(',') } : {},
+      })
+      .then((r) => r.data),
+};

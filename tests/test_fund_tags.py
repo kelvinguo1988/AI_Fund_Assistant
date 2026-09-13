@@ -87,7 +87,6 @@ class TestExposureTags:
         assert "光模块/CPO×3" in out
         assert "半导体/算力芯片×2" in out
         assert "新能源" in out
-        assert "其他" in out
 
     def test_empty(self):
         assert parse_exposure_tags([]) is None

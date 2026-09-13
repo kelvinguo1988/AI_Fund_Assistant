@@ -110,10 +110,12 @@ def extract_industry_words(text: str) -> list[str]:
 
 # ── 副标签：持仓赛道关键词映射（股票名称 → 产业链）──────────────────
 _EXPOSURE_RULES: list[tuple[str, str]] = [
-    (r"旭创|新易盛|源杰|天孚|光迅|仕佳|德科立|太辰光|剑桥", "光模块/CPO"),
-    (r"寒武纪|中芯|华虹|海光|澜起|兆易|韦尔|卓胜微|圣邦", "半导体/算力芯片"),
-    (r"工业富联|浪潮|紫光|中科曙光|拓维", "AI服务器"),
-    (r"宁德|亿纬|国轩|欣旺达|阳光电源|隆基|通威|晶澳", "新能源"),
+    (r"旭创|新易盛|源杰|天孚|光迅|仕佳|德科立|太辰光|剑桥|永鼎|长飞|亨通|中天", "光模块/CPO"),
+    # PCB/覆铜板（2026-08-31 用户反馈缺失：金安国纪/建滔积层板等）
+    (r"金安国纪|建滔|生益|深南电路|沪电|鹏鼎|胜宏|兴森|景旺|崇达|依顿|博敏|中富", "PCB/覆铜板"),
+    (r"寒武纪|中芯|华虹|海光|澜起|兆易|韦尔|卓胜微|圣邦|长电|通富|甬矽", "半导体/算力芯片"),
+    (r"工业富联|浪潮|紫光|中科曙光|拓维|神州数码|烽火", "AI服务器"),
+    (r"宁德|亿纬|国轩|欣旺达|阳光电源|隆基|通威|晶澳| TCL中环", "新能源"),
     (r"贵州茅台|五粮液|泸州老窖|山西汾酒|洋河", "白酒"),
     (r"保险|人寿|平安|太保|新华", "保险"),
     (r"银行|工商|建设|招商银行|兴业|宁波银行", "银行"),
@@ -123,7 +125,8 @@ _EXPOSURE_RULES: list[tuple[str, str]] = [
     (r"腾讯|阿里|美团|快手|网易|百度", "互联网"),
     (r"美的|格力|海尔|海信", "家电"),
     (r"长江电力|华能|国电|三峡", "电力"),
-    (r"宁德|比亚迪|长城汽车|赛力斯|长安汽车", "汽车"),
+    (r"比亚迪|长城汽车|赛力斯|长安汽车|上汽|广汽", "汽车"),
+    (r"东山精密|立讯|歌尔|蓝思|环旭", "消费电子/精密制造"),
 ]
 
 
@@ -198,14 +201,19 @@ def parse_primary_tags(
     return tags, position_tag
 
 
-def parse_exposure_tags(holdings: list[dict]) -> Optional[str]:
+def parse_exposure_tags(
+    holdings: list[dict],
+    concept_map: Optional[dict[str, list[str]]] = None,
+) -> Optional[str]:
     """从库内最新持仓反推赛道暴露
 
     Args:
         holdings: [{stock_name, ratio}] 最新季度持仓（含占比%）
+        concept_map: {stock_code: [真概念名]}（THS 概念映射表，优先使用；
+                     未覆盖股票回落关键词规则）
 
     Returns:
-        "光模块/CPO×3 27.6%, 半导体/算力芯片×2 13.8%, 其他 45.1%" 或 None
+        "CPO×2 19.5%, 半导体/算力芯片×2 13.8%, 其他 45.1%" 或 None
     """
     bucket: dict[str, float] = defaultdict(float)
     count: dict[str, int] = defaultdict(int)
@@ -218,10 +226,17 @@ def parse_exposure_tags(holdings: list[dict]) -> Optional[str]:
             continue
         total += float(ratio)
         hit = None
-        for pat, label in _EXPOSURE_RULES:
-            if re.search(pat, name):
-                hit = label
-                break
+        # ① 真概念映射优先（THS 板块原名）
+        code = str(h.get("stock_code") or "")
+        concepts = (concept_map or {}).get(code)
+        if concepts:
+            hit = concepts[0]  # 主概念（首个）
+        else:
+            # ② 关键词规则回退
+            for pat, label in _EXPOSURE_RULES:
+                if re.search(pat, name):
+                    hit = label
+                    break
         if hit:
             bucket[hit] += float(ratio)
             count[hit] += 1
@@ -364,6 +379,7 @@ def build_double_tags(
     code: str, name: str, fund_type: str,
     holdings: Optional[list[dict]] = None,
     f10: Optional[dict] = None,
+    concept_map: Optional[dict[str, list[str]]] = None,
 ) -> dict:
     """一站式生成双层标签
 
@@ -428,7 +444,10 @@ def build_double_tags(
         except Exception:
             pass
 
-    exposure = parse_exposure_tags(holdings) if holdings else None
+    exposure = (
+        parse_exposure_tags(holdings, concept_map=concept_map)
+        if holdings else None
+    )
     return {
         "tags": ",".join(tags) if tags else None,
         "fund_type_official": official_type,

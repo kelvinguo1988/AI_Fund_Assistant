@@ -9,6 +9,7 @@ from backend.models.analysis_result import AnalysisResult
 from backend.models.ai_conversation import AIConversation
 from backend.models.ai_skill import AISkill
 from backend.models.backtest_result import BacktestResult
+from backend.models.concept_board_map import ConceptBoardMap
 from backend.models.system_config import SystemConfig
 from backend.models.fund_holding import FundHolding
 from backend.models.fund_manager_record import FundManagerRecord
@@ -26,6 +27,7 @@ __all__ = [
     "AIConversation",
     "AISkill",
     "BacktestResult",
+    "ConceptBoardMap",
     "SystemConfig",
     "FundHolding",
     "FundManagerRecord",

@@ -7,7 +7,7 @@ import random
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 
 logger = logging.getLogger(__name__)
 from sqlalchemy import select
@@ -441,3 +441,76 @@ async def etf_scan(db: AsyncSession = Depends(get_db)):
     result = scan_potential(spot_map, pool_codes)
     result["pool_codes"] = list(pool_codes)
     return ApiResponse(data=result)
+
+
+# ── 概念映射（THS 渐进获取，2026-08-31）──────────────────────────────
+
+@router.get("/concept-map/progress")
+async def concept_map_progress():
+    """概念映射进度（已映射概念/总数/股票数/最近更新）"""
+    from backend.database import async_session_factory
+    from backend.services.concept_map_service import progress
+    async with async_session_factory() as session:
+        return ApiResponse(data=await progress(session))
+
+
+@router.post("/concept-map/import")
+async def import_concept_map(body: dict):
+    """导入概念成分 JSON（{"concepts": {概念: [股票代码]}}）——起步数据零网络"""
+    from backend.database import async_session_factory
+    from backend.services.concept_map_service import import_seed
+    if not isinstance(body, dict) or "concepts" not in body:
+        raise HTTPException(status_code=400, detail="body 需含 concepts 字段")
+    async with async_session_factory() as session:
+        result = await import_seed(session, body)
+    return ApiResponse(data=result)
+
+
+@router.post("/concept-map/fetch")
+async def fetch_concept_batch():
+    """渐进抓取一轮（最久未更新的 20 个板块，板块间 2~5s 防封 sleep）"""
+    from backend.database import async_session_factory
+    from backend.services.concept_map_service import fetch_batch
+    async with async_session_factory() as session:
+        result = await fetch_batch(session)
+    return ApiResponse(data=result)
+
+
+@router.get("/holding-overlap")
+async def holding_overlap(
+    fund_ids: Optional[str] = Query(None, description="逗号分隔基金 ID，空=全部活跃"),
+    db: AsyncSession = Depends(get_db),
+):
+    """重仓股重叠度 — 池内（或指定基金）共同重仓股排行（抱团风险一目了然）"""
+    stmt = select(Fund).where(Fund.status == "active")
+    ids = [int(x) for x in fund_ids.split(",") if x.strip().isdigit()] if fund_ids else None
+    if ids:
+        stmt = stmt.where(Fund.id.in_(ids))
+    funds = (await db.execute(stmt)).scalars().all()
+    if not funds:
+        return ApiResponse(data={"funds_count": 0, "overlaps": []})
+
+    from backend.models.fund_holding import FundHolding
+    from sqlalchemy import func
+    rows = (await db.execute(
+        select(
+            FundHolding.stock_code,
+            func.max(FundHolding.stock_name).label("stock_name"),
+            func.count(func.distinct(FundHolding.fund_id)).label("funds_count"),
+            func.sum(FundHolding.ratio).label("total_ratio"),
+        )
+        .where(FundHolding.fund_id.in_([f.id for f in funds]))
+        .group_by(FundHolding.stock_code)
+        .order_by(func.count(func.distinct(FundHolding.fund_id)).desc())
+        .limit(30)
+    )).all()
+    overlaps = [
+        {
+            "stock_code": r.stock_code,
+            "stock_name": r.stock_name,
+            "funds_count": r.funds_count,
+            "total_ratio": round(float(r.total_ratio), 2) if r.total_ratio else None,
+        }
+        for r in rows
+    ]
+    return ApiResponse(data={"funds_count": len(funds), "overlaps": overlaps})

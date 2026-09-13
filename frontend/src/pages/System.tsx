@@ -41,6 +41,7 @@ import {
 } from '@mui/icons-material';
 import { systemApi } from '../api/system';
 import { errorLogApi, CATEGORY_META, type ErrorLogItem } from '../api/errorLog';
+import { conceptMapApi, type ConceptMapProgress } from '../api/fund';
 import { aiSkillApi, SKILL_EXAMPLE, type AISkillPayload } from '../api/aiSkill';
 import type { AISkill } from '../types';
 import type { ConnectivityResult, AIConfigOut } from '../types';
@@ -78,6 +79,30 @@ const SystemPage: React.FC = () => {
     }
   };
 
+  // 概念映射状态
+  const [cmProgress, setCmProgress] = useState<ConceptMapProgress | null>(null);
+  const [cmFetching, setCmFetching] = useState(false);
+
+  const loadCmProgress = async () => {
+    try {
+      const res = await conceptMapApi.progress();
+      setCmProgress(res.data || null);
+    } catch { /* 静默 */ }
+  };
+
+  const fetchCmBatch = async () => {
+    setCmFetching(true);
+    try {
+      await conceptMapApi.fetchBatch();
+      await loadCmProgress();
+      setError(null);
+    } catch (err: any) {
+      setError(err?.message || '概念抓取失败');
+    } finally {
+      setCmFetching(false);
+    }
+  };
+
   // 错误日志状态
   const [errLogs, setErrLogs] = useState<ErrorLogItem[]>([]);
   const [errCategory, setErrCategory] = useState<string>('');
@@ -96,6 +121,7 @@ const SystemPage: React.FC = () => {
   };
 
   useEffect(() => {
+    loadCmProgress();
     loadErrLogs();
     systemApi.getFeatureFlags()
       .then((r) => {
@@ -333,6 +359,39 @@ const SystemPage: React.FC = () => {
             label={otcHintsOn ? '场外提示与高低估：已开启（申购状态/费率/高低估区间/15 点择时）' : '场外提示与高低估：已关闭'}
             sx={{ display: 'block' }}
           />
+        </CardContent>
+      </Card>
+
+      {/* ── 概念板块映射（THS 渐进获取）── */}
+      <Card sx={{ mb: 3 }}>
+        <CardContent>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, flexWrap: 'wrap', gap: 1 }}>
+            <Typography variant="h6">概念板块映射</Typography>
+            <Button
+              size="small" variant="contained"
+              disabled={cmFetching}
+              onClick={fetchCmBatch}
+            >
+              {cmFetching ? '抓取中…' : '抓取一批（20 个板块）'}
+            </Button>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            同花顺概念板块成分映射（基金副标签的真概念来源）。渐进获取：每轮抓 20 个最久未更新的板块（防封禁），
+            也可启动时自动导入种子数据。映射越多，副标签的概念覆盖越全。
+          </Typography>
+          {cmProgress && (
+            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+              <Typography variant="body2">
+                已映射概念：<strong>{cmProgress.concepts_mapped}</strong> / {cmProgress.concepts_total}
+              </Typography>
+              <Typography variant="body2">
+                已映射股票：<strong>{cmProgress.stocks_mapped}</strong>
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                最近更新: {cmProgress.latest_update ?? '—'}
+              </Typography>
+            </Box>
+          )}
         </CardContent>
       </Card>
 

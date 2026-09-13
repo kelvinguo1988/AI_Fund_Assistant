@@ -263,12 +263,18 @@ class FundService:
 
         holdings = await get_latest_holdings(self.db, fund.id, limit=50)
         holds_payload = [
-            {"stock_name": h.stock_name, "ratio": h.ratio} for h in holdings
+            {"stock_name": h.stock_name, "stock_code": h.stock_code, "ratio": h.ratio}
+            for h in holdings
         ]
+        # 真概念映射（THS 表，渐进获取；无数据返回空 → 关键词回退）
+        from backend.services.concept_map_service import get_stock_concepts
+        concept_map = await get_stock_concepts(
+            self.db, [h.stock_code for h in holdings]
+        )
         result = await run_with_timeout(
             build_double_tags,
             fund.code, fund.name or "", fund.fund_type, holds_payload,
-            timeout=25.0,
+            timeout=25.0, concept_map=concept_map,
         )
         # F10 瞬时失败：保留旧 official/benchmark，避免瞬时网络错误
         # 把已正确的分类冲掉（2026-08-30 复查修复）
@@ -321,12 +327,17 @@ async def enrich_fund_themes(codes: list[str]) -> None:
                     continue
                 holdings = await get_latest_holdings(session, fund.id, limit=50)
                 holds_payload = [
-                    {"stock_name": h.stock_name, "ratio": h.ratio} for h in holdings
+                    {"stock_name": h.stock_name, "stock_code": h.stock_code, "ratio": h.ratio}
+                    for h in holdings
                 ]
+                from backend.services.concept_map_service import get_stock_concepts
+                concept_map = await get_stock_concepts(
+                    session, [h.stock_code for h in holdings]
+                )
                 tags_result = await run_with_timeout(
                     build_double_tags,
                     code, fund.name or "", fund.fund_type, holds_payload,
-                    timeout=25.0,
+                    timeout=25.0, concept_map=concept_map,
                 )
                 fund.tags = tags_result["tags"]
                 if not tags_result.get("_fetch_failed") or fund.fund_type_official is None:

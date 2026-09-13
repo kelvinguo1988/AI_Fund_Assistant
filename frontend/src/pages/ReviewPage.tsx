@@ -29,7 +29,7 @@ import {
 } from '@mui/icons-material';
 import { reviewApi, type ReviewReport } from '../api/review';
 import { compareApi, type CompareReport, type FundCompareItem } from '../api/compare';
-import { fundApi } from '../api/fund';
+import { fundApi, overlapApi, type HoldingOverlap } from '../api/fund';
 import {
   Tab as MuiTab,
   Tabs as MuiTabs,
@@ -66,6 +66,7 @@ const ReviewPage: React.FC = () => {
   const [pkYears, setPkYears] = useState(2);
   const [pkLoading, setPkLoading] = useState(false);
   const [pkReport, setPkReport] = useState<CompareReport | null>(null);
+  const [overlap, setOverlap] = useState<HoldingOverlap | null>(null);
 
   useEffect(() => {
     fundApi.list('active')
@@ -74,9 +75,16 @@ const ReviewPage: React.FC = () => {
   }, []);
 
   const togglePk = (id: number) => {
-    setPkSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 10 ? prev : [...prev, id],
-    );
+    setPkSelected((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 10 ? prev : [...prev, id];
+      // 重叠度跟随选中基金（≥2 只时）
+      if (next.length >= 2) {
+        overlapApi.get(next).then((r) => setOverlap(r.data || null)).catch(() => setOverlap(null));
+      } else {
+        setOverlap(null);
+      }
+      return next;
+    });
   };
 
   const runPk = async () => {
@@ -394,6 +402,37 @@ const ReviewPage: React.FC = () => {
             </TableBody>
           </Table>
         </TableContainer>
+      )}
+
+      {overlap && overlap.overlaps.length > 0 && (
+        <Card sx={{ mt: 3 }}>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>重仓股重叠度</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              选中 {overlap.funds_count} 只基金的重仓股共同持有排行——只数越多抱团越集中，注意同涨同跌风险。
+            </Typography>
+            <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 300 }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>股票</TableCell>
+                    <TableCell align="right">被持有基金数</TableCell>
+                    <TableCell align="right">合计占净值</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {overlap.overlaps.filter((o) => o.funds_count >= 2).map((o) => (
+                    <TableRow key={o.stock_code} hover>
+                      <TableCell>{o.stock_name}({o.stock_code})</TableCell>
+                      <TableCell align="right">{o.funds_count}</TableCell>
+                      <TableCell align="right">{o.total_ratio != null ? `${o.total_ratio.toFixed(2)}%` : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </CardContent>
+        </Card>
       )}
 
       {pkReport && (
