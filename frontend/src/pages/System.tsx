@@ -374,6 +374,24 @@ const SystemPage: React.FC = () => {
             >
               {cmFetching ? '抓取中…' : '抓取一批（20 个板块）'}
             </Button>
+            <Button size="small" onClick={async () => {
+              try { await conceptMapApi.export(); } catch (err: any) {
+                setError(err?.message || '导出失败');
+              }
+            }}>
+              导出映射
+            </Button>
+            <Button size="small" color="error" onClick={async () => {
+              if (!window.confirm('清空全部概念映射？（建议先导出备份）')) return;
+              try {
+                await conceptMapApi.clear();
+                await loadCmProgress();
+              } catch (err: any) {
+                setError(err?.message || '清空失败');
+              }
+            }}>
+              清空
+            </Button>
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
             同花顺概念板块成分映射（基金副标签的真概念来源）。渐进获取：每轮抓 20 个最久未更新的板块（防封禁），

@@ -154,6 +154,20 @@ export const conceptMapApi = {
 
   fetchBatch: () =>
     apiClient.post<ApiResponse<{ fetched: number; stocks: number; failed: number; remaining_hint: string }>>('/api/funds/concept-map/fetch', {}, { timeout: 300000 }).then((r) => r.data),
+
+  clear: () =>
+    apiClient.delete<ApiResponse<number>>('/api/funds/concept-map').then((r) => r.data),
+
+  /** 导出映射 JSON（与导入格式兼容，备份/迁移用） */
+  export: () =>
+    apiClient.get('/api/funds/concept-map/export', { responseType: 'blob', timeout: 60000 }).then((r) => {
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `concept_map_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    }),
 };
 
 export interface HoldingOverlap {

@@ -514,3 +514,46 @@ async def holding_overlap(
         for r in rows
     ]
     return ApiResponse(data={"funds_count": len(funds), "overlaps": overlaps})
+
+
+@router.get("/concept-map/export")
+async def export_concept_map():
+    """导出概念映射 JSON（与导入格式兼容，备份/迁移用）"""
+    from backend.database import async_session_factory
+    from backend.models.concept_board_map import ConceptBoardMap
+    from fastapi.responses import Response
+    from sqlalchemy import select
+
+    async with async_session_factory() as session:
+        rows = (await session.execute(
+            select(ConceptBoardMap.concept, ConceptBoardMap.stock_code)
+            .order_by(ConceptBoardMap.concept, ConceptBoardMap.stock_code)
+        )).all()
+    concepts: dict[str, list[str]] = {}
+    for cname, sc in rows:
+        concepts.setdefault(cname, []).append(sc)
+    payload = {
+        "source": "AI_Fund_Assistant 概念映射导出",
+        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "concepts": concepts,
+    }
+    body = json.dumps(payload, ensure_ascii=False, indent=1)
+    filename = f"concept_map_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    return Response(
+        content=body,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+
+@router.delete("/concept-map", response_model=ApiResponse[int])
+async def clear_concept_map():
+    """清空概念映射（重新导入前清场）"""
+    from backend.database import async_session_factory
+    from backend.models.concept_board_map import ConceptBoardMap
+    from sqlalchemy import delete
+    async with async_session_factory() as session:
+        n = (await session.execute(delete(ConceptBoardMap))).rowcount
+        await session.commit()
+    return ApiResponse(data=n)
