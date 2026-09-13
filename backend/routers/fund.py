@@ -434,9 +434,14 @@ async def etf_scan(db: AsyncSession = Depends(get_db)):
 
     svc = FundRealtimeService(db)
     spot_map = await svc._get_etf_spot()  # 全市场快照（60s 缓存/熔断链路复用）
+    # 2026-08-31 修复：快照拿不到（东财限连+熔断）原静默返回空列表，
+    # 用户无法区分"无符合条件"与"数据源不可用"
     if not spot_map:
-        return ApiResponse(data={"scanned": 0, "movers": [], "inflow": [],
-                                 "unusual": [], "pool_codes": list(pool_codes)})
+        return ApiResponse(data={
+            "enabled": True, "scanned": 0, "movers": [], "inflow": [],
+            "unusual": [], "pool_codes": list(pool_codes),
+            "error": "ETF 全市场快照不可用——数据源被限流或熔断中（约 10 分钟后自动恢复），稍后重新扫描",
+        })
 
     result = scan_potential(spot_map, pool_codes)
     result["pool_codes"] = list(pool_codes)

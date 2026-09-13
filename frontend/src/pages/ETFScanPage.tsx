@@ -51,7 +51,9 @@ const ETFScanPage: React.FC = () => {
     setError(null);
     try {
       const res = await fundApi.etfScan();
-      setResult(res.data as ETFScanResult);
+      const d = res.data as ETFScanResult;
+      if (d?.error) setError(d.error);
+      setResult(d);
       poolRef.current = new Set((res.data as ETFScanResult)?.pool_codes ?? []);
     } catch (err: any) {
       setError(err?.response?.data?.detail || err?.message || '扫描失败');

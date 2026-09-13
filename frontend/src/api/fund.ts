@@ -135,6 +135,8 @@ export interface ETFScanResult {
   inflow: ETFScanItem[];
   unusual: ETFScanItem[];
   pool_codes: string[];
+  enabled?: boolean;
+  error?: string;
 }
 
 /* ── 概念映射（THS 渐进获取）── */
