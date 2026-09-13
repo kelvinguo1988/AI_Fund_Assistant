@@ -217,3 +217,21 @@ async def test_feature_flags_roundtrip():
         with pytest.raises(HTTPException):
             await update_feature_flags({"etf_hints_enabled": "false"}, db)
     await engine.dispose()
+
+
+class TestTypeEquivalenceStructured:
+    """结构化类型等价（2026-09-12 用户日志反馈回归）"""
+
+    def test_user_reported_cases_no_warning(self):
+        from backend.services.fund_tag_service import _types_equivalent as eq
+        assert eq("QDII-混合偏股", "QDII-混合")       # 016702
+        assert eq("混合型-灵活", "混合型-灵活配置")   # 005851
+        assert eq("指数型-股票", "股票型-标准指数")   # 023639
+        assert eq("股票型", "股票型-普通")             # 018495
+
+    def test_real_conflicts_still_detected(self):
+        from backend.services.fund_tag_service import _types_equivalent as eq
+        assert not eq("股票型", "债券型")
+        assert not eq("混合型-偏股", "混合型-灵活")
+        assert not eq("指数型-股票", "混合型-偏股")
+        assert not eq("QDII", "混合型-偏股")

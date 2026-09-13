@@ -299,13 +299,45 @@ _XQ_TYPE_NORMALIZE = {
 }
 
 
+# 无信息量修饰词（雪球粗分类后缀，与 F10 细分不构成冲突）
+_VAGUE_QUALIFIERS = {"普通", "标准指数", "普通股票型", ""}
+
+
+def _type_parts(t: str) -> tuple[str, str]:
+    """拆类型为 (大类, 修饰)：QDII-混合偏股 → (QDII, 混合偏股)"""
+    if "-" in t:
+        head, tail = t.split("-", 1)
+        return head.strip(), tail.strip()
+    return t.strip(), ""
+
+
 def _types_equivalent(a: str, b: str) -> bool:
-    """两源基金类型语义等价判断（归一化后比较）"""
+    """两源基金类型语义等价判断（结构化归一）
+
+    2026-09-12 增强：点对点枚举覆盖不完（QDII-混合偏股 vs QDII-混合 这类
+    粗细口径差异持续冒出）。改为结构化规则：
+    1. 别名映射（雪球命名 → F10 口径）
+    2. 大类不同 → 不等价
+    3. 大类相同：修饰词互为前缀/包含，或一方为无信息修饰（普通/空）→ 等价；
+       否则（偏股 vs 灵活、偏债 vs 偏股）→ 真冲突
+    """
     if a == b:
         return True
-    na = _XQ_TYPE_NORMALIZE.get(a, a)
-    nb = _XQ_TYPE_NORMALIZE.get(b, b)
-    return na == nb
+    a = _XQ_TYPE_NORMALIZE.get(a, a)
+    b = _XQ_TYPE_NORMALIZE.get(b, b)
+    if a == b:
+        return True
+    head_a, qual_a = _type_parts(a)
+    head_b, qual_b = _type_parts(b)
+    if head_a != head_b:
+        return False
+    # 大类相同：
+    if not qual_a or not qual_b:
+        return True  # 一方无修饰（如 "股票型" vs "股票型-普通"）
+    if qual_a in _VAGUE_QUALIFIERS or qual_b in _VAGUE_QUALIFIERS:
+        return True
+    # 修饰互为前缀/包含（"混合偏股" ⊃ "混合"）→ 同一类型粗细口径
+    return qual_a.startswith(qual_b) or qual_b.startswith(qual_a) or qual_a in qual_b or qual_b in qual_a
 
 
 def fetch_xq_basic(code: str) -> Optional[dict]:
