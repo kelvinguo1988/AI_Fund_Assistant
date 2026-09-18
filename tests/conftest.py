@@ -30,3 +30,19 @@ def _block_heavy_network(monkeypatch):
     # 雪球基本信息交叉源（每次标签刷新逐基金请求）
     import backend.services.fund_tag_service as _ft
     monkeypatch.setattr(_ft, "fetch_xq_basic", lambda code: None)
+
+
+@pytest.fixture
+async def db_session():
+    """共享内存库会话（原 4 个测试文件各自复制粘贴，统一于此）"""
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from backend.database import Base
+    import backend.models  # noqa: F401
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as session:
+        yield session
+    await engine.dispose()

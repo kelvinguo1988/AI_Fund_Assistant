@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
+import { formatBeijingTime as formatRefreshTime } from '../utils/format';
 import {
   Box,
   Grid,
@@ -115,27 +116,6 @@ const Dashboard: React.FC = () => {
       .catch(() => { /* 估值卡片失败静默 */ });
   }, [loadRealtime]);
 
-  /** 格式化更新时间为北京时间显示
-   *  后端返回北京时间墙钟的 naive ISO 串（无时区标记）→ 直接展示；
-   *  若带时区标记（Z / ±hh:mm）→ 按 Instant 换算到 Asia/Shanghai。 */
-  const formatRefreshTime = (isoStr: string | null): string => {
-    if (!isoStr) return '暂无';
-    try {
-      if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(isoStr)) {
-        const d = new Date(isoStr);
-        if (!isNaN(d.getTime())) {
-          return new Intl.DateTimeFormat('zh-CN', {
-            timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
-            day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-          }).format(d).split('/').join('-');
-        }
-      }
-      const m = isoStr.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
-      return m ? `${m[1]} ${m[2]} (北京时间)` : isoStr;
-    } catch {
-      return isoStr;
-    }
-  };
 
   /** 加载缓存数据（快速） */
   const loadCached = async () => {

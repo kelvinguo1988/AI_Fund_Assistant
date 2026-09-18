@@ -51,7 +51,31 @@ apiClient.interceptors.response.use(
       message = '服务器内部错误';
     }
     console.error(`[HTTP Error] status=${status}, message=${message}`);
-    return Promise.reject(new Error(message));
+    // 2026-09-12 修复：保留 response 使 10+ 处 err.response.data.detail
+    // 读取生效（后端 400 详情如"复盘区间最长 2 年"直达用户）；
+    // displayMessage 为统一展示口径
+    const detail =
+      (error.response?.data as { detail?: string } | undefined)?.detail || message;
+    const err = new Error(detail) as Error & {
+      response?: AxiosError['response'];
+      displayMessage?: string;
+    };
+    err.response = error.response;
+    err.displayMessage = detail;
+    // 5xx 自动上报错误铃铛（fire-and-forget，杜绝二次异常）
+    if (status && status >= 500) {
+      import('./errorLog').then(({ errorLogApi }) => {
+        errorLogApi
+          .report({
+            module: 'frontend.http',
+            message: `${error.config?.method?.toUpperCase() ?? 'GET'} ${error.config?.url ?? ''} → ${status}`,
+            category: 'other',
+            detail,
+          })
+          .catch(() => {});
+      });
+    }
+    return Promise.reject(err);
   }
 );
 

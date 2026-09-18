@@ -642,6 +642,18 @@ class AKShareAdapter(BaseDataSource):
                 AKShareAdapter._benchmark_ts = now
                 logger.info(f"基准指数数据填充完成: {len(history)} 行（首次网络请求）")
 
+    async def get_benchmark_series(self, symbol: str = "sh000300", period: int = 600) -> list[tuple[str, float]]:
+        """沪深300 官方指数点位序列（升序）——复用 _benchmark_cache
+
+        2026-09-12 复查：review/compare 服务各自直连该接口绕过缓存，
+        同一小时同一序列最多打 3 次东财——统一走此方法命中类级缓存。
+        """
+        fund_data = FundData(code="benchmark")
+        await self._fill_benchmark_data(fund_data, period)
+        dates = fund_data.date_history or []
+        closes = fund_data.benchmark_history or []
+        return sorted(zip(dates, closes))
+
     async def _fill_fund_size(self, code: str, fund_data: FundData) -> None:
         """填充基金季度规模数据用于规模稳定性计算
 

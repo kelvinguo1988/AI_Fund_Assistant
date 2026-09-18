@@ -31,6 +31,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 import logging
 import re
 import time
@@ -1136,7 +1137,9 @@ def _fund_benchmark_text(code: str) -> str:
     """查库取基金基准文本（指数匹配用；无记录返回空）"""
     try:
         import sqlite3
-        conn = sqlite3.connect("data/fund_quant.db", timeout=5)
+        from backend.config import settings
+        db_path = Path(settings.DATABASE_DIR) / settings.DATABASE_NAME
+        conn = sqlite3.connect(str(db_path), timeout=5)
         try:
             row = conn.execute(
                 "SELECT benchmark_text FROM funds WHERE code = ?", (code,)
@@ -1167,7 +1170,9 @@ def _fund_tags_map() -> dict:
     """查库 {code: tags}（固收+ 判定用；查不到返回空）"""
     try:
         import sqlite3
-        conn = sqlite3.connect("data/fund_quant.db", timeout=5)
+        from backend.config import settings
+        db_path = Path(settings.DATABASE_DIR) / settings.DATABASE_NAME
+        conn = sqlite3.connect(str(db_path), timeout=5)
         try:
             return {c: (t or "") for c, t in
                     conn.execute("SELECT code, tags FROM funds")}

@@ -174,19 +174,10 @@ class ReviewService:
         try:
             from backend.data_sources.akshare_adapter import AKShareAdapter
             adapter = AKShareAdapter()
-
-            def _fetch():
-                import akshare as ak
-                df = ak.stock_zh_index_daily(symbol="sh000300")
-                return df
-
-            df = await adapter._call(_fetch)
-            if df is None or df.empty:
+            # 2026-09-12 复查：复用 adapter 基准缓存（原先直连绕过 1h 缓存）
+            series = await adapter.get_benchmark_series()
+            if not series:
                 return None
-            series = sorted(
-                (str(d)[:10], float(c))
-                for d, c in zip(df["date"], df["close"])
-            )
             s0 = _nearest_on_or_before(series, start_date)
             s1 = _nearest_on_or_before(series, end_date)
             if s0 and s1 and s0[1] > 0:

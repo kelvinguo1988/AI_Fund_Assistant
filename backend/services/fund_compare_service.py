@@ -166,15 +166,8 @@ class FundCompareService:
         adapter = AKShareAdapter()
         fetch_days = 365 * 5 + 40  # 成立以来窗口上限 5 年
 
-        # 基准序列（官方指数点位，升序）
-        def _fetch_bench():
-            import akshare as ak
-            df = ak.stock_zh_index_daily(symbol="sh000300")
-            return sorted(
-                (str(d)[:10], float(c)) for d, c in zip(df["date"], df["close"])
-            )
-
-        bench_series = await adapter._call(_fetch_bench)
+        # 基准序列（复用 adapter 基准缓存，2026-09-12 复查修复）
+        bench_series = await adapter.get_benchmark_series()
 
         # 并发拉各基金净值
         import asyncio

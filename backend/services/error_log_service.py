@@ -23,7 +23,17 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("data") / "fund_quant.db"
+# 2026-09-12 复查修复：原硬编码 "data/fund_quant.db"，自定义
+# FUND_QUANT_DATABASE_DIR 部署时错误日志会写错库——从 settings 取
+def _resolve_db_path() -> Path:
+    try:
+        from backend.config import settings
+        return Path(settings.DATABASE_DIR) / settings.DATABASE_NAME
+    except Exception:
+        return Path("data") / "fund_quant.db"
+
+
+DB_PATH = _resolve_db_path()
 MAX_ROWS = 2000
 RETENTION_DAYS = 30   # 保留期：超过 30 天的日志在下次写入时清理
 THROTTLE_WINDOW = 60.0

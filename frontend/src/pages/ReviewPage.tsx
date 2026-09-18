@@ -36,17 +36,12 @@ import {
 } from '@mui/material';
 import { reviewApi as _unusedGuard } from '../api/review';
 import { aiApi } from '../api/ai';
+import { pct, growthColor } from '../utils/format';
 
 // 本地日期（UTC ISO 串在北京时间 0-8 点会显示昨天）
 const localDate = (d: Date) => d.toLocaleDateString('en-CA');
 const today = () => localDate(new Date());
 const monthAgo = () => localDate(new Date(Date.now() - 30 * 86400000));
-
-const pct = (v?: number | null, digits = 2) =>
-  v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(digits)}%`;
-
-const growthColor = (v?: number | null) =>
-  v == null ? 'inherit' : v > 0 ? '#f44336' : v < 0 ? '#4caf50' : 'inherit';
 
 const ReviewPage: React.FC = () => {
   const [startDate, setStartDate] = useState(monthAgo());

@@ -358,7 +358,10 @@ async def report_error(body: dict):
 
 
 @router.get("/index-valuations")
-async def index_valuations(force: bool = False):
+async def index_valuations(
+    force: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
     """主要指数 PE 高低估区间（近一年分位口径；沪深300/中证500/上证50/中证1000）"""
     from backend.services.index_valuation_service import IndexValuationService
     # otc 开关关闭时不拉取（省资源）

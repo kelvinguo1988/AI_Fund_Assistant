@@ -24,13 +24,8 @@ import {
 } from '@mui/material';
 import { TravelExplore as ScanIcon, Add as AddIcon } from '@mui/icons-material';
 import { fundApi, type ETFScanItem, type ETFScanResult } from '../api/fund';
+import { pct, growthColor } from '../utils/format';
 import type { FundCreate } from '../types';
-
-const pct = (v?: number | null, suffix = '%') =>
-  v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}${suffix}`;
-
-const growthColor = (v?: number | null) =>
-  v == null ? 'inherit' : v > 0 ? '#f44336' : v < 0 ? '#4caf50' : 'inherit';
 
 const fmtAmount = (v?: number | null) =>
   v == null ? '—' : `${(v / 1e8).toFixed(2)} 亿`;

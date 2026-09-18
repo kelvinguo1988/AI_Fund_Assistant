@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { formatBeijingTime } from '../utils/format';
 import {
   Box,
   Typography,
@@ -119,25 +120,6 @@ const FundDetailPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** 格式化更新时间为北京时间显示（与 Dashboard.formatRefreshTime 逻辑一致） */
-  const formatTime = (iso: string | null) => {
-    if (!iso) return '暂无';
-    try {
-      if (/[Zz]$|[+-]\d{2}:?\d{2}$/.test(iso)) {
-        const d = new Date(iso);
-        if (!isNaN(d.getTime())) {
-          return new Intl.DateTimeFormat('zh-CN', {
-            timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
-            day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-          }).format(d).split('/').join('-');
-        }
-      }
-      const m = iso.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/);
-      return m ? `${m[1]} ${m[2]} (北京时间)` : iso;
-    } catch {
-      return iso;
-    }
-  };
 
   return (
     <Box sx={{ p: 3 }}>
@@ -145,7 +127,7 @@ const FundDetailPage: React.FC = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Typography variant="h5">基金详情</Typography>
-          <Chip size="small" label={`数据更新: ${formatTime(updatedAt)}`}
+          <Chip size="small" label={`数据更新: ${formatBeijingTime(updatedAt)}`}
             variant="outlined" sx={{ fontSize: '0.75rem' }} />
           {refreshing && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

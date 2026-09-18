@@ -2,7 +2,6 @@
 
 import sys, os
 import pytest
-import pytest_asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -15,19 +14,6 @@ from backend.services.auto_backtest_service import (
 )
 
 
-@pytest_asyncio.fixture
-async def db_session():
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from backend.database import Base
-    import backend.models
-
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as session:
-        yield session
-    await engine.dispose()
 
 
 def _fund(id, code, name=""):
