@@ -190,11 +190,23 @@ def log_source_failure(module: str, message: str, category: str = "rate_limit",
 
 
 def classify_source_error(exc_text: str) -> str:
-    """按异常文本归类错误（限流优先）"""
+    """按异常文本归类错误（限流优先）
+
+    2026-09-12 复查：与 adapter._is_rate_limited 的标记集对齐
+    （原 ProxyError 在此归 rate_limit 但在 _call 里被重试 3 次的
+    不一致；403/verify 原漏判为 other）
+    """
     t = exc_text.lower()
+    try:
+        from backend.data_sources.akshare_adapter import _RATE_LIMIT_MARKERS
+        if any(k in t for k in _RATE_LIMIT_MARKERS):
+            return "rate_limit"
+    except Exception:
+        pass
     if any(k in t for k in (
         "remotedisconnected", "connection aborted", "connection reset",
         "proxyerror", "429", "too many requests", "rate limit", "限流", "封",
+        "forbidden", "verify",
     )):
         return "rate_limit"
     if "timeout" in t or "timed out" in t:

@@ -650,7 +650,9 @@ class AKShareAdapter(BaseDataSource):
         """
         fund_data = FundData(code="benchmark")
         await self._fill_benchmark_data(fund_data, period)
-        dates = fund_data.date_history or []
+        # 2026-09-12 修复：原读 date_history（恒空）→ 序列恒 []，
+        # 复盘的超额收益与 PK 的全部基准归因指标（Beta/Alpha/IR）静默死亡
+        dates = fund_data.benchmark_date_history or []
         closes = fund_data.benchmark_history or []
         return sorted(zip(dates, closes))
 

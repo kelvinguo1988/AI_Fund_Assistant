@@ -267,8 +267,9 @@ def fetch_f10_profile(code: str) -> Optional[dict]:
     """
     url = F10_URL.format(code=code)
     try:
+        # 8s：build_double_tags 外层 25s 预算内还要装 XQ 兜底调用
         resp = requests.get(
-            url, headers={"Referer": "https://fundf10.eastmoney.com/"}, timeout=15
+            url, headers={"Referer": "https://fundf10.eastmoney.com/"}, timeout=8
         )
         resp.encoding = "utf-8"
     except Exception as e:
@@ -387,6 +388,7 @@ def build_double_tags(
         {tags, fund_type_official, benchmark_text, exposure_tags, is_mutual_fund}
     """
     fetch_failed = False
+    _xq_cross_cache = None  # 雪球兜底结果复用（交叉验证免二次请求）
     if f10 is None:
         try:
             f10 = fetch_f10_profile(code)
@@ -394,10 +396,13 @@ def build_double_tags(
             # F10 网络失败 → 雪球基本信息兜底类型（2026-08-31 第二数据源）
             logger.warning(f"{e}；尝试雪球基本信息兜底")
             fetch_failed = True
-            xq = fetch_xq_basic(code)
+            _xq_cross_cache = xq = fetch_xq_basic(code)
             if xq and xq.get("fund_type"):
                 f10 = {"official_type": xq["fund_type"], "benchmark": xq.get("benchmark")}
                 logger.info(f"雪球类型兜底 code={code}: {xq['fund_type']}")
+            else:
+                # F10+XQ 双失败：整体降级（调用方据此保留旧 tags 不覆盖）
+                fetch_failed = "total"
     is_mutual = False
     official_type = benchmark = None
 
@@ -426,9 +431,10 @@ def build_double_tags(
     # 2026-09-12 修复：F10 与雪球对同一类型命名口径不同（如 混合型-灵活 vs
     # 混合型-灵活配置、指数型-股票 vs 股票型-标准指数），原字面比较
     # 把口径差异全当错误，4/4 误报污染日志
+    # 2026-09-12 复查：雪球兜底场景复用已拉取结果（原二次请求浪费）
     if f10 and official_type:
         try:
-            xq = fetch_xq_basic(code)
+            xq = _xq_cross_cache if _xq_cross_cache is not None else fetch_xq_basic(code)
             if xq and xq.get("fund_type") and not _types_equivalent(
                 official_type, xq["fund_type"]
             ):

@@ -278,6 +278,10 @@ class FundService:
         )
         # F10 瞬时失败：保留旧 official/benchmark，避免瞬时网络错误
         # 把已正确的分类冲掉（2026-08-30 复查修复）
+        # F10+XQ 双失败（total）：旧 tags 整体保留，不写名称兜底标签
+        if result.get("_fetch_failed") == "total" and fund.tags:
+            await self.db.refresh(fund)
+            return fund
         fund.tags = result["tags"]
         if not result.get("_fetch_failed") or fund.fund_type_official is None:
             fund.fund_type_official = result["fund_type_official"]

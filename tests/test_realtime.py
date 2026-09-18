@@ -485,40 +485,28 @@ class TestSourceCircuitBreaker:
         # 其他源不受影响
         assert FundRealtimeService._source_available("sina")
 
-    def test_em_breaker_skips_request_and_falls_to_sina(self, monkeypatch):
-        """东财熔断期间不发请求，直接走新浪"""
+    def test_em_breaker_skips_request_tencent_terminal(self, monkeypatch):
+        """东财熔断期间不发 EM 请求；腾讯按需为末端层（新浪全市场层已移除）"""
         import asyncio
-        import pandas as pd
+        import time as _t
 
-        FundRealtimeService._source_fail_until["eastmoney"] = float("inf")
-        svc = FundRealtimeService(db=None)
+        FundRealtimeService._source_fail_until["eastmoney"] = _t.time() + 600
+        FundRealtimeService._source_fail_until["sina"] = _t.time() + 600
+        FundRealtimeService._stock_spot_cache = None
+        FundRealtimeService._stock_ts = 0.0
+        try:
+            svc = FundRealtimeService(db=None)
 
-        em_called = []
+            async def _fake_tencent(self, codes):
+                return {"600000": 1.5, "000001": -0.5}
 
-        def _fake_em(*a, **k):
-            em_called.append(1)
-            raise RuntimeError("should not be called")
+            monkeypatch.setattr(FundRealtimeService, "_get_tencent_pct", _fake_tencent)
+            result = asyncio.run(svc._get_stock_spot(codes=["600000", "000001"]))
+            assert result == {"600000": 1.5, "000001": -0.5}
+        finally:
+            FundRealtimeService._source_fail_until.clear()
+            FundRealtimeService._stock_spot_cache = None
 
-        def _fake_sina(*a, **k):
-            return pd.DataFrame({
-                "代码": ["sh600000", "sz000001"],
-                "涨跌幅": [1.5, -0.5],
-            })
-
-        import akshare as ak
-        monkeypatch.setattr(ak, "stock_zh_a_spot_em", _fake_em)
-        monkeypatch.setattr(ak, "stock_zh_a_spot", _fake_sina)
-
-        class _FakeAdapter:
-            async def _call(self, func, *a, **k):
-                return func(*a, **k)
-
-        import backend.data_sources.akshare_adapter as _ada
-        monkeypatch.setattr(_ada, "AKShareAdapter", _FakeAdapter)
-
-        result = asyncio.run(svc._get_stock_spot())
-        assert em_called == [], "东财熔断期间不应发出请求"
-        assert result == {"600000": 1.5, "000001": -0.5}
 
     def test_all_sources_cooldown_returns_fast(self, monkeypatch):
         """双源都熔断 → 秒回 None，零网络请求"""

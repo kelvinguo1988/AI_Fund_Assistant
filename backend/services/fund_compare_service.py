@@ -166,8 +166,12 @@ class FundCompareService:
         adapter = AKShareAdapter()
         fetch_days = 365 * 5 + 40  # 成立以来窗口上限 5 年
 
-        # 基准序列（复用 adapter 基准缓存，2026-09-12 复查修复）
-        bench_series = await adapter.get_benchmark_series()
+        # 基准序列（复用 adapter 基准缓存；失败降级 None 指标而非 500）
+        try:
+            bench_series = await adapter.get_benchmark_series(period=365 * 5 + 40)
+        except Exception as e:
+            logger.warning(f"基准序列获取失败，归因指标将缺失: {e}")
+            bench_series = []
 
         # 并发拉各基金净值
         import asyncio
