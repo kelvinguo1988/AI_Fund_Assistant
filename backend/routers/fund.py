@@ -310,20 +310,14 @@ async def get_funds_detail(
     # 2026-08-29 修复：原先 fetch_period_returns 与 update_period_returns_cache
     # 内部各抓一次全部 pingzhongdata JS——冷缓存时请求数翻倍（最易触发反爬的路径）
     # 改为复用缓存写入的返回值
-    returns, _js_texts = await update_period_returns_cache(db, codes, name_map)
+    # 2026-09-20 修复：该函数返回的是记录列表（含 code/name/return_*），
+    # 原按 dict.get 取值必抛 AttributeError → 无缓存冷路径恒定 500
+    fresh_items, _js_texts = await update_period_returns_cache(db, codes, name_map)
 
-    data = [
-        FundPeriodReturn(
-            code=code,
-            name=name_map.get(code, ""),
-            **returns.get(code, {}),
-        )
-        for code in codes
-    ]
     new_updated = await get_last_refreshed_time(db)
 
     return ApiResponse(data=FundDetailResponse(
-        funds=data,
+        funds=[FundPeriodReturn(**item) for item in fresh_items],
         updated_at=new_updated,
     ))
 
