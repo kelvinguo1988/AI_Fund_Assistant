@@ -228,6 +228,22 @@ class TestSizeShockAndDrift:
         assert buy == expected_buy
         assert sell == QUALITY_CONFIG["base_sell_threshold"]
 
+    def test_threshold_weight_scaling(self):
+        """折算开启时阈值随总权重等比缩放；默认(0)不改变现有口径"""
+        cfg = dict(QUALITY_CONFIG, threshold_ref_total_weight=6.0)
+        # 默认关闭 → scale=1
+        d_buy, _ = compute_dynamic_thresholds(False, False, regime_snapshot=None)
+        assert d_buy == QUALITY_CONFIG["base_buy_threshold"]
+        # 开启：总权重 9 / 参考 6 → 1.5 倍
+        buy, sell = compute_dynamic_thresholds(
+            False, False, cfg, regime_snapshot=None, total_weight=9.0,
+        )
+        assert buy == pytest.approx(1.5 * 1.5)
+        assert sell == pytest.approx(-1.5 * 1.5)
+        # total_weight 缺失 → 不折算
+        buy2, _ = compute_dynamic_thresholds(False, False, cfg, regime_snapshot=None)
+        assert buy2 == QUALITY_CONFIG["base_buy_threshold"]
+
     def test_score_below_raised_threshold_is_hold(self):
         """原本可达标的分数在上调阈值后变为观望
 

@@ -33,6 +33,9 @@ class FactorScoreResult:
     raw_value: float      # 原始计算值
     score: float          # -1.0 ~ +1.0 标准化评分
     direction: str        # positive / negative
+    # 数据不足置 False：截面标准化必须把它剔除出 mean/std 样本池，
+    # 否则"缺数据中性 0"会被当成真实值参与排名（新基金被误判为最差档）
+    data_valid: bool = True
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -154,6 +157,18 @@ def evaluate_signal_rules(raw_value: float, rules: list[dict]) -> float:
     return 0.0
 
 
+def rules_from_params(params: Optional[dict], default_rules: list[dict]) -> list[dict]:
+    """DB 配置的 signal_rules 优先于计算函数内嵌默认规则
+
+    calculate_all 会把因子行的 signal_rules 解析进 params["_signal_rules"]；
+    修复 2026-09-20 审查发现的"假可配项"——前端改了信号规则但引擎恒用内嵌值。
+    """
+    configured = (params or {}).get("_signal_rules")
+    if isinstance(configured, list) and configured:
+        return configured
+    return default_rules
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 截面标准化
 # ═══════════════════════════════════════════════════════════════════════
@@ -171,9 +186,21 @@ def apply_cross_sectional_zscore(
     Returns:
         {fund_code: normalized_score}
     """
-    values = np.array(list(scores.values()))
+    codes = list(scores.keys())
+    values = np.array([scores[c] for c in codes], dtype=float)
     if len(values) < 2 or np.std(values) == 0:
         return {k: 0.0 for k in scores}
+
+    # 去极值：单只极端值（如低波货基 inv_vol 达数百）会扭曲 mean/std，
+    # 把其余基金全部压到中间档。用 median ± 3.5×1.4826×MAD 的稳健边界截尾
+    # （Iglewicz 习惯阈值；1%/99% 分位在常规池规模下几乎不生效，不用）。
+    finite = values[np.isfinite(values)]
+    if len(finite) >= 5:
+        med = float(np.median(finite))
+        mad = float(np.median(np.abs(finite - med)))
+        bound = 3.5 * 1.4826 * mad
+        if mad > 0:
+            values = np.clip(values, med - bound, med + bound)
 
     mean = float(np.mean(values))
     std = float(np.std(values))
@@ -194,7 +221,7 @@ def apply_cross_sectional_zscore(
             else 0.0 if z > t[2] else -0.5 if z > t[3] else -1.0
         )
 
-    return {code: _bucket(val) for code, val in scores.items()}
+    return {code: _bucket(val) for code, val in zip(codes, values)}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -220,14 +247,14 @@ def calculate_price_percentile(fund_data: FundData, params: Optional[dict] = Non
         # （PE≈20 vs 净值≈1.5），pct 恒为 1.0，该基金永远拿 -1.0 垃圾分。
         # close 缺失时直接返回中性分。
         logger.warning(f"价格百分位数据不足 code={fund_data.code}")
-        return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative")
+        return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative", data_valid=False)
 
     history = np.array(fund_data.close_history[-window:]) if fund_data.close_history else np.array([current_close])
     if len(history) < 2:
         # 2026-09-20 复查修复：单点历史（close_history 为空但 close 有值）时
         # percentile 恒为 1.0 → 命中 >0.8 规则永远拿 -1.0，新基金被稳定惩罚
         logger.warning(f"价格百分位历史不足 2 个点 code={fund_data.code}，取中性分")
-        return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative")
+        return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative", data_valid=False)
     pct = percentile_rank(current_close, history)
 
     rules = [
@@ -237,7 +264,7 @@ def calculate_price_percentile(fund_data: FundData, params: Optional[dict] = Non
         {"condition": "<= 0.8", "score": -0.5},
         {"condition": "> 0.8", "score": -1.0},
     ]
-    score = evaluate_signal_rules(pct, rules)
+    score = evaluate_signal_rules(pct, rules_from_params(params, rules))
     return FactorScoreResult("price_percentile", "价格百分位", round(pct, 4), score, "negative")
 
 
@@ -254,7 +281,7 @@ def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> F
     """
     if fund_data.pe is None or fund_data.pe <= 0:
         logger.warning(f"FED模型数据不足 code={fund_data.code}")
-        return FactorScoreResult("fed_model", "股债性价比FED", 0.0, 0.0, "positive")
+        return FactorScoreResult("fed_model", "股债性价比FED", 0.0, 0.0, "positive", data_valid=False)
 
     earnings_yield = 1.0 / fund_data.pe * 100
     # 2026-08-26 修复：原代码 bond_yield 缺失时静默填 2.5 —— 实际利率偏离时
@@ -263,7 +290,7 @@ def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> F
     bond = fund_data.bond_yield
     if bond is None:
         logger.warning(f"股债性价比FED无债券收益率数据 code={fund_data.code}，返回中性")
-        return FactorScoreResult("fed_model", "股债性价比FED", 0.0, 0.0, "positive")
+        return FactorScoreResult("fed_model", "股债性价比FED", 0.0, 0.0, "positive", data_valid=False)
     fed_value = earnings_yield - bond
 
     rules = [
@@ -273,7 +300,7 @@ def calculate_fed_model(fund_data: FundData, params: Optional[dict] = None) -> F
         {"condition": "> -1", "score": -0.5},
         {"condition": "else", "score": -1.0},
     ]
-    score = evaluate_signal_rules(fed_value, rules)
+    score = evaluate_signal_rules(fed_value, rules_from_params(params, rules))
     return FactorScoreResult("fed_model", "股债性价比FED", round(fed_value, 4), score, "positive")
 
 
@@ -287,13 +314,13 @@ def calculate_momentum_6m(fund_data: FundData, params: Optional[dict] = None) ->
 
     if not fund_data.close_history or len(fund_data.close_history) < window + 10:
         logger.warning(f"动量因子数据不足 code={fund_data.code}")
-        return FactorScoreResult("momentum_6m", "动量因子", 0.0, 0.0, "positive")
+        return FactorScoreResult("momentum_6m", "动量因子", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history)
     returns = np.diff(prices) / prices[:-1]
 
     if len(returns) < window:
-        return FactorScoreResult("momentum_6m", "动量因子", 0.0, 0.0, "positive")
+        return FactorScoreResult("momentum_6m", "动量因子", 0.0, 0.0, "positive", data_valid=False)
 
     recent_returns = returns[-window:]
     # 2026-08-26 修复 off-by-one：prices[-window] 只有 window-1 个交易日区间，
@@ -309,7 +336,7 @@ def calculate_momentum_6m(fund_data: FundData, params: Optional[dict] = None) ->
         {"condition": ">= -1.0 and < -0.5", "score": -0.5},
         {"condition": "< -1.0", "score": -1.0},
     ]
-    score = evaluate_signal_rules(momentum, rules)
+    score = evaluate_signal_rules(momentum, rules_from_params(params, rules))
     return FactorScoreResult("momentum_6m", "动量因子", round(momentum, 4), score, "positive")
 
 
@@ -324,7 +351,7 @@ def calculate_inv_volatility(fund_data: FundData, params: Optional[dict] = None)
 
     if not fund_data.close_history or len(fund_data.close_history) < window + 5:
         logger.warning(f"波动率倒数数据不足 code={fund_data.code}")
-        return FactorScoreResult("inv_volatility", "波动率倒数", 0.0, 0.0, "positive")
+        return FactorScoreResult("inv_volatility", "波动率倒数", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history)
     returns = np.diff(prices) / prices[:-1]
@@ -352,7 +379,7 @@ def calculate_info_ratio(fund_data: FundData, params: Optional[dict] = None) -> 
             or len(fund_data.close_history) < window + 10
             or len(fund_data.benchmark_history) < window + 10):
         logger.warning(f"信息比率数据不足 code={fund_data.code}")
-        return FactorScoreResult("info_ratio", "信息比率", 0.0, 0.0, "positive")
+        return FactorScoreResult("info_ratio", "信息比率", 0.0, 0.0, "positive", data_valid=False)
 
     fund_prices, bench_prices = align_price_series(fund_data)
 
@@ -383,7 +410,7 @@ def calculate_macd_signal(fund_data: FundData, params: Optional[dict] = None) ->
 
     if not fund_data.close_history or len(fund_data.close_history) < slow + signal + 5:
         logger.warning(f"MACD数据不足 code={fund_data.code}")
-        return FactorScoreResult("macd_signal", "MACD信号", 0.0, 0.0, "positive")
+        return FactorScoreResult("macd_signal", "MACD信号", 0.0, 0.0, "positive", data_valid=False)
 
     closes = np.array(fund_data.close_history)
     ema_fast = ema(closes, fast)
@@ -420,7 +447,7 @@ def calculate_max_drawdown(fund_data: FundData, params: Optional[dict] = None) -
 
     if not fund_data.close_history or len(fund_data.close_history) < window + 5:
         logger.warning(f"最大回撤数据不足 code={fund_data.code}")
-        return FactorScoreResult("max_drawdown", "最大回撤", 0.0, 0.0, "positive")
+        return FactorScoreResult("max_drawdown", "最大回撤", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history[-window:])
     rolling_max = np.maximum.accumulate(prices)
@@ -447,14 +474,14 @@ def calculate_size_stability(fund_data: FundData, params: Optional[dict] = None)
 
     if not fund_data.fund_size_history or len(fund_data.fund_size_history) < window:
         logger.warning(f"规模稳定性数据不足 code={fund_data.code}")
-        return FactorScoreResult("size_stability", "规模稳定性", 0.0, 0.0, "positive")
+        return FactorScoreResult("size_stability", "规模稳定性", 0.0, 0.0, "positive", data_valid=False)
 
     sizes = np.array(fund_data.fund_size_history[-window:], dtype=float)
     mean_size = float(np.mean(sizes))
     std_size = float(np.std(sizes))
 
     if mean_size <= 0 or std_size <= 0:
-        return FactorScoreResult("size_stability", "规模稳定性", 0.0, 0.0, "positive")
+        return FactorScoreResult("size_stability", "规模稳定性", 0.0, 0.0, "positive", data_valid=False)
 
     size_cv = std_size / mean_size
     # cap=5：规模几乎不变时 1/CV 无界（CV=0.1% → stability=1000），
@@ -489,7 +516,7 @@ def calculate_short_momentum(fund_data: FundData, params: Optional[dict] = None)
     """
     window = (params or {}).get("window", 20)
     if not fund_data.close_history or len(fund_data.close_history) < window + 2:
-        return FactorScoreResult("short_momentum", "短期动量", 0.0, 0.0, "positive")
+        return FactorScoreResult("short_momentum", "短期动量", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history)
     mom = prices[-1] / prices[-window - 1] - 1
@@ -507,7 +534,7 @@ def calculate_mid_momentum(fund_data: FundData, params: Optional[dict] = None) -
     """
     window = (params or {}).get("window", 60)
     if not fund_data.close_history or len(fund_data.close_history) < window + 2:
-        return FactorScoreResult("mid_momentum", "中期动量", 0.0, 0.0, "positive")
+        return FactorScoreResult("mid_momentum", "中期动量", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history)
     mom = prices[-1] / prices[-window - 1] - 1
@@ -524,7 +551,7 @@ def calculate_drawdown_recovery(fund_data: FundData, params: Optional[dict] = No
     """
     window = (params or {}).get("window", 252)
     if not fund_data.close_history or len(fund_data.close_history) < 60:
-        return FactorScoreResult("drawdown_recovery", "回撤修复度", 0.0, 0.0, "positive")
+        return FactorScoreResult("drawdown_recovery", "回撤修复度", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history[-window:])
     rolling_max = float(np.maximum.accumulate(prices)[-1])
@@ -541,7 +568,7 @@ def calculate_drawdown_recovery(fund_data: FundData, params: Optional[dict] = No
         {"condition": ">= 0.85", "score": 0.0},
         {"condition": "< 0.85", "score": -1.0},
     ]
-    score = evaluate_signal_rules(ratio, rules)
+    score = evaluate_signal_rules(ratio, rules_from_params(params, rules))
     return FactorScoreResult("drawdown_recovery", "回撤修复度", round(ratio, 4), score, "positive")
 
 
@@ -555,13 +582,13 @@ def calculate_return_risk_ratio(fund_data: FundData, params: Optional[dict] = No
     window = (params or {}).get("window", 60)
     epsilon = (params or {}).get("epsilon", 0.0001)
     if not fund_data.close_history or len(fund_data.close_history) < window + 2:
-        return FactorScoreResult("return_risk_ratio", "收益风险比", 0.0, 0.0, "positive")
+        return FactorScoreResult("return_risk_ratio", "收益风险比", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history[-window - 1:])
     returns = np.diff(prices) / prices[:-1]
 
     if len(returns) < 2:
-        return FactorScoreResult("return_risk_ratio", "收益风险比", 0.0, 0.0, "positive")
+        return FactorScoreResult("return_risk_ratio", "收益风险比", 0.0, 0.0, "positive", data_valid=False)
 
     ratio = float(np.mean(returns)) / (float(np.std(returns)) + epsilon)
     return FactorScoreResult("return_risk_ratio", "收益风险比", round(ratio, 6), round(ratio, 6), "positive")
@@ -580,7 +607,7 @@ def calculate_momentum_accel(fund_data: FundData, params: Optional[dict] = None)
     lookback = max(short_w, mid_w)
 
     if not fund_data.close_history or len(fund_data.close_history) < lookback + 2:
-        return FactorScoreResult("momentum_accel", "动量加速度", 0.0, 0.0, "positive")
+        return FactorScoreResult("momentum_accel", "动量加速度", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history)
     mom20 = prices[-1] / prices[-short_w - 1] - 1
@@ -605,7 +632,7 @@ def calculate_trend_consistency(fund_data: FundData, params: Optional[dict] = No
     lookback = max(short_w, mid_w)
 
     if not fund_data.close_history or len(fund_data.close_history) < lookback + 2:
-        return FactorScoreResult("trend_consistency", "趋势一致性", 0.0, 0.0, "positive")
+        return FactorScoreResult("trend_consistency", "趋势一致性", 0.0, 0.0, "positive", data_valid=False)
 
     prices = np.array(fund_data.close_history)
     mom20 = prices[-1] / prices[-short_w - 1] - 1
@@ -664,7 +691,7 @@ def calculate_market_valuation(fund_data: FundData, params: Optional[dict] = Non
     """
     pct = _regime_field("valuation_percentile", params)
     if pct is None:
-        return FactorScoreResult("market_valuation", "大盘估值分位", 0.0, 0.0, "negative")
+        return FactorScoreResult("market_valuation", "大盘估值分位", 0.0, 0.0, "negative", data_valid=False)
 
     rules = [
         {"condition": "<= 0.2", "score": 1.0},
@@ -673,7 +700,7 @@ def calculate_market_valuation(fund_data: FundData, params: Optional[dict] = Non
         {"condition": "<= 0.8", "score": -0.5},
         {"condition": "> 0.8", "score": -1.0},
     ]
-    score = evaluate_signal_rules(pct, rules)
+    score = evaluate_signal_rules(pct, rules_from_params(params, rules))
     return FactorScoreResult("market_valuation", "大盘估值分位", round(pct, 4), score, "negative")
 
 
@@ -685,7 +712,7 @@ def calculate_market_sentiment(fund_data: FundData, params: Optional[dict] = Non
     """
     ratio = _regime_field("adv_decline_ratio", params)
     if ratio is None:
-        return FactorScoreResult("market_sentiment", "市场情绪", 0.0, 0.0, "positive")
+        return FactorScoreResult("market_sentiment", "市场情绪", 0.0, 0.0, "positive", data_valid=False)
 
     rules = [
         {"condition": "> 0.5", "score": 1.0},
@@ -694,7 +721,7 @@ def calculate_market_sentiment(fund_data: FundData, params: Optional[dict] = Non
         {"condition": ">= -0.5", "score": -0.5},
         {"condition": "else", "score": -1.0},
     ]
-    score = evaluate_signal_rules(ratio, rules)
+    score = evaluate_signal_rules(ratio, rules_from_params(params, rules))
     return FactorScoreResult("market_sentiment", "市场情绪", round(ratio, 4), score, "positive")
 
 
@@ -706,7 +733,7 @@ def calculate_market_fund_flow(fund_data: FundData, params: Optional[dict] = Non
     """
     change = _regime_field("margin_change_pct_7d", params)
     if change is None:
-        return FactorScoreResult("market_fund_flow", "资金面", 0.0, 0.0, "positive")
+        return FactorScoreResult("market_fund_flow", "资金面", 0.0, 0.0, "positive", data_valid=False)
 
     rules = [
         {"condition": "> 0.03", "score": 1.0},
@@ -715,7 +742,7 @@ def calculate_market_fund_flow(fund_data: FundData, params: Optional[dict] = Non
         {"condition": ">= -0.03", "score": -0.5},
         {"condition": "else", "score": -1.0},
     ]
-    score = evaluate_signal_rules(change, rules)
+    score = evaluate_signal_rules(change, rules_from_params(params, rules))
     return FactorScoreResult("market_fund_flow", "资金面", round(change, 6), score, "positive")
 
 
@@ -794,12 +821,24 @@ class FactorEngine:
             else:
                 params = params_str or {}
 
+            # DB 配置的 signal_rules 注入 params，计算函数内经 rules_from_params
+            # 优先采用（前端因子页可编辑，此前恒被内嵌默认规则覆盖）
+            configured_rules = factor.get("signal_rules")
+            if isinstance(configured_rules, str):
+                try:
+                    configured_rules = json.loads(configured_rules) if configured_rules else None
+                except json.JSONDecodeError:
+                    configured_rules = None
+            if isinstance(configured_rules, list) and configured_rules:
+                params = {**params, "_signal_rules": configured_rules}
+
             calculator = self._calculators.get(code)
             if calculator is None:
                 logger.warning(f"因子 {code} 无注册计算函数，跳过")
                 results.append(FactorScoreResult(
                     factor_code=code, factor_name=name,
                     raw_value=0.0, score=0.0, direction=direction,
+                    data_valid=False,
                 ))
                 continue
 
@@ -813,6 +852,7 @@ class FactorEngine:
                 results.append(FactorScoreResult(
                     factor_code=code, factor_name=name,
                     raw_value=0.0, score=0.0, direction=direction,
+                    data_valid=False,
                 ))
 
         return results
@@ -851,9 +891,19 @@ class FactorEngine:
         # 对每个需要标准化的因子索引做跨基金 Z-score
         for fi, thresholds in normalize_configs.items():
             scores_map = {}
+            invalid_codes: list[str] = []
             for fund_code, results_list in all_results.items():
                 if fi < len(results_list):
-                    scores_map[fund_code] = results_list[fi].score
+                    res = results_list[fi]
+                    if res.data_valid:
+                        scores_map[fund_code] = res.score
+                    else:
+                        invalid_codes.append(fund_code)
+
+            # 数据不足的基金剔除出截面池并取中性 0：旧实现让 0.0 占位值
+            # 入池参与 z-score 分档，新基金被当成"真实最差"打到 -1 档
+            for fund_code in invalid_codes:
+                all_results[fund_code][fi].score = 0.0
 
             if len(scores_map) < 2:
                 # 单只基金：截面标准化不可行，赋中性值 0.0

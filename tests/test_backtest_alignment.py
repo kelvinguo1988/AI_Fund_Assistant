@@ -37,9 +37,17 @@ class TestAlignSignals:
         aligned = BacktestService._align_signals_to_trading_days(TRADING_DAYS, signal_map)
         assert aligned == {"2026-05-26": signal_map["2026-05-26"]}
 
-    def test_signal_before_series_aligns_to_first_day(self):
+    def test_stale_signal_before_series_dropped(self):
+        # 远早于净值窗口起点（>4 天）的陈旧信号丢弃，避免首日无来由调仓并计费
         aligned = BacktestService._align_signals_to_trading_days(
             TRADING_DAYS, {"2026-05-01": {"direction": "buy", "strength": "hold", "score": 0.5}}
+        )
+        assert aligned == {}
+
+    def test_short_gap_before_first_day_aligns_to_first_day(self):
+        # 节假日/周末顺延（≤4 天）仍对齐到首交易日
+        aligned = BacktestService._align_signals_to_trading_days(
+            TRADING_DAYS, {"2026-05-20": {"direction": "buy", "strength": "hold", "score": 0.5}}  # 上周三
         )
         assert aligned == {"2026-05-22": {"direction": "buy", "strength": "hold", "score": 0.5}}
 

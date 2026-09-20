@@ -173,8 +173,8 @@ class AnalysisService:
 
         # 3. 获取评分阈值配置
         config_map = await self._get_config_map()
-        buy_threshold = float(config_map.get("buy_threshold", "3.5"))
-        sell_threshold = float(config_map.get("sell_threshold", "2.0"))
+        # buy/sell_threshold 旧配置键已删：真正生效的是五档 scoring_thresholds
+        # 与质量过滤动态阈值（base_buy/sell_threshold），此前载入后从未消费
         thresholds_json = config_map.get("scoring_thresholds", "")
 
         # 4. 获取报告配置
@@ -378,8 +378,8 @@ class AnalysisService:
 
         # 3. 获取评分阈值
         config_map = await self._get_config_map()
-        buy_threshold = float(config_map.get("buy_threshold", "3.5"))
-        sell_threshold = float(config_map.get("sell_threshold", "2.0"))
+        # buy/sell_threshold 旧配置键已删：真正生效的是五档 scoring_thresholds
+        # 与质量过滤动态阈值（base_buy/sell_threshold），此前载入后从未消费
         thresholds_json = config_map.get("scoring_thresholds", "")
 
         # 4. 获取报告配置

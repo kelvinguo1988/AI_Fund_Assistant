@@ -71,7 +71,7 @@ class ReviewService:
 
         async def _fetch(fund: Fund):
             try:
-                series = await _fetch_nav_series(adapter, fund.code, fetch_days)
+                series = await _fetch_nav_series(adapter, fund.code, fetch_days, start_date=start_date)
                 return fund, series, None
             except Exception as e:
                 logger.warning(f"复盘拉取净值失败 {fund.code}: {e}")
@@ -258,9 +258,14 @@ def _slice_range(
 
 
 async def _fetch_nav_series(
-    adapter, code: str, days: int
+    adapter, code: str, days: int, start_date: Optional[str] = None
 ) -> list[tuple[str, float]]:
-    """按基金类型拉取日频净值/收盘序列（升序 [(date, nav)]）"""
+    """按基金类型拉取日频净值/收盘序列（升序 [(date, nav)]）
+
+    start_date 给定时 cutoff 锚定其前 60 天：旧实现 cutoff=today()-days 只
+    覆盖"距今 days 天"，复盘任何结束日早于今天 >days 的历史区间时起点净值
+    缺失，整段收益对比恒为 None。
+    """
     import akshare as ak
 
     if guess_fund_type(code) == "etf":
@@ -281,5 +286,8 @@ async def _fetch_nav_series(
         raw = await adapter._call(_otc, _max_attempts=2)
 
     series = sorted(raw)
-    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    if start_date:
+        cutoff = (date.fromisoformat(start_date) - timedelta(days=60)).isoformat()
+    else:
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
     return [(d, v) for d, v in series if d >= cutoff]

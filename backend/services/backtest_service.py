@@ -234,6 +234,16 @@ class BacktestService:
             idx = bisect.bisect_left(norm_dates, date_key)
             if idx >= len(norm_dates):
                 continue  # 晚于序列末尾，无交易日可作用
+            if idx == 0 and date_key < norm_dates[0]:
+                # 早于净值窗口起点：映射到首日会触发一次无来由调仓并计费。
+                # 仅保留 ≤4 天的周末/短节假日顺延（真实作用时点就是首日），
+                # 更久远的陈旧信号丢弃。
+                try:
+                    gap = (date.fromisoformat(norm_dates[0]) - date.fromisoformat(date_key[:10])).days
+                except ValueError:
+                    continue
+                if gap > 4:
+                    continue
             aligned[norm_dates[idx]] = signal_map[date_key]  # 后写覆盖 → 保留最新
         return aligned
 

@@ -211,3 +211,71 @@ class TestDriftWarningDedupe:
         # 高分买入 + 漂移 → determine_signal 也生成同一文案，合并后应只 1 条
         assert signal.signal_direction == "buy"
         assert signal.quality_warnings.count(drift_warning) == 1
+
+
+# ═══ 2026-09-20 全量审查修复回归 ═══════════════════════════════════════
+
+class TestSignalRulesWired:
+    """DB 配置的 signal_rules 必须真正生效（此前为假可配项）"""
+
+    def test_configured_rules_override_defaults(self):
+        import json as _json
+        from backend.engines.factor_engine import FactorEngine
+        eng = FactorEngine()
+        fd = FundData(code="000001")
+        fd.close = 1.5
+        fd.close_history = [1.0, 2.0, 3.0]  # pct≈0.67 → 默认规则给 -0.5
+        factors = [{
+            "code": "price_percentile", "name": "价格百分位",
+            "params": "{}",
+            "signal_rules": _json.dumps([{"condition": ">= 0", "score": 0.7}]),
+        }]
+        results = eng.calculate_all(fd, factors)
+        assert results[0].score == 0.7
+
+    def test_empty_rules_keep_defaults(self):
+        import json as _json
+        from backend.engines.factor_engine import FactorEngine
+        eng = FactorEngine()
+        fd = FundData(code="000001")
+        fd.close = 1.5
+        fd.close_history = [1.0, 2.0, 3.0]
+        factors = [{
+            "code": "price_percentile", "name": "价格百分位",
+            "params": "{}", "signal_rules": _json.dumps([]),
+        }]
+        results = eng.calculate_all(fd, factors)
+        assert results[0].score == 0.5  # pct≈0.33 → 内嵌默认规则 ≤0.4 档
+
+
+class TestCrossSectionalHygiene:
+    """截面池：数据不足基金剔除出统计；极端值 1%/99% 截尾"""
+
+    def _mk(self, pool: dict):
+        from backend.engines.factor_engine import FactorEngine
+        eng = FactorEngine()
+        all_results = {
+            code: [FactorScoreResult("short_momentum", "短期动量", v, v, "positive", data_valid=valid)]
+            for code, (v, valid) in pool.items()
+        }
+        factors = [{"code": "short_momentum", "name": "短期动量",
+                    "normalization": "cross_sectional_zscore"}]
+        return eng.normalize_cross_sectional(all_results, factors)
+
+    def test_invalid_excluded_and_neutral(self):
+        out = self._mk({
+            "a": (0.10, True), "b": (0.12, True), "c": (0.11, True),
+            "d": (0.0, False),
+        })
+        assert out["d"][0].score == 0.0
+        # 3 只有效基金：d 若不剔除会把 std 拉大、压缩分档；剔除后 a/b/c z 值差异明确
+        assert out["b"][0].score > out["a"][0].score
+
+    def test_winsorize_extreme(self):
+        pool = {f"f{i}": (0.1 + i * 0.01, True) for i in range(12)}
+        pool["outlier"] = (500.0, True)  # 低波货基 inv_vol 式极端值
+        out = self._mk(pool)
+        # 稳健截尾后极端值不再扭曲主体分档：最低档基金能拿到深度负分
+        # （未截尾时 mean/std 被 500 拉爆，全池 z≈-0.3 全部落 0.0 档）
+        assert out["f0"][0].score <= -0.5
+        assert out["outlier"][0].score == 1.0

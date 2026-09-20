@@ -106,7 +106,7 @@ class ReportEngine:
             lines.append("## 加权评分")
             lines.append("")
             score_bar = self._score_bar(signal.weighted_score)
-            lines.append(f"**综合评分**: {score_bar} {signal.weighted_score}（-6.0 ~ +6.0）")
+            lines.append(f"**综合评分**: {score_bar} {signal.weighted_score}（钳位范围 -8.5 ~ +8.5）")
             lines.append(f"**建议权益仓位**: {int(signal.equity_ratio * 100)}%")
             lines.append("")
 
@@ -231,8 +231,8 @@ class ReportEngine:
         return emoji_map.get(direction, "⚪")
 
     def _score_bar(self, score: float) -> str:
-        """评分进度条（10 格，-6.0 ~ +6.0 映射到 0-10 格）"""
-        segments = int(round((score + 6.0) / 12.0 * 10))
+        """评分进度条（10 格，钳位范围 -8.5 ~ +8.5 映射到 0-10 格）"""
+        segments = int(round((score + 8.5) / 17.0 * 10))
         segments = max(0, min(10, segments))
         filled = segments
         empty = 10 - filled
@@ -257,13 +257,14 @@ class ReportEngine:
         """生成风险提示文本"""
         warnings: list[str] = []
 
-        # 检查是否有因子数据不足（score=0 且 raw_value=0 表示缺失）
-        low_score_factors = [fs for fs in factor_scores if fs.score == 0.0 and fs.raw_value == 0.0]
+        # 因子数据不足：用 data_valid 标记精确识别（原先按 0 分+0 原值启发式，
+        # 会把"真实恰为 0"的因子误报为数据不足）
+        low_score_factors = [fs for fs in factor_scores if not getattr(fs, "data_valid", True)]
         if low_score_factors:
             names = ", ".join(fs.factor_name for fs in low_score_factors)
             warnings.append(f"以下因子数据不足，评分可能不准确：{names}")
 
-        # 检查评分极端情况（-6.0 ~ +6.0 范围）
+        # 检查评分极端情况（±4.0 触发提示，早于 ±8.5 钳位边界）
         if signal.weighted_score >= 4.0:
             warnings.append("评分偏高，注意追高风险，建议分批建仓")
         elif signal.weighted_score <= -4.0:

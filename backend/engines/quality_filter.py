@@ -59,6 +59,11 @@ QUALITY_CONFIG = {
 
     # ── 动态阈值（在实际加权评分尺度上，默认总权重6.0） ──
     "base_buy_threshold": 1.5,                # 基础买入阈值（对应"适度加仓"）
+    # 阈值折算参考总权重：配置后总权重变化时阈值按 total_weight / ref 等比
+    # 缩放，避免"改因子权重=整体平移买卖边界"。默认 0=关闭（保持现有
+    # 1.5/-1.5 调参口径不变）；启用时把 ref 设为当前启用因子权重之和，
+    # 即锁定现信号边界为基准，之后增删因子不再漂移。
+    "threshold_ref_total_weight": 0.0,
     # 卖出阈值 -1.5 必须与 5 档阈值（scoring_thresholds / DEFAULT_THRESHOLDS）的
     # "中性/观望"下界 -1.5 对齐，不得改大（如 -3.0 会吞掉整个 moderate_sell 区间，
     # 这曾是 2026-07-19 的根因：买5/观望28/卖0）。
@@ -121,6 +126,7 @@ PARAM_META: dict[str, tuple[str, str]] = {
     "trend_consistency_boost_weight":     ("超额持续性=1时趋势一致性权重", "因子修正"),
     "base_buy_threshold":                 ("基础买入阈值",                             "动态阈值"),
     "base_sell_threshold":                ("基础卖出阈值",                             "动态阈值"),
+    "threshold_ref_total_weight":         ("阈值折算参考总权重（0=关闭）",             "动态阈值"),
     "size_shock_buy_increment":           ("规模冲击：买入阈值上调量",         "动态阈值"),
     "size_shock_growth_pct":              ("规模冲击：环比增长阈值",             "动态阈值"),
     "size_shock_min_size":                ("规模冲击：最新规模下限（元）",   "动态阈值"),
@@ -683,6 +689,7 @@ def compute_dynamic_thresholds(
     drift: bool,
     cfg: dict = QUALITY_CONFIG,
     regime_snapshot=_SENTINEL,
+    total_weight: Optional[float] = None,
 ) -> tuple[float, float]:
     """计算每只基金的专属买入/卖出阈值
 
@@ -690,29 +697,38 @@ def compute_dynamic_thresholds(
                   + 市场环境调节（极端高估上调 / 极端低估下调）
     sell_threshold = base_sell（固定不变，与五档阈值"中性/观望"下界对齐）
 
+    所有阈值与上调量按 total_weight / threshold_ref_total_weight 等比折算，
+    使因子增删/权重调整不再整体平移买卖边界（参考权重未配置时不折算）。
+
     Args:
         regime_snapshot: 市场环境快照（任务隔离传递；None 时回退模块级全局）
+        total_weight: 当前激活因子总权重（None 时不折算）
 
     Returns: (buy_threshold, sell_threshold)
     """
-    buy = cfg["base_buy_threshold"]
-    sell = cfg["base_sell_threshold"]
+    ref = cfg.get("threshold_ref_total_weight")
+    scale = 1.0
+    if ref and total_weight and total_weight > 0:
+        scale = total_weight / float(ref)
+
+    buy = cfg["base_buy_threshold"] * scale
+    sell = cfg["base_sell_threshold"] * scale
 
     if size_shock:
-        buy += cfg["size_shock_buy_increment"]
+        buy += cfg["size_shock_buy_increment"] * scale
     if drift:
-        buy += cfg["drift_buy_increment"]
+        buy += cfg["drift_buy_increment"] * scale
 
     # 市场环境调节：快照缺失/分位缺失时不调节
     regime = _resolve_regime(regime_snapshot)
     pct = getattr(regime, "valuation_percentile", None) if regime is not None else None
     if pct is not None:
         if pct >= cfg["extreme_high_valuation_pct"]:
-            buy += cfg["extreme_high_valuation_buy_increment"]
+            buy += cfg["extreme_high_valuation_buy_increment"] * scale
         elif pct <= cfg["extreme_low_valuation_pct"]:
-            buy -= cfg["extreme_low_valuation_buy_decrement"]
+            buy -= cfg["extreme_low_valuation_buy_decrement"] * scale
             # 低估下调不把买入阈值打到 0 以下（避免白送买入信号）
-            buy = max(buy, 0.5)
+            buy = max(buy, 0.5 * scale)
 
     return buy, sell
 
@@ -871,9 +887,10 @@ class QualityFilter:
         self,
         size_shock: bool,
         drift: bool,
+        total_weight: Optional[float] = None,
     ) -> tuple[float, float]:
         """计算动态阈值"""
-        return compute_dynamic_thresholds(size_shock, drift, self.cfg)
+        return compute_dynamic_thresholds(size_shock, drift, self.cfg, total_weight=total_weight)
 
     def decide(
         self,
@@ -934,7 +951,8 @@ class QualityFilter:
         drift, _ = self.check_drift(quarterly_history, today)
         result.drift_triggered = drift
         result.dynamic_buy_threshold, result.dynamic_sell_threshold = compute_dynamic_thresholds(
-            result.size_shock_triggered, drift, self.cfg, regime_snapshot
+            result.size_shock_triggered, drift, self.cfg, regime_snapshot,
+            total_weight=sum(float(f.get("weight", 1.0) or 0.0) for f in active_factors),
         )
 
         if drift:

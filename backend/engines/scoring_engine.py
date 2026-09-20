@@ -106,8 +106,6 @@ class ScoringEngine:
         self,
         factor_scores: list[FactorScoreResult],
         factor_weights: list[float],
-        buy_threshold: float = 3.5,
-        sell_threshold: float = 2.0,
         thresholds_json: Optional[str] = None,
     ) -> SignalResult:
         """计算加权评分并生成信号
