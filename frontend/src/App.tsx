@@ -3,7 +3,7 @@
  * T04: 7 个页面组件全部实现
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import {
   ThemeProvider,
@@ -20,6 +20,7 @@ import {
   ListItemText,
   IconButton,
   Switch,
+  LinearProgress,
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -44,22 +45,23 @@ import {
 import { useAppStore } from './store';
 import AIChatWidget from './components/AIChatWidget';
 
-// 页面组件
-import Dashboard from './pages/Dashboard';
-import FundPool from './pages/FundPool';
-import FactorManagement from './pages/FactorManagement';
-import PushConfig from './pages/PushConfig';
-import ReportConfig from './pages/ReportConfig';
-import SchedulePlan from './pages/SchedulePlan';
-import HistoryReports from './pages/HistoryReports';
-import ScoringConfig from './pages/ScoringConfig';
-import QualityConfig from './pages/QualityConfig';
-import SystemPage from './pages/System';
-import FundDetailPage from './pages/FundDetailPage';
 import ErrorBell from './components/ErrorBell';
-import SignalBacktest from './pages/SignalBacktest';
-import ReviewPage from './pages/ReviewPage';
-import ETFScanPage from './pages/ETFScanPage';
+
+// 页面级懒加载：进入路由才拉取对应 chunk，缩小首屏体积（仪表盘优先可见）
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const FundPool = lazy(() => import('./pages/FundPool'));
+const FactorManagement = lazy(() => import('./pages/FactorManagement'));
+const PushConfig = lazy(() => import('./pages/PushConfig'));
+const ReportConfig = lazy(() => import('./pages/ReportConfig'));
+const SchedulePlan = lazy(() => import('./pages/SchedulePlan'));
+const HistoryReports = lazy(() => import('./pages/HistoryReports'));
+const ScoringConfig = lazy(() => import('./pages/ScoringConfig'));
+const QualityConfig = lazy(() => import('./pages/QualityConfig'));
+const SystemPage = lazy(() => import('./pages/System'));
+const FundDetailPage = lazy(() => import('./pages/FundDetailPage'));
+const SignalBacktest = lazy(() => import('./pages/SignalBacktest'));
+const ReviewPage = lazy(() => import('./pages/ReviewPage'));
+const ETFScanPage = lazy(() => import('./pages/ETFScanPage'));
 
 /* ── MUI 主题（红涨绿跌） ─────────────────────────────────────────── */
 const theme = createTheme({
@@ -96,6 +98,20 @@ const NAV_ITEMS = [
 
 const DRAWER_WIDTH = 220;
 
+/* ── 顶栏时钟：秒级重渲染限定在本组件，避免整个布局每秒 re-render ──── */
+const HeaderClock: React.FC = () => {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <Typography component="span" variant="body2" sx={{ ml: 2, opacity: 0.75 }}>
+      {now.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+    </Typography>
+  );
+};
+
 /* ── 侧边栏导航组件 ───────────────────────────────────────────────── */
 const SidebarNav: React.FC = () => {
   const navigate = useNavigate();
@@ -124,11 +140,6 @@ const SidebarNav: React.FC = () => {
 /* ── 主布局组件 ───────────────────────────────────────────────────── */
 const AppLayout: React.FC = () => {
   const { sidebarOpen, aiEnabled, toggleSidebar, setAiEnabled } = useAppStore();
-  const [now, setNow] = useState(new Date());
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -148,9 +159,7 @@ const AppLayout: React.FC = () => {
           </IconButton>
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
             基金量化交易系统
-            <Typography component="span" variant="body2" sx={{ ml: 2, opacity: 0.75 }}>
-              {now.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
-            </Typography>
+            <HeaderClock />
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <AIIcon fontSize="small" />
@@ -202,6 +211,13 @@ const AppLayout: React.FC = () => {
         }}
       >
         <Toolbar />
+        <Suspense
+          fallback={
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
+              <LinearProgress sx={{ width: 240 }} />
+            </Box>
+          }
+        >
         <Routes>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/funds" element={<FundPool />} />
@@ -219,6 +235,7 @@ const AppLayout: React.FC = () => {
           <Route path="/system" element={<SystemPage />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        </Suspense>
       </Box>
       <AIChatWidget />
     </Box>

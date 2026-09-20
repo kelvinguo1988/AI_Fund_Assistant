@@ -27,6 +27,7 @@ import {
 } from '@mui/material';
 import { Visibility as ViewIcon, Download as DownloadIcon, Upload as UploadIcon } from '@mui/icons-material';
 import SignalIndicator from '../components/SignalIndicator';
+import { STRENGTH_LABELS } from '../utils/format';
 import { analysisApi } from '../api/analysis';
 import type { AnalysisResultOut } from '../types';
 
@@ -81,11 +82,6 @@ const HistoryReports: React.FC = () => {
   const handleViewDetail = (result: AnalysisResultOut) => {
     setSelectedResult(result);
     setDetailOpen(true);
-  };
-
-  const STRENGTH_LABELS: Record<string, string> = {
-    heavy_buy: '强烈买入', moderate_buy: '适度买入', light_buy: '轻仓买入',
-    hold: '观望', light_sell: '轻仓减仓', moderate_sell: '适度减仓', heavy_sell: '强烈减仓',
   };
 
   return (

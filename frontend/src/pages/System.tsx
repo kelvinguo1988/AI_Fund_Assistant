@@ -50,6 +50,7 @@ const SystemPage: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<ConnectivityResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // AI 配置状态
   const [aiConfig, setAiConfig] = useState<AIConfigOut | null>(null);
@@ -621,8 +622,7 @@ const SystemPage: React.FC = () => {
                 setError(null);
                 setSkillDialogOpen(false);
                 await loadSkills();
-                // eslint-disable-next-line no-alert
-                window.alert(`导入完成：新建 ${r.created}，更新 ${r.updated}${r.errors.length ? '，错误 ' + r.errors.length : ''}`);
+                setNotice(`导入完成：新建 ${r.created}，更新 ${r.updated}${r.errors.length ? '，错误 ' + r.errors.length : ''}`);
               } catch (err: any) {
                 setError(err?.response?.data?.detail || err?.message || '导入失败（JSON 格式错误？）');
               } finally {
@@ -711,6 +711,9 @@ const SystemPage: React.FC = () => {
         </CardContent>
       </Card>
 
+      <Snackbar open={!!notice} autoHideDuration={5000} onClose={() => setNotice(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert severity="success" onClose={() => setNotice(null)}>{notice}</Alert>
+      </Snackbar>
       <Snackbar open={!!error} autoHideDuration={5000} onClose={() => setError(null)}>
         <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>
       </Snackbar>

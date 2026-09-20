@@ -29,3 +29,25 @@ export const formatBeijingTime = (iso: string | null): string => {
     return iso;
   }
 };
+
+/** 信号强度中文标签（全仓唯一定义，含 light_buy/light_sell 五档以上强度） */
+export const STRENGTH_LABELS: Record<string, string> = {
+  heavy_buy: '强烈买入',
+  moderate_buy: '适度买入',
+  light_buy: '轻仓买入',
+  hold: '观望',
+  light_sell: '轻仓减仓',
+  moderate_sell: '适度减仓',
+  heavy_sell: '强烈减仓',
+};
+
+/** 信号强度 → MUI Chip 颜色（买=error 红 / 卖=success 绿，红涨绿跌惯例） */
+export const STRENGTH_CHIP_COLOR: Record<string, 'error' | 'success' | 'default'> = {
+  heavy_buy: 'error',
+  moderate_buy: 'error',
+  light_buy: 'error',
+  hold: 'default',
+  light_sell: 'success',
+  moderate_sell: 'success',
+  heavy_sell: 'success',
+};

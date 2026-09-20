@@ -8,6 +8,18 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    build: {
+      rollupOptions: {
+        output: {
+          // 大体积三方库独立分包：页面级懒加载下保持稳定 vendor chunk
+          manualChunks: {
+            echarts: ['echarts', 'echarts-for-react'],
+            mui: ['@mui/material', '@mui/icons-material', '@emotion/react', '@emotion/styled'],
+            vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],
+          },
+        },
+      },
+    },
     server: {
       port: 5173,
       proxy: {

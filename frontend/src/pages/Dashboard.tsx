@@ -3,7 +3,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { formatBeijingTime as formatRefreshTime } from '../utils/format';
+import { formatBeijingTime as formatRefreshTime, STRENGTH_CHIP_COLOR } from '../utils/format';
 import {
   Box,
   Grid,
@@ -46,15 +46,7 @@ import { systemApi } from '../api/system';
 import type { IndexValuation } from '../types';
 import type { AnalysisResultOut, FundOut, MarketSummaryOut, MarketRegimeOut, SectorFlowItem } from '../types';
 
-const STRENGTH_COLOR_MAP: Record<string, 'error' | 'success' | 'default'> = {
-  heavy_buy: 'error',
-  moderate_buy: 'error',
-  light_buy: 'error',
-  hold: 'default',
-  light_sell: 'success',
-  moderate_sell: 'success',
-  heavy_sell: 'success',
-};
+
 
 const formatAmount = (v: number): string => {
   if (v === 0) return '0亿';
@@ -82,6 +74,8 @@ const Dashboard: React.FC = () => {
   // 流式分析进度
   const [streaming, setStreaming] = useState<{ active: boolean; current: number; total: number } | null>(null);
   const streamControlRef = React.useRef<{ abort: () => void } | null>(null);
+  // 流式分析进行中：迟到的缓存快照必须丢弃，否则会覆盖已到达的分块结果
+  const streamActiveRef = React.useRef(false);
 
   // 基金选择弹窗
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -126,6 +120,7 @@ const Dashboard: React.FC = () => {
         analysisApi.summary().catch(() => null),
         analysisApi.marketRegime().catch(() => null),
       ]);
+      if (streamActiveRef.current) return;  // 流式分析进行中：快照过期，丢弃
       if (regimeRes?.data) {
         setRegime(regimeRes.data);
       }
@@ -152,6 +147,7 @@ const Dashboard: React.FC = () => {
     setRefreshing(true);
     try {
       await analysisApi.refreshSummary();
+      if (streamActiveRef.current) return;  // 流式分析进行中：不抢占结果列表
       // 重载最新数据
       const [res, sumRes] = await Promise.all([
         analysisApi.latest(),
@@ -226,6 +222,7 @@ const Dashboard: React.FC = () => {
     }
     const ids = selectedFundIds.length === availableFunds.length ? undefined : selectedFundIds;
 
+    streamActiveRef.current = true;
     setResults([]);
     setSelectedFund(null);
     setStreaming({ active: true, current: 0, total: selectedFundIds.length });
@@ -238,6 +235,7 @@ const Dashboard: React.FC = () => {
         setResults((prev) => [...prev, ...chunkResults]);
       },
       onComplete: async (total, succeeded) => {
+        streamActiveRef.current = false;
         setStreaming(null);
         setSnackbar({ open: true, message: `分析完成 (${succeeded}/${total})`, severity: 'success' });
         // 刷新汇总
@@ -246,6 +244,7 @@ const Dashboard: React.FC = () => {
         setRefreshTime(new Date().toLocaleString('zh-CN'));
       },
       onError: (error) => {
+        streamActiveRef.current = false;
         setStreaming(null);
         setSnackbar({ open: true, message: `分析失败: ${error}`, severity: 'error' });
       },
@@ -256,6 +255,7 @@ const Dashboard: React.FC = () => {
   const handleCancelStream = () => {
     streamControlRef.current?.abort();
     streamControlRef.current = null;
+    streamActiveRef.current = false;
     setStreaming(null);
     setSnackbar({ open: true, message: '分析已取消', severity: 'info' });
   };
@@ -549,7 +549,7 @@ const Dashboard: React.FC = () => {
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
               <Typography variant="subtitle2" sx={{ color: '#f44336', mb: 1 }}>TOP10 买入信号</Typography>
-              {summary?.signals.top_buy.length ? (
+              {summary?.signals?.top_buy?.length ? (
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -564,7 +564,7 @@ const Dashboard: React.FC = () => {
                         <TableCell sx={{ p: 0.5, fontSize: '0.8rem' }}>{r.fund_name}</TableCell>
                         <TableCell sx={{ p: 0.5, fontSize: '0.8rem', color: '#f44336' }} align="right">{r.weighted_score}</TableCell>
                         <TableCell sx={{ p: 0.5 }} align="right">
-                          <Chip label={r.signal_strength} size="small" color={STRENGTH_COLOR_MAP[r.signal_strength] || 'default'} sx={{ height: 20, fontSize: '0.65rem' }} />
+                          <Chip label={r.signal_strength} size="small" color={STRENGTH_CHIP_COLOR[r.signal_strength] || 'default'} sx={{ height: 20, fontSize: '0.65rem' }} />
                         </TableCell>
                       </TableRow>
                     ))}
@@ -582,7 +582,7 @@ const Dashboard: React.FC = () => {
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
               <Typography variant="subtitle2" sx={{ color: '#4caf50', mb: 1 }}>TOP10 卖出信号</Typography>
-              {summary?.signals.top_sell.length ? (
+              {summary?.signals?.top_sell?.length ? (
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -597,7 +597,7 @@ const Dashboard: React.FC = () => {
                         <TableCell sx={{ p: 0.5, fontSize: '0.8rem' }}>{r.fund_name}</TableCell>
                         <TableCell sx={{ p: 0.5, fontSize: '0.8rem', color: '#4caf50' }} align="right">{r.weighted_score}</TableCell>
                         <TableCell sx={{ p: 0.5 }} align="right">
-                          <Chip label={r.signal_strength} size="small" color={STRENGTH_COLOR_MAP[r.signal_strength] || 'default'} sx={{ height: 20, fontSize: '0.65rem' }} />
+                          <Chip label={r.signal_strength} size="small" color={STRENGTH_CHIP_COLOR[r.signal_strength] || 'default'} sx={{ height: 20, fontSize: '0.65rem' }} />
                         </TableCell>
                       </TableRow>
                     ))}
@@ -766,7 +766,7 @@ const Dashboard: React.FC = () => {
                       )}
                     </TableCell>
                     <TableCell>{r.weighted_score}</TableCell>
-                    <TableCell>{Math.round((r as any).equity_ratio * 100)}%</TableCell>
+                    <TableCell>{Math.round(r.equity_ratio * 100)}%</TableCell>
                     <TableCell>
                       <SignalIndicator direction={r.signal_direction} size={12} showLabel={false} />
                     </TableCell>
@@ -774,7 +774,7 @@ const Dashboard: React.FC = () => {
                       <Chip
                         label={r.signal_strength}
                         size="small"
-                        color={STRENGTH_COLOR_MAP[r.signal_strength] || 'default'}
+                        color={STRENGTH_CHIP_COLOR[r.signal_strength] || 'default'}
                       />
                     </TableCell>
                   </TableRow>

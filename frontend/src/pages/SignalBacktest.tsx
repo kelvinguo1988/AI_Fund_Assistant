@@ -39,14 +39,8 @@ import type { EChartsOption } from 'echarts';
 import { fundApi } from '../api/fund';
 import { backtestApi, backtestBatchApi, type BacktestBatchItem, type AutoBacktestConfig } from '../api/backtest';
 import type { FundOut, BacktestSummary } from '../types';
+import { STRENGTH_LABELS } from '../utils/format';
 
-const STRENGTH_LABELS: Record<string, string> = {
-  heavy_buy: '强烈买入',
-  moderate_buy: '适度买入',
-  hold: '观望',
-  moderate_sell: '适度减仓',
-  heavy_sell: '强烈减仓',
-};
 
 const SignalBacktest: React.FC = () => {
   const [funds, setFunds] = useState<FundOut[]>([]);

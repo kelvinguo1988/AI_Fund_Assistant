@@ -5,6 +5,7 @@
 import React from 'react';
 import { Box, Tooltip } from '@mui/material';
 import type { SignalDirection } from '../types';
+import { STRENGTH_LABELS } from '../utils/format';
 
 interface SignalIndicatorProps {
   direction: SignalDirection;
@@ -17,16 +18,6 @@ const SIGNAL_CONFIG: Record<SignalDirection, { color: string; label: string; bgC
   buy: { color: 'var(--signal-buy)', label: '买入', bgClass: 'signal-buy-bg' },
   sell: { color: 'var(--signal-sell)', label: '卖出', bgClass: 'signal-sell-bg' },
   hold: { color: 'var(--signal-hold)', label: '观望', bgClass: 'signal-hold-bg' },
-};
-
-const STRENGTH_LABELS: Record<string, string> = {
-  heavy_buy: '强烈买入',
-  moderate_buy: '适度买入',
-  light_buy: '轻仓买入',
-  hold: '观望',
-  light_sell: '轻仓减仓',
-  moderate_sell: '适度减仓',
-  heavy_sell: '强烈减仓',
 };
 
 const SignalIndicator: React.FC<SignalIndicatorProps> = ({

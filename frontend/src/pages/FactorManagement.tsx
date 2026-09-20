@@ -64,6 +64,9 @@ const FactorManagement: React.FC = () => {
   const [editFactor, setEditFactor] = useState<FactorOut | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FactorOut | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+  // 滑块拖拽中的本地草稿：onChange 只更新 UI，onChangeCommitted 才发 PUT
+  //（原 onChange 直连 API：一次拖拽触发数十次更新+loadFactors 重刷全表）
+  const [weightDrafts, setWeightDrafts] = useState<Record<number, number>>({});
 
   // 导入导出
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -264,10 +267,18 @@ const FactorManagement: React.FC = () => {
                 <TableCell>{NORM_LABELS[f.normalization] || '无'}</TableCell>
                 <TableCell>
                   <Slider
-                    value={f.weight}
+                    value={weightDrafts[f.id] ?? f.weight}
                     min={0} max={3} step={0.1}
                     valueLabelDisplay="auto"
-                    onChange={(_, v) => handleWeightChange(f.id, v as number)}
+                    onChange={(_, v) => setWeightDrafts(prev => ({ ...prev, [f.id]: v as number }))}
+                    onChangeCommitted={(_, v) => {
+                      setWeightDrafts(prev => {
+                        const next = { ...prev };
+                        delete next[f.id];
+                        return next;
+                      });
+                      handleWeightChange(f.id, v as number);
+                    }}
                   />
                 </TableCell>
                 <TableCell>{f.weight_percentage}%</TableCell>

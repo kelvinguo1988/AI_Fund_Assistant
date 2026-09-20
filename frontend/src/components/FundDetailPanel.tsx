@@ -138,15 +138,22 @@ const HoldingRow: React.FC<{
   name: string;
   changes: HoldingChanges | null;
   top3Text?: string;
-}> = ({ fundId, code, name, changes, top3Text }) => {
+  holdingsMap?: Record<number, any[]>;
+}> = ({ fundId, code, name, changes, top3Text, holdingsMap }) => {
   const [open, setOpen] = useState(false);
-  const [holdings, setHoldings] = useState<any[]>([]);
+  const [extraHoldings, setExtraHoldings] = useState<any[]>([]);
   const [loaded, setLoaded] = useState(false);
 
+  const holdings = holdingsMap?.[fundId] ?? extraHoldings;
+
   useEffect(() => {
-    if (!open || loaded) return;
-    fundApi.getHoldings(fundId).then((res) => { setHoldings(res.data || []); setLoaded(true); });
-  }, [open, fundId, loaded]);
+    if (!open || loaded || holdingsMap?.[fundId]) return;
+    let cancelled = false;
+    fundApi.getHoldings(fundId)
+      .then((res) => { if (!cancelled) { setExtraHoldings(res.data || []); setLoaded(true); } })
+      .catch(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [open, fundId, loaded, holdingsMap]);
 
   const top3 = top3Text || '--';
 
@@ -225,24 +232,28 @@ const HoldingRow: React.FC<{
 
 const HoldingTab: React.FC<{ funds: { id: number; code: string; name: string }[]; changesMap: Record<number, HoldingChanges | null> }> = ({ funds, changesMap }) => {
   const [top3Map, setTop3Map] = useState<Record<number, string>>({});
+  const [holdingsMap, setHoldingsMap] = useState<Record<number, any[]>>({});
 
   useEffect(() => {
     Promise.all(
       funds.map((f) =>
         fundApi.getHoldings(f.id)
           .then((res) => {
-            const items = (res.data || []).slice(0, 3);
-            const text = items
+            const full = res.data || [];
+            const text = full
+              .slice(0, 3)
               .map((h: any) => `${h.stock_name}${h.ratio != null ? h.ratio.toFixed(1) : ''}%`)
               .join(' | ');
-            return { id: f.id, text };
+            return { id: f.id, text, full };
           })
-          .catch(() => ({ id: f.id, text: '--' }))
+          .catch(() => ({ id: f.id, text: '--', full: [] as any[] }))
       )
     ).then((results) => {
       const m: Record<number, string> = {};
-      results.forEach((r) => { m[r.id] = r.text; });
+      const hm: Record<number, any[]> = {};
+      results.forEach((r) => { m[r.id] = r.text; hm[r.id] = r.full; });
       setTop3Map(m);
+      setHoldingsMap(hm);
     });
   }, [funds]);
 
@@ -265,7 +276,8 @@ const HoldingTab: React.FC<{ funds: { id: number; code: string; name: string }[]
           ) : (
             funds.map((f) => (
               <HoldingRow key={f.id} fundId={f.id} code={f.code} name={f.name}
-                changes={changesMap[f.id] ?? null} top3Text={top3Map[f.id]} />
+                changes={changesMap[f.id] ?? null} top3Text={top3Map[f.id]}
+                holdingsMap={holdingsMap} />
             ))
           )}
         </TableBody>

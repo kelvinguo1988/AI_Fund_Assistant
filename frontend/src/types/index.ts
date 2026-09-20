@@ -249,6 +249,7 @@ export interface AnalysisResultOut {
   operation_advice: string;
   factor_scores: FactorScore[];
   created_at: string;
+  equity_ratio: number;
   // ── 第零层扩展字段（可选）──
   original_score?: number | null;
   dynamic_buy_threshold?: number | null;
