@@ -1,5 +1,6 @@
 """飞书 Webhook 推送"""
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -222,31 +223,49 @@ class FeishuPush(BasePush):
         return content
 
     async def _post(self, payload: dict) -> bool:
-        """发送 HTTP POST 请求到飞书 Webhook"""
-        try:
-            if self.secret:
-                # 配置了签名密钥就必须带签名，否则飞书端返回 19021 校验失败（此前静默不生效）
-                ts = int(time.time())
-                payload = {**payload, "timestamp": str(ts), "sign": _gen_sign(self.secret, ts)}
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(
-                    self.webhook_url,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                )
-                result = response.json()
+        """发送 HTTP POST 请求到飞书 Webhook
+
+        失败重试 1 次（间隔 1s，飞书机器人限频 100/min，瞬时抖动居多）；
+        最终失败写 error_logs 埋点，便于在系统页排查断供原因。
+        """
+        from backend.services.error_log_service import log_source_failure
+
+        last_err = ""
+        for attempt in (1, 2):
+            try:
+                body = payload
+                if self.secret:
+                    # 配置了签名密钥就必须带签名，否则飞书端返回 19021 校验失败（此前静默不生效）
+                    ts = int(time.time())
+                    body = {
+                        **payload,
+                        "timestamp": str(ts),
+                        "sign": _gen_sign(self.secret, ts),
+                    }
+                async with httpx.AsyncClient(timeout=10) as client:
+                    response = await client.post(
+                        self.webhook_url,
+                        json=body,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    result = response.json()
 
                 if result.get("code") == 0 or result.get("StatusCode") == 0:
-                    logger.info("飞书推送成功")
+                    logger.info("飞书推送成功" if attempt == 1 else "飞书推送成功（重试后）")
                     return True
-                else:
-                    logger.error(f"飞书推送失败: {result}")
-                    return False
-        except httpx.TimeoutException:
-            logger.error("飞书推送超时")
-            return False
-        except Exception as e:
-            logger.error(
-                f"飞书推送异常: {type(e).__name__}: {e}", exc_info=True
-            )
-            return False
+                last_err = f"飞书推送失败: {result}"
+                logger.warning(f"{last_err}（第 {attempt} 次）")
+            except httpx.TimeoutException:
+                last_err = "飞书推送超时"
+                logger.warning(f"{last_err}（第 {attempt} 次）")
+            except Exception as e:
+                last_err = f"飞书推送异常: {type(e).__name__}: {e}"
+                logger.warning(f"{last_err}（第 {attempt} 次）", exc_info=True)
+            if attempt == 1:
+                await asyncio.sleep(1.0)
+
+        logger.error(last_err)
+        log_source_failure(
+            module="push.feishu", message=last_err[:300], category="network"
+        )
+        return False

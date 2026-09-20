@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.utils.timezone import now_beijing
 """调休/节假日日历同步服务
 
 数据源(可配置, 默认 NateScarlet/holiday-cn):
@@ -13,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -50,10 +51,10 @@ async def _set_cfg(session, key: str, value: str) -> None:
     )).scalars().first()
     if row:
         row.config_value = value
-        row.updated_at = datetime.now()
+        row.updated_at = now_beijing()
     else:
         session.add(SystemConfig(
-            config_key=key, config_value=value, updated_at=datetime.now()
+            config_key=key, config_value=value, updated_at=now_beijing()
         ))
 
 
@@ -145,11 +146,11 @@ async def sync_holiday_calendar(
                     existing.is_off_day = is_off
                     existing.holiday_name = name
                     existing.source = url_template
-                    existing.synced_at = datetime.now()
+                    existing.synced_at = now_beijing()
                 else:
                     session.add(HolidayCalendar(
                         holiday_date=ds, is_off_day=is_off, holiday_name=name,
-                        source=url_template, synced_at=datetime.now(),
+                        source=url_template, synced_at=now_beijing(),
                     ))
                 upserted += 1
             synced_years.append(y)
@@ -173,7 +174,7 @@ async def auto_sync_if_enabled(session) -> dict:
     if summary.get("synced_years"):
         # 同步成功 → 关闭自动同步（只同步一次），并记录时间
         await _set_cfg(session, CFG_ENABLED, "false")
-        await _set_cfg(session, CFG_LAST_SYNC, datetime.now().isoformat(timespec="seconds"))
+        await _set_cfg(session, CFG_LAST_SYNC, now_beijing().isoformat(timespec="seconds"))
         await session.commit()
         summary["auto_disabled"] = True
     else:

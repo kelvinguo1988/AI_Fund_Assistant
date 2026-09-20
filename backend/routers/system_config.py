@@ -1,9 +1,9 @@
 """系统配置路由"""
+from backend.utils.timezone import now_beijing
 
 import asyncio
 import json
 import logging
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -163,7 +163,7 @@ async def get_scoring_config(db: AsyncSession = Depends(get_db)):
                     await db.commit()
                     logger.info("评分配置自动迁移：追加末档 catch-all（min_score=-6.4）")
                 return ApiResponse(data=ScoringConfigOut(thresholds=thresholds))
-        except (json.JSONDecodeError, Exception) as e:
+        except Exception as e:  # 含 JSONDecodeError 等，统一回退默认值
             logger.warning("评分阈值配置解析失败，使用默认值: %s", e)
 
     # 使用默认值
@@ -327,7 +327,7 @@ async def download_error_logs(category: Optional[str] = None):
     from backend.services.error_log_service import ErrorLogStore
     from fastapi.responses import Response
     text = await asyncio.to_thread(ErrorLogStore().download_text, category)
-    filename = f"error_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    filename = f"error_logs_{now_beijing().strftime('%Y%m%d_%H%M%S')}.txt"
     return Response(
         content=text,
         media_type="text/plain; charset=utf-8",

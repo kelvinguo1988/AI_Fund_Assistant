@@ -1,4 +1,5 @@
 """信号回测服务 — 将历史信号与净值对齐，模拟仓位策略累计收益"""
+from backend.utils.timezone import now_beijing
 
 import logging
 from datetime import date
@@ -64,13 +65,13 @@ async def save_fee_pct(db: AsyncSession, fee_pct: float) -> float:
     )).scalars().first()
     if row:
         row.config_value = str(value)
-        row.updated_at = datetime.now()
+        row.updated_at = now_beijing()
     else:
         db.add(SystemConfig(
             config_key=FEE_CONFIG_KEY,
             config_value=str(value),
             description="回测单次调仓综合费率（%），0 表示不计交易成本",
-            updated_at=datetime.now(),
+            updated_at=now_beijing(),
         ))
     await db.commit()
     return value

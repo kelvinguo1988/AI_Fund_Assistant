@@ -29,10 +29,19 @@ services:
     volumes:
       - /share/Container/AI_Fund_Assistant/data:/app/data
       # 基金名称缓存（与生产 compose 一致，可写挂载避免容器重建丢失缓存）
+      # ⚠️ 宿主机该文件必须已存在（deploy 前 touch，见 deploy.sh），
+      #    否则 Docker 会把它创建成目录 → 容器内写缓存报错
       - /share/Container/AI_Fund_Assistant/fund_name_cache.json:/app/fund_name_cache.json
 
     expose:
       - "8000"
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
 
     # 日志配置（防止日志无限增长占满NAS存储）
     logging:

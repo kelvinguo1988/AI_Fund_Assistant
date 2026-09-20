@@ -1,15 +1,17 @@
-from __future__ import annotations
 """APScheduler 封装 — 启动/停止/热更新"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from backend.database import async_session_factory
+from backend.utils.timezone import now_beijing
 from backend.models.schedule import Schedule
 
 logger = logging.getLogger(__name__)
@@ -176,7 +178,7 @@ class TaskScheduler:
                 )
                 sched = result.scalars().first()
                 if sched:
-                    sched.last_run_at = datetime.now()
+                    sched.last_run_at = now_beijing()
 
                 await session.commit()
 
@@ -219,27 +221,45 @@ class TaskScheduler:
                 # 推送
                 if sched and sched.channel_id:
                     from backend.services.push_service import PushService
+                    from backend.services.error_log_service import log_source_failure
                     push_svc = PushService(session)
-                    try:
-                        push_results = await push_svc.push_analysis_results(
-                            results, sched.channel_id
-                        )
-                        failed = [k for k, ok in push_results.items() if not ok]
-                        if failed:
-                            logger.error(
-                                f"推送部分失败 schedule_id={schedule_id} "
-                                f"channel_id={sched.channel_id} "
-                                f"失败项: {failed}（共 {len(failed)}/{len(push_results)}）"
+                    push_err: Optional[Exception] = None
+                    for attempt in (1, 2):
+                        try:
+                            push_err = None
+                            push_results = await push_svc.push_analysis_results(
+                                results, sched.channel_id
                             )
-                    except Exception as push_err:
-                        logger.error(
-                            f"推送整体失败 schedule_id={schedule_id} "
-                            f"channel_id={sched.channel_id} "
-                            f"results={len(results)} 只: "
-                            f"{type(push_err).__name__}: {push_err}",
-                            exc_info=True,
+                            failed = [k for k, ok in push_results.items() if not ok]
+                            if failed:
+                                logger.error(
+                                    f"推送部分失败 schedule_id={schedule_id} "
+                                    f"channel_id={sched.channel_id} "
+                                    f"失败项: {failed}（共 {len(failed)}/{len(push_results)}）"
+                                )
+                            break
+                        except Exception as e:
+                            push_err = e
+                            logger.error(
+                                f"推送整体失败 schedule_id={schedule_id} "
+                                f"channel_id={sched.channel_id} 第 {attempt} 次: "
+                                f"{type(e).__name__}: {e}",
+                                exc_info=True,
+                            )
+                            if attempt == 1:
+                                await asyncio.sleep(60)
+                    if push_err is not None:
+                        # 分析已成功，仅推送失败：埋点后不上抛。
+                        # 上抛会触发 _run_task 整任务重跑 → 全量分析 + 连打行情源（防封禁）。
+                        log_source_failure(
+                            module=f"scheduler.push.schedule_{schedule_id}",
+                            message=(
+                                f"推送重试后仍失败 channel_id={sched.channel_id} "
+                                f"results={len(results)} 只: "
+                                f"{type(push_err).__name__}: {push_err}"
+                            ),
+                            category="push",
                         )
-                        raise  # 推送失败上抛触发 _run_task 重试
 
             logger.info(f"调度任务完成: schedule_id={schedule_id}")
         except Exception as e:
@@ -305,7 +325,13 @@ class TaskScheduler:
                 stats = await svc.run_full_backtest()
                 logger.info(f"自动回测任务退出: {stats}")
         except Exception as e:
-            logger.error(f"自动全量回测任务异常: {e}")
+            logger.error(f"自动全量回测任务异常: {e}", exc_info=True)
+            from backend.services.error_log_service import log_source_failure
+            log_source_failure(
+                module="scheduler.auto_full_backtest",
+                message=f"自动全量回测失败: {type(e).__name__}: {e}",
+                category="other",
+            )
 
     async def _register_holiday_sync(self) -> None:
         """注册调休自动同步任务（每日在 holiday_auto_sync_time 触发一次）"""
@@ -345,7 +371,13 @@ class TaskScheduler:
                 summary = await auto_sync_if_enabled(session)
             logger.info(f"调休自动同步执行完成: {summary}")
         except Exception as e:  # noqa: BLE001
-            logger.error(f"调休自动同步执行失败: {e}")
+            logger.error(f"调休自动同步执行失败: {e}", exc_info=True)
+            from backend.services.error_log_service import log_source_failure
+            log_source_failure(
+                module="scheduler.holiday_auto_sync",
+                message=f"调休自动同步失败: {type(e).__name__}: {e}",
+                category="other",
+            )
 
 
 # 全局实例

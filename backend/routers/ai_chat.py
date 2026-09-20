@@ -38,8 +38,9 @@ async def chat(
             raise HTTPException(status_code=403, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"AI 对话异常: {e}")
-        raise HTTPException(status_code=500, detail=f"AI 服务异常: {str(e)}")
+        # 内部异常细节（LLM SDK 报错可能带 base_url/密钥信息）只进日志，不透给客户端
+        logger.error(f"AI 对话异常: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="AI 服务异常，请稍后重试")
 
 
 @router.get("/conversations", response_model=ApiResponse[list[dict]])

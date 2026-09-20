@@ -9,6 +9,7 @@
 - 抓取方法与 WorkBuddy 验证一致: q.10jqka.com.cn/gn/detail/code/{code}
   解析 m-table 第一页成分（每板块核心股 ~10 只）
 """
+from backend.utils.timezone import now_beijing
 
 import json
 import logging
@@ -47,7 +48,7 @@ async def import_seed(db: AsyncSession, payload: Optional[dict] = None) -> dict:
         payload = json.loads(SEED_FILE.read_text(encoding="utf-8"))
     concepts = payload.get("concepts", {})
     count = 0
-    now = datetime.now()
+    now = now_beijing()
     for cname, stocks in concepts.items():
         if not isinstance(stocks, (list, set)):
             continue
@@ -158,7 +159,7 @@ async def fetch_batch(db: AsyncSession, batch_size: int = FETCH_BATCH_SIZE) -> d
             logger.warning(f"概念成分抓取失败 {name}: {e}")
             failed += 1
         else:
-            now = datetime.now()
+            now = now_beijing()
             # 覆盖该概念旧行
             await db.execute(
                 delete(ConceptBoardMap).where(ConceptBoardMap.concept == name)

@@ -52,7 +52,6 @@ class IndexValuationService:
         if not force and cls._cache is not None and now - cls._ts < cls._TTL:
             return cls._cache
 
-        import asyncio
         import numpy as np
 
         def _fetch_all():
@@ -86,7 +85,14 @@ class IndexValuationService:
                     logger.warning(f"指数 PE 获取失败 {index_name}: {e}")
             return out
 
-        rows = await asyncio.to_thread(_fetch_all)
+        from backend.utils.concurrency import run_with_timeout
+
+        try:
+            # 走全局 akshare 信号量 + 强制超时（乐咕接口无 patch 超时保护）
+            rows = await run_with_timeout(_fetch_all, timeout=100.0)
+        except Exception as e:
+            logger.warning(f"指数 PE 获取失败: {e}")
+            return cls._cache or []
         if rows:
             cls._cache = rows
             cls._ts = now
@@ -166,8 +172,6 @@ class OtcTradeStatusService:
         if not force and cls._cache is not None and now - cls._ts < cls._TTL:
             return cls._cache
 
-        import asyncio
-
         def _fetch_all():
             import akshare as ak
             df = ak.fund_open_fund_daily_em()
@@ -183,8 +187,11 @@ class OtcTradeStatusService:
                 }
             return out
 
+        from backend.utils.concurrency import run_with_timeout
+
         try:
-            data = await asyncio.to_thread(_fetch_all)
+            # 东财域名接口：统一走信号量串行，避免绕过防封禁管线
+            data = await run_with_timeout(_fetch_all, timeout=45.0)
             if data:
                 cls._cache = data
                 cls._ts = now

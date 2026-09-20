@@ -3,10 +3,10 @@
 数据来源：AKShare 封装的天天基金季度持仓数据。
 每只基金每季度约 10-20 条持仓记录。
 """
+from backend.utils.timezone import now_beijing
 
 import asyncio
 import logging
-from datetime import datetime
 from typing import Optional
 
 import akshare as ak
@@ -34,7 +34,7 @@ async def refresh_holdings(db: AsyncSession, fund_id: int, fund_code: str) -> li
     """
     from json.decoder import JSONDecodeError
 
-    current_year = datetime.now().year
+    current_year = now_beijing().year
     # 查询当年 + 前2年。当年部分季度可能未发布（正常跳过），
     # 前2年确保至少有 4-8 个季度的历史数据。
     years = [str(current_year), str(current_year - 1), str(current_year - 2)]

@@ -96,6 +96,7 @@ async def _prewarm_market_cache():
 
 
 _tag_heal_task = None  # 后台自愈任务强引用（防 GC 取消）
+_prewarm_task = None   # 市场缓存预热任务强引用（同上）
 
 
 async def _self_heal_tags():
@@ -130,8 +131,9 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
-    # 后台预热市场数据缓存（不阻塞启动）
-    asyncio.ensure_future(_prewarm_market_cache())
+    # 后台预热市场数据缓存（不阻塞启动；持强引用防 GC 取消）
+    global _prewarm_task
+    _prewarm_task = asyncio.ensure_future(_prewarm_market_cache())
 
     # 存量脏标签自愈（延迟执行，保留引用防 GC 取消）
     global _tag_heal_task
@@ -213,6 +215,10 @@ async def serve_frontend_index():
 @app.get("/{full_path:path}", tags=["前端"])
 async def serve_frontend(full_path: str):
     """提供前端静态资源 + SPA 路由回退"""
+    # 未注册的 /api/* 一律 JSON 404：不得回退 index.html（否则前端拿到 HTML
+    # 解析报错，真实的路径拼写错误被掩盖）
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
     # 不影响 API 路由（FastAPI 优先匹配精确路由）
     # 防目录穿越：percent-decode 后的 ../ 不会被 uvicorn 归一化，须校验解析路径仍在 dist 内
     file_path = (FRONTEND_DIST / full_path).resolve()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 """推送编排服务 — 遍历渠道→格式化→发送"""
 
+import asyncio
 import json
 import logging
 from datetime import date
@@ -352,6 +353,8 @@ class PushService:
                                 report_markdown=report_md,
                             )
                             push_results[f"{channel.name}:{r.fund_code}"] = success
+                            # 逐只连发会撞飞书机器人限频（100/min），串行留隔
+                            await asyncio.sleep(1.0)
 
                 else:
                     logger.warning(f"不支持的渠道类型: {channel.channel_type}")

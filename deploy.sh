@@ -65,6 +65,15 @@ if [ ! -d data ]; then
 fi
 ok "数据目录已就绪"
 
+# ── 基金名称缓存文件预置 ────────────────────────────────────────────────
+# compose 把 fund_name_cache.json 以"文件"方式 bind mount 进容器；
+# 宿主机文件不存在时 Docker 会自动创建【目录】→ 容器内写缓存直接报错
+if [ ! -f fund_name_cache.json ]; then
+    info "预置 fund_name_cache.json（避免 Docker 挂载成目录）..."
+    echo '{}' > fund_name_cache.json
+fi
+ok "名称缓存文件已就绪"
+
 # ── 选择部署模式 ─────────────────────────────────────────────────────────
 MODE="${1:-prod}"
 

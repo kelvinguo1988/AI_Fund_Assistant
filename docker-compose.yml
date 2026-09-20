@@ -36,6 +36,7 @@ services:
       - ./data:/app/data
       # 基金名称缓存文件（19699 只基金名称映射，避免容器启动时重新拉取）
       # 可写挂载：容器内新增基金的名称缓存可持久化更新
+      # ⚠️ 宿主机文件必须已存在（deploy.sh 会预置），否则 Docker 挂成目录导致写入报错
       - ./fund_name_cache.json:/app/fund_name_cache.json
     expose:
       - "8000"
@@ -70,7 +71,9 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - backend
+      # 后端健康检查通过后再起前端，避免首屏 502
+      backend:
+        condition: service_healthy
     # 与 backend 同处自定义桥接网络；不再使用 host-gateway / links
     # （Container Station 不支持，会导致 backend 不可解析 / 502）。
     # nginx 经 Docker 内置 DNS（127.0.0.11）在运行时解析 backend 并直连。

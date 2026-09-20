@@ -1,8 +1,8 @@
 """SQLAlchemy 异步引擎 + Session 工厂 + 初始化函数"""
+from backend.utils.timezone import now_beijing
 
 import json
 import logging
-from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -59,8 +59,7 @@ def _build_factor_seeds() -> list[dict]:
     """
     return [
     {
-        "name": "短期动量", "data_fields": json.dumps(["nav"]),
-        "name": "短期动量", "code": "short_momentum", "direction": "positive",
+        "name": "短期动量", "code": "short_momentum", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 1.2, "sort_order": 1,
         "params": json.dumps({"window": 20}),
         "formula": "nav / shift(nav, 20) - 1",
@@ -74,8 +73,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
     {
-        "name": "中期动量", "data_fields": json.dumps(["nav"]),
-        "name": "中期动量", "code": "mid_momentum", "direction": "positive",
+        "name": "中期动量", "code": "mid_momentum", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 1.2, "sort_order": 2,
         "params": json.dumps({"window": 60}),
         "formula": "nav / shift(nav, 60) - 1",
@@ -89,8 +87,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
     {
-        "name": "波动率倒数", "data_fields": json.dumps(["nav"]),
-        "name": "波动率倒数", "code": "inv_volatility", "direction": "positive",
+        "name": "波动率倒数", "code": "inv_volatility", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 1.0, "sort_order": 3,
         "params": json.dumps({"window": 60}),
         "formula": "1 / (std(returns, 60) * sqrt(252))",
@@ -100,8 +97,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
     {
-        "name": "回撤修复度", "data_fields": json.dumps(["nav"]),
-        "name": "回撤修复度", "code": "drawdown_recovery", "direction": "positive",
+        "name": "回撤修复度", "code": "drawdown_recovery", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 0.8, "sort_order": 4,
         "params": json.dumps({"window": 252}),
         "formula": "nav / rolling_max(nav, 252)",
@@ -114,8 +110,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization": "none",
     },
     {
-        "name": "收益风险比", "data_fields": json.dumps(["nav"]),
-        "name": "收益风险比", "code": "return_risk_ratio", "direction": "positive",
+        "name": "收益风险比", "code": "return_risk_ratio", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 0.8, "sort_order": 5,
         "params": json.dumps({"window": 60, "epsilon": 0.0001}),
         "formula": "mean(returns, 60) / (std(returns, 60) + 0.0001)",
@@ -129,8 +124,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
     {
-        "name": "动量加速度", "data_fields": json.dumps(["nav"]),
-        "name": "动量加速度", "code": "momentum_accel", "direction": "positive",
+        "name": "动量加速度", "code": "momentum_accel", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 0.5, "sort_order": 6,
         "params": json.dumps({"short_window": 20, "mid_window": 60}),
         "formula": "mom20 - mom60",
@@ -144,8 +138,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
     {
-        "name": "趋势一致性", "data_fields": json.dumps(["nav"]),
-        "name": "趋势一致性", "code": "trend_consistency", "direction": "positive",
+        "name": "趋势一致性", "code": "trend_consistency", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 0.5, "sort_order": 7,
         "params": json.dumps({"short_window": 20, "mid_window": 60}),
         "formula": "mean([sign(mom20), sign(mom60)])",
@@ -162,8 +155,7 @@ def _build_factor_seeds() -> list[dict]:
         # 双向绝对因子：独立于截面相对位置，金叉+1.0 / 死叉-1.0。
         # 关键作用：穿透普涨市，把真正走弱的基金打负，使加权分
         # 能落到 quality_filter 的 sell_threshold(-1.5) 以下，产出卖出信号。
-        "name": "MACD信号", "data_fields": json.dumps(["nav"]),
-        "name": "MACD信号", "code": "macd_signal", "direction": "positive",
+        "name": "MACD信号", "code": "macd_signal", "data_fields": json.dumps(["nav"]), "direction": "positive",
         "weight": 0.5, "sort_order": 8,
         "params": json.dumps({"fast": 12, "slow": 26, "signal": 9}),
         "formula": "DIF=EMA(12)-EMA(26); DEA=EMA(DIF,9); 金叉+1.0/死叉-1.0",
@@ -174,8 +166,7 @@ def _build_factor_seeds() -> list[dict]:
     # ── 市场环境 3 因子（读 MarketRegimeSnapshot，全池同分；绝对因子必须
     # 用 normalization=none，截面标准化会把同分因子打成 0）──
     {
-        "name": "大盘估值分位", "data_fields": json.dumps(["market_regime"]),
-        "name": "大盘估值分位", "code": "market_valuation", "direction": "negative",
+        "name": "大盘估值分位", "code": "market_valuation", "data_fields": json.dumps(["market_regime"]), "direction": "negative",
         "weight": 0.8, "sort_order": 9,
         "params": json.dumps({}),
         "formula": "沪深300 PE 近5年分位（中证指数官网）",
@@ -190,8 +181,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization": "none",
     },
     {
-        "name": "市场情绪", "data_fields": json.dumps(["market_regime"]),
-        "name": "市场情绪", "code": "market_sentiment", "direction": "positive",
+        "name": "市场情绪", "code": "market_sentiment", "data_fields": json.dumps(["market_regime"]), "direction": "positive",
         "weight": 0.5, "sort_order": 10,
         "params": json.dumps({}),
         "formula": "全市场涨跌家数比 (up-down)/(up+down)",
@@ -206,8 +196,7 @@ def _build_factor_seeds() -> list[dict]:
         "normalization": "none",
     },
     {
-        "name": "资金面", "data_fields": json.dumps(["market_regime"]),
-        "name": "资金面", "code": "market_fund_flow", "direction": "positive",
+        "name": "资金面", "code": "market_fund_flow", "data_fields": json.dumps(["market_regime"]), "direction": "positive",
         "weight": 0.5, "sort_order": 11,
         "params": json.dumps({}),
         "formula": "上交所融资融券余额 7 日变化率",
@@ -231,6 +220,14 @@ async def init_db() -> None:
     - 默认报告配置
     - 默认系统配置
     """
+    def _migration_ok(e: Exception, what: str) -> None:
+        """幂等迁移异常分类：列/索引已存在=正常跳过，其余必须可见"""
+        msg = str(e).lower()
+        if "already exists" in msg or "duplicate column" in msg:
+            logger.debug(f"迁移跳过（已存在）: {what}")
+        else:
+            logger.warning(f"迁移失败: {what}: {type(e).__name__}: {e}")
+
     # 导入所有模型以确保 Base.metadata 知道它们
     from backend.models import (  # noqa: F401
         Fund,
@@ -258,13 +255,13 @@ async def init_db() -> None:
         # equity_ratio 列
         try:
             await conn.execute(text("ALTER TABLE analysis_results ADD COLUMN equity_ratio FLOAT NOT NULL DEFAULT 0.5"))
-        except Exception:
-            pass
+        except Exception as e:
+            _migration_ok(e, "analysis_results.equity_ratio")
         # funds 表 starred 列（星标收藏）
         try:
             await conn.execute(text("ALTER TABLE funds ADD COLUMN starred BOOLEAN NOT NULL DEFAULT 0"))
-        except Exception:
-            pass
+        except Exception as e:
+            _migration_ok(e, "funds.starred")
         # funds 表双层标签列（2026-08-30：主标签=官方类型+基准定位，副标签=持仓暴露）
         for col_sql in [
             "ALTER TABLE funds ADD COLUMN fund_type_official VARCHAR(50)",
@@ -273,8 +270,8 @@ async def init_db() -> None:
         ]:
             try:
                 await conn.execute(text(col_sql))
-            except Exception:
-                pass
+            except Exception as e:
+                _migration_ok(e, col_sql)
         # factor 表新列
         for col_sql in [
             "ALTER TABLE factors ADD COLUMN data_fields TEXT",
@@ -287,8 +284,8 @@ async def init_db() -> None:
         ]:
             try:
                 await conn.execute(text(col_sql))
-            except Exception:
-                pass
+            except Exception as e:
+                _migration_ok(e, col_sql)
 
         # uq_fund_date 唯一约束回填（旧库 create_all 不会补约束；并发分析曾可插重复行）
         # 先清理历史重复（保留每组最新一条），再建唯一索引
@@ -300,8 +297,8 @@ async def init_db() -> None:
             await conn.execute(text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_fund_date ON analysis_results (fund_id, analysis_date)"
             ))
-        except Exception:
-            pass
+        except Exception as e:
+            _migration_ok(e, "uq_fund_date 回填/唯一索引")
 
         # analysis_results 索引（按日期查询、按基金查历史时加速）
         for idx_sql in [
@@ -310,8 +307,8 @@ async def init_db() -> None:
         ]:
             try:
                 await conn.execute(text(idx_sql))
-            except Exception:
-                pass
+            except Exception as e:
+                _migration_ok(e, idx_sql)
 
     # ── 修复已有因子记录的标准化配置 ──
     async with async_session_factory() as session:
@@ -341,7 +338,7 @@ async def init_db() -> None:
         if result.scalars().first() is None:
             logger.info("空数据库，跳过因子迁移")
         else:
-            now = datetime.now()
+            now = now_beijing()
 
             # 1. 禁用旧因子（roe_stability → info_ratio; volume_price → max_drawdown）
             for old_code in ("roe_stability", "volume_price"):
@@ -409,7 +406,7 @@ async def init_db() -> None:
                     config_key="factor_reactivation_v1",
                     config_value="done",
                     description="内置因子一次性重激活迁移标记（2026-08-29）",
-                    updated_at=datetime.now(),
+                    updated_at=now_beijing(),
                 ))
 
             await session.commit()
@@ -437,7 +434,7 @@ async def init_db() -> None:
                     if deduped:
                         deduped[-1]["min_score"] = -6.4
                     config.config_value = json.dumps(deduped, ensure_ascii=False)
-                    config.updated_at = datetime.now()
+                    config.updated_at = now_beijing()
                     await session.commit()
                     logger.info(f"已修复评分阈值：去重 {len(data)}→{len(deduped)} 档，末档 min_score=-6.4")
             except Exception as e:
@@ -463,7 +460,7 @@ async def init_db() -> None:
             )).scalars().first()
             if not exists:
                 session.add(SystemConfig(
-                    config_key=key, config_value=val, description=desc, updated_at=datetime.now()
+                    config_key=key, config_value=val, description=desc, updated_at=now_beijing()
                 ))
         await session.commit()
 
@@ -473,7 +470,7 @@ async def init_db() -> None:
         from sqlalchemy import select
         result = await session.execute(select(Factor).limit(1))
         if result.scalars().first() is None:
-            now = datetime.now()
+            now = now_beijing()
             factors = [
                 Factor(
                     name=c["name"], code=c["code"], direction=c["direction"],
@@ -490,7 +487,7 @@ async def init_db() -> None:
             session.add_all(factors)
 
         # ── 检查并补充报告配置 ──
-        now = datetime.now()
+        now = now_beijing()
         default_report_configs = [
                 ReportConfig(
                     name="因子详情",
@@ -624,7 +621,7 @@ async def init_db() -> None:
         # ── 检查是否已有系统配置 ──
         result = await session.execute(select(SystemConfig).limit(1))
         if result.scalars().first() is None:
-            now = datetime.now()
+            now = now_beijing()
             system_configs = [
                 SystemConfig(
                     config_key="ai_enabled",

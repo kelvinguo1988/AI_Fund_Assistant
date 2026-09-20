@@ -8,6 +8,7 @@
 
 状态保存在进程内存（单实例足够），重启后自动归零，可重新触发。
 """
+from backend.utils.timezone import now_beijing
 
 import asyncio
 import logging
@@ -55,7 +56,7 @@ class FundRefreshState:
         self.error = None
         self.results = []
         self.updated_at = None
-        self.started_at = datetime.now()
+        self.started_at = now_beijing()
         self.finished_at = None
 
 
@@ -98,7 +99,7 @@ async def run_refresh_all_details() -> None:
                 state.status = "done"
                 state.total = 0
                 state.message = "无活跃基金"
-                state.finished_at = datetime.now()
+                state.finished_at = now_beijing()
                 return
 
             codes = [f.code for f in funds]
@@ -187,11 +188,11 @@ async def run_refresh_all_details() -> None:
 
         state.status = "done"
         state.message = "刷新完成"
-        state.finished_at = datetime.now()
+        state.finished_at = now_beijing()
         logger.info("全部基金详情刷新完成（%d 只）", state.total)
     except Exception as e:
         logger.exception("刷新全部基金详情失败")
         state.status = "failed"
         state.error = str(e)
         state.message = "刷新失败"
-        state.finished_at = datetime.now()
+        state.finished_at = now_beijing()

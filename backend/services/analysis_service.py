@@ -1,10 +1,12 @@
 """分析编排服务 — 数据获取→因子计算→评分→信号→存储→推送"""
+from backend.utils.timezone import now_beijing
 
 import asyncio
 import json
 import logging
-from datetime import date, datetime
-from typing import AsyncGenerator, Optional
+from dataclasses import dataclass
+from datetime import date
+from typing import Any, AsyncGenerator, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.data_sources.data_source_manager import DataSourceManager
 from backend.data_sources.base import FundData
 from backend.engines.factor_engine import factor_engine, FactorScoreResult
-from backend.engines.scoring_engine import scoring_engine, SignalResult, compute_with_quality_filter
-from backend.engines.report_engine import report_engine
+from backend.engines.scoring_engine import SignalResult, compute_with_quality_filter
 from backend.engines.quality_filter import (
     quality_filter as _default_quality_filter,
     QualityFilterResult,
@@ -23,7 +24,6 @@ from backend.engines.quality_filter import (
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.models.fund_quarterly import FundQuarterly
-from backend.models.report_config import ReportConfig
 from backend.models.system_config import SystemConfig
 from backend.schemas.analysis import (
     AnalysisResultOut, FactorScore,
@@ -54,6 +54,17 @@ def _inject_regime_params(params_json, snapshot) -> dict:
         params = {}
     params["_regime_snapshot"] = snapshot
     return params
+
+
+@dataclass
+class _AnalysisConfig:
+    """一轮分析的共享配置快照（批量与流式路径同一来源，防双份漂移）"""
+
+    active_factors: list[dict]
+    thresholds_json: str
+    qf: Any
+    regime_snapshot: Any
+    regime_factors: list[dict]
 
 
 class AnalysisService:
@@ -142,66 +153,25 @@ class AnalysisService:
         self,
         fund_ids: Optional[list[int]] = None,
     ) -> list[AnalysisResultOut]:
-        """执行分析流程
+        """执行分析流程（配置准备与逐基金评分与流式路径共用，防双份漂移）
 
         流程：
         1. 获取基金列表 + 活跃因子配置 + 系统配置
         2. 逐只基金获取数据、计算因子原始值
         3. 跨基金截面标准化（如波动率倒数）
-        4. 逐只基金计算加权评分、信号、报告
+        4. 逐只基金计算加权评分、信号
         5. 存储结果并返回
         """
         # 1. 获取基金池
-        stmt = select(Fund).where(Fund.status == "active")
-        if fund_ids:
-            stmt = stmt.where(Fund.id.in_(fund_ids))
-        result = await self.db.execute(stmt)
-        funds = result.scalars().all()
-
+        funds = list(await self._load_fund_pool(fund_ids))
         if not funds:
             logger.warning("没有启用的基金，跳过分析")
             return []
 
-        # 2. 获取活跃因子配置
-        from backend.services.factor_service import FactorService
-        factor_svc = FactorService(self.db)
-        active_factors = await factor_svc.get_active_factors_as_dicts()
-
-        if not active_factors:
-            logger.warning("没有启用的因子，跳过分析")
+        # 2. 因子/阈值/质量过滤/市场环境配置
+        cfg = await self._load_analysis_config()
+        if cfg is None:
             return []
-
-        # 3. 获取评分阈值配置
-        config_map = await self._get_config_map()
-        # buy/sell_threshold 旧配置键已删：真正生效的是五档 scoring_thresholds
-        # 与质量过滤动态阈值（base_buy/sell_threshold），此前载入后从未消费
-        thresholds_json = config_map.get("scoring_thresholds", "")
-
-        # 4. 获取报告配置
-        report_result = await self.db.execute(
-            select(ReportConfig).where(ReportConfig.enabled == True).order_by(ReportConfig.sort_order)
-        )
-        enabled_report_items = [r.item_key for r in report_result.scalars().all()]
-
-        # 5. 加载质量过滤配置（DB 覆盖默认值）
-        merged_qf_config = await merge_quality_config(self.db)
-        qf = build_quality_filter(merged_qf_config)
-
-        # 5.5 获取市场环境快照（市场环境因子 + 极端估值阈值调节）
-        # 快照随参数传递（任务间隔离，无模块级全局竞态）；
-        # 失败不阻塞主流程：快照缺失时市场因子返回中性 0 分，阈值不调节
-        try:
-            from backend.services.market_regime_service import MarketRegimeService
-            regime_snapshot = await MarketRegimeService().get_snapshot()
-        except Exception as e:
-            logger.warning(f"市场环境快照获取失败，市场因子将使用中性分: {e}")
-            regime_snapshot = None
-        # 市场环境因子不依赖 fund_data，通过 params 注入快照（_ 前缀 = 引擎内部字段）
-        regime_factors = [
-            {**f, "params": _inject_regime_params(f.get("params"), regime_snapshot)}
-            if f.get("code", "").startswith("market_") else f
-            for f in active_factors
-        ]
 
         # 6. 逐只基金获取数据 + 计算因子（第一遍）
         # 修复：原实现串行 for 循环，40-60 只基金 × (3s 限流 + 2-5s jitter + 请求耗时)
@@ -245,7 +215,7 @@ class AnalysisService:
                 quarterly_data_map[fund.code] = quarterly
                 # numpy 密集计算放线程池，避免阻塞事件循环（批量分析时拖慢所有并发请求）
                 factor_scores = await asyncio.to_thread(
-                    factor_engine.calculate_all, fund_data, regime_factors
+                    factor_engine.calculate_all, fund_data, cfg.regime_factors
                 )
                 all_factor_results[fund.code] = factor_scores
                 logger.info(f"因子计算完成: {fund.code} ({fund.name}), {len(factor_scores)} 个因子")
@@ -256,76 +226,33 @@ class AnalysisService:
                 )
                 continue
 
-        # 6. 跨基金截面标准化
+        # 6.5 跨基金截面标准化
         all_factor_results = await asyncio.to_thread(
-            factor_engine.normalize_cross_sectional, all_factor_results, regime_factors
+            factor_engine.normalize_cross_sectional, all_factor_results, cfg.regime_factors
         )
 
-        # 7. 逐只基金评分 + 信号 + 存储
+        # 7. 逐只基金评分 + 存储（与流式路径共用 _score_and_store）
         results: list[AnalysisResultOut] = []
         for fund in funds:
             if fund.code not in all_factor_results:
                 continue
-
-            factor_scores = all_factor_results[fund.code]
             fund_data = fund_data_map.get(fund.code)
-            quarterly = quarterly_data_map.get(fund.code, [])
-
-            # ── 第零层：质量过滤 ──
             if fund_data is None:
                 continue
 
-            # 2026-08-29 修复：单基金评分/报告异常不再中止整轮分析
+            # 2026-08-29 修复：单基金评分异常不再中止整轮分析
             #（原先任何异常会让最终 commit 不执行，全部结果丢失且接口 500）
             try:
-                qf_result, corrected_scores, corrected_weights = qf.build_result(
-                    regime_snapshot=regime_snapshot,
-                    fund_code=fund.code,
+                result_out = await self._score_and_store(
+                    fund, cfg,
+                    factor_scores=all_factor_results[fund.code],
                     fund_data=fund_data,
-                    quarterly_history=quarterly,
-                    factor_scores=factor_scores,
-                    active_factors=active_factors,
-                )
-
-                # 被否决的基金跳过
-                if qf_result.vetoed:
-                    logger.info(f"基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
-                    continue
-
-                # ── 加权评分 + 质量过滤决策 ──
-                signal = compute_with_quality_filter(
-                    factor_scores=corrected_scores,
-                    factor_weights=corrected_weights,
-                    quality_result=qf_result,
-                    thresholds_json=thresholds_json,
-                )
-
-                # 生成报告
-                analysis_date = date.today().isoformat()
-                top10_changes = None
-                top10_quote_time = ""
-                if "top10_change" in enabled_report_items:
-                    top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
-                report_md = report_engine.generate_markdown(
-                    fund_code=fund.code,
-                    fund_name=fund.name,
-                    analysis_date=analysis_date,
-                    signal=signal,
-                    factor_scores=corrected_scores,
-                    enabled_items=enabled_report_items,
-                    top10_changes=top10_changes,
-                    top10_quote_time=top10_quote_time,
-                )
-
-                # 存储结果（含质量过滤扩展字段）
-                result_out = await self._save_result(
-                    fund, signal, corrected_scores,
-                    qf_result=qf_result,
+                    quarterly=quarterly_data_map.get(fund.code, []),
                 )
                 if result_out:
                     results.append(result_out)
             except Exception as fund_err:
-                logger.error(f"基金 {fund.code} 评分/报告失败，跳过: {fund_err}", exc_info=True)
+                logger.error(f"基金 {fund.code} 评分失败，跳过: {fund_err}", exc_info=True)
                 continue
 
         # 统一提交所有分析结果（替代原来逐条 commit，60 只基金=1 次提交）
@@ -355,11 +282,7 @@ class AnalysisService:
         - {"type":"complete","total":50,"succeeded":48}
         """
         # 1. 获取基金池
-        stmt = select(Fund).where(Fund.status == "active")
-        if fund_ids:
-            stmt = stmt.where(Fund.id.in_(fund_ids))
-        result = await self.db.execute(stmt)
-        funds = result.scalars().all()
+        funds = list(await self._load_fund_pool(fund_ids))
 
         if not funds:
             yield "data: " + json.dumps({"type": "complete", "total": 0, "succeeded": 0}) + "\n\n"
@@ -367,43 +290,11 @@ class AnalysisService:
 
         total = len(funds)
 
-        # 2. 获取活跃因子配置
-        from backend.services.factor_service import FactorService
-        factor_svc = FactorService(self.db)
-        active_factors = await factor_svc.get_active_factors_as_dicts()
-
-        if not active_factors:
+        # 2. 因子/阈值/质量过滤/市场环境配置（与批量路径共用，防双份漂移）
+        cfg = await self._load_analysis_config()
+        if cfg is None:
             yield "data: " + json.dumps({"type": "complete", "total": total, "succeeded": 0, "error": "没有启用的因子"}) + "\n\n"
             return
-
-        # 3. 获取评分阈值
-        config_map = await self._get_config_map()
-        # buy/sell_threshold 旧配置键已删：真正生效的是五档 scoring_thresholds
-        # 与质量过滤动态阈值（base_buy/sell_threshold），此前载入后从未消费
-        thresholds_json = config_map.get("scoring_thresholds", "")
-
-        # 4. 获取报告配置
-        report_result = await self.db.execute(
-            select(ReportConfig).where(ReportConfig.enabled == True).order_by(ReportConfig.sort_order)
-        )
-        enabled_report_items = [r.item_key for r in report_result.scalars().all()]
-
-        # 加载质量过滤配置
-        merged_qf_config = await merge_quality_config(self.db)
-        qf = build_quality_filter(merged_qf_config)
-
-        # 获取市场环境快照（随参数传递，失败不阻塞主流程）
-        try:
-            from backend.services.market_regime_service import MarketRegimeService
-            regime_snapshot = await MarketRegimeService().get_snapshot()
-        except Exception as e:
-            logger.warning(f"市场环境快照获取失败，市场因子将使用中性分: {e}")
-            regime_snapshot = None
-        regime_factors = [
-            {**f, "params": _inject_regime_params(f.get("params"), regime_snapshot)}
-            if f.get("code", "").startswith("market_") else f
-            for f in active_factors
-        ]
 
         # ── Phase 1: 逐只获取数据 + 计算因子（仅推进度，不推结果） ──
         fund_data_map: dict[str, FundData] = {}
@@ -422,7 +313,7 @@ class AnalysisService:
                 fd = await self.data_source.get_fund_data(
                     fund.code, fund_type=getattr(fund, "fund_type", None)
                 )
-                fs = await asyncio.to_thread(factor_engine.calculate_all, fd, regime_factors)
+                fs = await asyncio.to_thread(factor_engine.calculate_all, fd, cfg.regime_factors)
                 return fund, fd, fs, None
             except Exception as e:
                 logger.error(
@@ -447,10 +338,10 @@ class AnalysisService:
 
         # 5. 跨基金截面标准化
         all_factor_results = await asyncio.to_thread(
-            factor_engine.normalize_cross_sectional, all_factor_results, regime_factors
+            factor_engine.normalize_cross_sectional, all_factor_results, cfg.regime_factors
         )
 
-        # ── Phase 2: 分块评分 + 存储 + 推送结果 ──
+        # ── Phase 2: 分块评分 + 存储 + 推送结果（与批量路径共用 _score_and_store） ──
         results: list[AnalysisResultOut] = []
 
         for chunk_start in range(0, len(funds), _STREAM_CHUNK_SIZE):
@@ -461,60 +352,23 @@ class AnalysisService:
                 if fund.code not in all_factor_results:
                     continue
 
-                factor_scores = all_factor_results[fund.code]
                 fund_data = fund_data_map.get(fund.code)
-                quarterly = quarterly_data_map.get(fund.code, [])
-
                 if fund_data is None:
                     continue
 
-                # 第零层：质量过滤
                 # 2026-08-29 修复：单基金异常不影响后续基金与 complete 事件
                 try:
-                    qf_result, corrected_scores, corrected_weights = qf.build_result(
-                        regime_snapshot=regime_snapshot,
-                        fund_code=fund.code,
+                    result_out = await self._score_and_store(
+                        fund, cfg,
+                        factor_scores=all_factor_results[fund.code],
                         fund_data=fund_data,
-                        quarterly_history=quarterly,
-                        factor_scores=factor_scores,
-                        active_factors=active_factors,
-                    )
-
-                    if qf_result.vetoed:
-                        logger.info(f"流式分析: 基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
-                        continue
-
-                    signal = compute_with_quality_filter(
-                        factor_scores=corrected_scores,
-                        factor_weights=corrected_weights,
-                        quality_result=qf_result,
-                        thresholds_json=thresholds_json,
-                    )
-
-                    top10_changes = None
-                    top10_quote_time = ""
-                    if "top10_change" in enabled_report_items:
-                        top10_changes, top10_quote_time = await self._get_top10_changes(fund.id)
-                    report_md = report_engine.generate_markdown(
-                        fund_code=fund.code,
-                        fund_name=fund.name,
-                        analysis_date=date.today().isoformat(),
-                        signal=signal,
-                        factor_scores=corrected_scores,
-                        enabled_items=enabled_report_items,
-                        top10_changes=top10_changes,
-                        top10_quote_time=top10_quote_time,
-                    )
-
-                    result_out = await self._save_result(
-                        fund, signal, corrected_scores,
-                        qf_result=qf_result,
+                        quarterly=quarterly_data_map.get(fund.code, []),
                     )
                     if result_out:
                         chunk_results.append(result_out)
                         results.append(result_out)
                 except Exception as fund_err:
-                    logger.error(f"基金 {fund.code} 评分/报告失败，跳过: {fund_err}", exc_info=True)
+                    logger.error(f"基金 {fund.code} 评分失败，跳过: {fund_err}", exc_info=True)
                     continue
 
             # 批量提交本 chunk 的结果（替代原来逐条 commit）
@@ -538,21 +392,91 @@ class AnalysisService:
         }
         yield f"data: {json.dumps(complete_data, ensure_ascii=False)}\n\n"
 
-    async def _get_top10_changes(
-        self, fund_id: int
-    ) -> tuple[Optional[list[dict]], str]:
-        """前十大持仓当日涨跌（报告 top10_change 项）
+    async def _load_fund_pool(self, fund_ids: Optional[list[int]]) -> list[Fund]:
+        """待分析基金池（批量/流式共用）"""
+        stmt = select(Fund).where(Fund.status == "active")
+        if fund_ids:
+            stmt = stmt.where(Fund.id.in_(fund_ids))
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
 
-        Returns: (changes, quote_time) — quote_time 为行情时点（哪一天的涨跌）
+    async def _load_analysis_config(self) -> Optional[_AnalysisConfig]:
+        """一轮分析的共享配置：因子/阈值/质量过滤/市场环境快照
+
+        无启用因子返回 None（调用方决定终止方式：批量返回 []，流式发 complete）。
         """
+        from backend.services.factor_service import FactorService
+        factor_svc = FactorService(self.db)
+        active_factors = await factor_svc.get_active_factors_as_dicts()
+        if not active_factors:
+            logger.warning("没有启用的因子，跳过分析")
+            return None
+
+        # buy/sell_threshold 旧配置键已删：真正生效的是五档 scoring_thresholds
+        # 与质量过滤动态阈值（base_buy/sell_threshold），此前载入后从未消费
+        config_map = await self._get_config_map()
+        thresholds_json = config_map.get("scoring_thresholds", "")
+
+        # 质量过滤配置（DB 覆盖默认值）
+        merged_qf_config = await merge_quality_config(self.db)
+        qf = build_quality_filter(merged_qf_config)
+
+        # 市场环境快照随参数传递（任务间隔离，无模块级全局竞态）；
+        # 失败不阻塞主流程：快照缺失时市场因子返回中性 0 分，阈值不调节
         try:
-            from backend.services.fund_realtime_service import FundRealtimeService
-            rt_svc = FundRealtimeService(self.db)
-            changes = await rt_svc.get_top10_changes(fund_id)
-            return (changes or None), FundRealtimeService.get_spot_quote_time()
+            from backend.services.market_regime_service import MarketRegimeService
+            regime_snapshot = await MarketRegimeService().get_snapshot()
         except Exception as e:
-            logger.warning(f"获取前十大持仓涨跌失败 fund_id={fund_id}: {e}")
-            return None, ""
+            logger.warning(f"市场环境快照获取失败，市场因子将使用中性分: {e}")
+            regime_snapshot = None
+        # 市场环境因子不依赖 fund_data，通过 params 注入快照（_ 前缀 = 引擎内部字段）
+        regime_factors = [
+            {**f, "params": _inject_regime_params(f.get("params"), regime_snapshot)}
+            if f.get("code", "").startswith("market_") else f
+            for f in active_factors
+        ]
+        return _AnalysisConfig(
+            active_factors=active_factors,
+            thresholds_json=thresholds_json,
+            qf=qf,
+            regime_snapshot=regime_snapshot,
+            regime_factors=regime_factors,
+        )
+
+    async def _score_and_store(
+        self,
+        fund: Fund,
+        cfg: _AnalysisConfig,
+        factor_scores: list[FactorScoreResult],
+        fund_data: FundData,
+        quarterly: list[dict],
+    ) -> Optional[AnalysisResultOut]:
+        """第零层质量过滤 → 加权评分 → 存储（批量/流式共用，防双份漂移）
+
+        返回 None = 被前置否决。报告正文在查询/推送时按需生成，
+        分析路径不再计算（原两份 generate_markdown 结果从未落库，纯耗 CPU）。
+        """
+        qf_result, corrected_scores, corrected_weights = cfg.qf.build_result(
+            regime_snapshot=cfg.regime_snapshot,
+            fund_code=fund.code,
+            fund_data=fund_data,
+            quarterly_history=quarterly,
+            factor_scores=factor_scores,
+            active_factors=cfg.active_factors,
+        )
+        if qf_result.vetoed:
+            logger.info(f"基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
+            return None
+
+        signal = compute_with_quality_filter(
+            factor_scores=corrected_scores,
+            factor_weights=corrected_weights,
+            quality_result=qf_result,
+            thresholds_json=cfg.thresholds_json,
+        )
+        return await self._save_result(
+            fund, signal, corrected_scores, qf_result=qf_result,
+        )
 
     async def _save_result(
         self,
@@ -626,7 +550,7 @@ class AnalysisService:
                 )
                 for fs in factor_scores
             ],
-            created_at=datetime.now(),
+            created_at=now_beijing(),
             original_score=signal.original_score,
             dynamic_buy_threshold=signal.dynamic_buy_threshold,
             quality_warnings=signal.quality_warnings or None,
@@ -674,7 +598,7 @@ class AnalysisService:
 
         return AnalysisExportPayload(
             version="1.0",
-            exported_at=datetime.now().isoformat(timespec="seconds"),
+            exported_at=now_beijing().isoformat(timespec="seconds"),
             items=items,
         )
 

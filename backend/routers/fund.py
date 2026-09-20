@@ -1,10 +1,9 @@
 """基金 CRUD 路由"""
+from backend.utils.timezone import now_beijing
 
 import asyncio
 import json
 import logging
-import random
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
@@ -27,8 +26,8 @@ from backend.services.fund_cache_service import (
     get_cached_json,
     CACHE_KEY_EXTENDED_DETAIL,
 )
-from backend.services.fund_holding_service import get_latest_holdings, refresh_holdings
-from backend.services.fund_manager_service import get_current_managers, refresh_managers
+from backend.services.fund_holding_service import get_latest_holdings
+from backend.services.fund_manager_service import get_current_managers
 from backend.services.fund_change_detector import get_fund_changes
 from backend.models.fund import Fund
 from backend.services.fund_service import FundService, classify_and_sort_funds, enrich_fund_themes
@@ -58,7 +57,7 @@ async def export_funds(db: AsyncSession = Depends(get_db)):
     items = [FundOut.model_validate(f).model_dump(mode="json") for f in funds]
     payload = {
         "version": "1.0",
-        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "exported_at": now_beijing().isoformat(timespec="seconds"),
         "items": items,
     }
     return Response(
@@ -573,11 +572,11 @@ async def export_concept_map():
         concepts.setdefault(cname, []).append(sc)
     payload = {
         "source": "AI_Fund_Assistant 概念映射导出",
-        "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "exported_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
         "concepts": concepts,
     }
     body = json.dumps(payload, ensure_ascii=False, indent=1)
-    filename = f"concept_map_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    filename = f"concept_map_{now_beijing().strftime('%Y%m%d_%H%M%S')}.json"
     return Response(
         content=body,
         media_type="application/json; charset=utf-8",

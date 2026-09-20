@@ -13,6 +13,7 @@ from backend.models.fund import Fund
 from backend.models.system_config import SystemConfig
 from backend.models.analysis_result import AnalysisResult
 from backend.schemas.ai import ChatMessage, ChatResponse
+from backend.utils.timezone import now_beijing
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,11 @@ class AIService:
         # 构建系统提示词
         system_prompt = await self._build_system_prompt(message)
 
-        # 获取历史对话
-        history = await self._get_conversation_history(conversation_id)
+        # 获取历史对话（最近 10 轮 = 20 条，SQL LIMIT 取尾部，避免全量载入）
+        history = await self._get_conversation_history(conversation_id, limit=20)
         messages = [
             {"role": msg.role, "content": msg.content}
-            for msg in history[-10:]  # 保留最近 10 轮
+            for msg in history
         ]
         messages.append({"role": "user", "content": message.content})
 
@@ -75,8 +76,9 @@ class AIService:
                 messages=messages,
             )
         except Exception as e:
-            logger.error(f"LLM 调用失败: {e}")
-            raise ValueError(f"AI 服务调用失败: {str(e)}")
+            # 原始异常只进日志：detail 会经路由透给前端，防泄漏 API key/URL 等内部信息
+            logger.error(f"LLM 调用失败: {type(e).__name__}: {e}", exc_info=True)
+            raise ValueError("AI 服务调用失败")
 
         # 存储用户消息
         user_conv = AIConversation(
@@ -85,7 +87,7 @@ class AIService:
             content=message.content,
             context_type=message.context_type,
             fund_id=message.fund_id,
-            created_at=__import__("datetime").datetime.now(),
+            created_at=now_beijing(),
         )
         self.db.add(user_conv)
 
@@ -97,7 +99,7 @@ class AIService:
             context_type=message.context_type,
             fund_id=message.fund_id,
             model_name=ai_model,
-            created_at=__import__("datetime").datetime.now(),
+            created_at=now_beijing(),
         )
         self.db.add(assistant_conv)
         await self.db.commit()
@@ -123,20 +125,34 @@ class AIService:
         # ── 始终注入：系统全量数据 ──
         global_parts: list[str] = []
 
-        # 1. 全部活跃基金 + 最新分析结果
+        # 1. 全部活跃基金 + 最新分析结果（JOIN 单查询取各基金最新一条，避免 N+1）
         funds_result = await self.db.execute(select(Fund).where(Fund.status == "active"))
         funds = funds_result.scalars().all()
         if funds:
+            from sqlalchemy import func
+
+            latest = (
+                select(
+                    AnalysisResult.fund_id,
+                    func.max(AnalysisResult.analysis_date).label("max_date"),
+                )
+                .group_by(AnalysisResult.fund_id)
+                .subquery()
+            )
+            ars_result = await self.db.execute(
+                select(AnalysisResult).join(
+                    latest,
+                    (AnalysisResult.fund_id == latest.c.fund_id)
+                    & (AnalysisResult.analysis_date == latest.c.max_date),
+                )
+            )
+            analysis_by_fund: dict[int, AnalysisResult] = {}
+            for a in ars_result.scalars():
+                analysis_by_fund.setdefault(a.fund_id, a)
+
             fund_lines: list[str] = []
             for f in funds:
-                # 获取每只基金的最新分析结果
-                ar = await self.db.execute(
-                    select(AnalysisResult)
-                    .where(AnalysisResult.fund_id == f.id)
-                    .order_by(AnalysisResult.analysis_date.desc())
-                    .limit(1)
-                )
-                analysis = ar.scalars().first()
+                analysis = analysis_by_fund.get(f.id)
                 if analysis:
                     line = (
                         f"  {f.name}({f.code}): "
@@ -146,13 +162,34 @@ class AIService:
                     )
                     try:
                         scores = json.loads(analysis.factor_scores)
-                        line += f", 因子={json.dumps(scores, ensure_ascii=False)}"
-                    except (json.JSONDecodeError, TypeError):
+                        # 只保留 |score| 最大的 5 个因子，控制 token 体积
+                        if isinstance(scores, dict) and scores:
+                            top = sorted(
+                                scores.items(),
+                                key=lambda kv: abs(float(kv[1] or 0)),
+                                reverse=True,
+                            )[:5]
+                            line += ", 因子=" + ", ".join(f"{k}={v}" for k, v in top)
+                        elif isinstance(scores, list) and scores:
+                            top = sorted(
+                                scores,
+                                key=lambda fs: abs(float(fs.get("score", 0) or 0)),
+                                reverse=True,
+                            )[:5]
+                            line += ", 因子=" + ", ".join(
+                                f"{fs.get('factor_name', fs.get('factor_code', '?'))}={fs.get('score')}"
+                                for fs in top
+                            )
+                    except (json.JSONDecodeError, TypeError, ValueError):
                         pass
                     fund_lines.append(line)
                 else:
                     fund_lines.append(f"  {f.name}({f.code}): 暂无分析数据")
-            global_parts.append("\n【基金池及最新分析】\n" + "\n".join(fund_lines))
+            pool_block = "\n【基金池及最新分析】\n" + "\n".join(fund_lines)
+            # token 预算：大池截断，防止系统提示词膨胀挤占上下文
+            if len(pool_block) > 4000:
+                pool_block = pool_block[:4000] + "\n…（基金列表过长已截断）"
+            global_parts.append(pool_block)
 
         # 2. 评分阈值配置
         config_map = await self._get_config_map()
@@ -224,14 +261,17 @@ class AIService:
 
         return base_prompt
 
-    async def _get_conversation_history(self, conversation_id: str) -> list[AIConversation]:
-        """获取对话历史"""
+    async def _get_conversation_history(
+        self, conversation_id: str, limit: int = 20
+    ) -> list[AIConversation]:
+        """获取对话历史（取最近 limit 条，按时间正序返回）"""
         result = await self.db.execute(
             select(AIConversation)
             .where(AIConversation.conversation_id == conversation_id)
-            .order_by(AIConversation.created_at)
+            .order_by(AIConversation.created_at.desc(), AIConversation.id.desc())
+            .limit(limit)
         )
-        return list(result.scalars().all())
+        return list(reversed(result.scalars().all()))
 
     async def _get_config_map(self) -> dict[str, str]:
         """获取系统配置 KV 映射"""

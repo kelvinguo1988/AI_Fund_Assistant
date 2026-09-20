@@ -9,12 +9,12 @@
   前端批量结果页跑的过程中即可看到逐只更新；周期性覆盖上一轮
 - 单只失败不影响其余：error 记录到行内，ok=False
 """
+from backend.utils.timezone import now_beijing
 
 import asyncio
 import logging
 import random
 import time
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import delete, select
@@ -154,7 +154,7 @@ class AutoBacktestService:
         row.buy_effectiveness = summary.buy_effectiveness
         row.sell_effectiveness = summary.sell_effectiveness
         row.effectiveness_rate = summary.effectiveness_rate
-        row.finished_at = datetime.now()
+        row.finished_at = now_beijing()
         row.error = None
         row.ok = True
         await self.db.commit()
@@ -169,7 +169,7 @@ class AutoBacktestService:
             self.db.add(row)
         row.error = message
         row.ok = False
-        row.finished_at = datetime.now()
+        row.finished_at = now_beijing()
         await self.db.commit()
 
     @staticmethod

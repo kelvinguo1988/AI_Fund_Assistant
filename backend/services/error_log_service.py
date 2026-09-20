@@ -3,6 +3,7 @@
 设计（2026-08-31）：
 - 独立 sqlite3 连接（check_same_thread=False + threading.Lock），同步读写，
   线程池埋点（eastmoney_patch/adapter 线程）与 async 上下文均可安全调用
+  （log_source_failure 在事件循环内自动经 to_thread 派发，不阻塞 loop）
 - **节流去重**：(module, category, message 指纹) 60 秒内只记 1 条——
   限流类错误在批量任务里会连续触发，不节流会刷爆表且无增量信息
 - 表容量上限 2000 条，插入时裁剪旧行
@@ -14,6 +15,7 @@
     other       其他
 """
 
+import asyncio
 import logging
 import sqlite3
 import threading
@@ -179,12 +181,32 @@ class ErrorLogStore:
         return "\n".join(lines)
 
 
+_BG_LOG_TASKS: set = set()
+
+
 def log_source_failure(module: str, message: str, category: str = "rate_limit",
                        detail: str = "", severity: str = "error") -> None:
-    """数据源失败埋点便捷函数（自动节流；自身异常绝不抛出）"""
+    """数据源失败埋点便捷函数（自动节流；自身异常绝不抛出）
+
+    async 上下文中把同步 sqlite3 写入派发到线程池，避免阻塞事件循环；
+    任务持强引用防被 GC 提前回收取消。
+    """
+    def _write():
+        try:
+            ErrorLogStore().log(module, message, category=category,
+                                severity=severity, detail=detail)
+        except Exception:
+            pass
+
     try:
-        ErrorLogStore().log(module, message, category=category,
-                            severity=severity, detail=detail)
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _write()
+        return
+    try:
+        task = loop.create_task(asyncio.to_thread(_write))
+        _BG_LOG_TASKS.add(task)
+        task.add_done_callback(_BG_LOG_TASKS.discard)
     except Exception:
         pass
 

@@ -1,6 +1,7 @@
 """AI Skill 路由 — CRUD / 批量导入 / 启停"""
 
 import logging
+from backend.utils.timezone import now_beijing
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -82,7 +83,7 @@ async def import_skills(
                 existing.description = item.description
                 existing.system_prompt = item.system_prompt
                 existing.enabled = item.enabled
-                existing.updated_at = __import__("datetime").datetime.now()
+                existing.updated_at = now_beijing()
                 result.updated += 1
             else:
                 db.add(AISkill(

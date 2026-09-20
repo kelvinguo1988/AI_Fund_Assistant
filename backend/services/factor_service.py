@@ -1,4 +1,5 @@
 """因子业务逻辑 — CRUD + 权重管理"""
+from backend.utils.timezone import now_beijing
 
 import json
 import logging
@@ -165,7 +166,7 @@ class FactorService:
             ))
         return FactorExportPayload(
             version="1.0",
-            exported_at=datetime.now().isoformat(timespec="seconds"),
+            exported_at=now_beijing().isoformat(timespec="seconds"),
             factors=items,
         )
 

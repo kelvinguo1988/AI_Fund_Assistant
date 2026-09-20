@@ -4,31 +4,16 @@ import json
 import logging
 from datetime import datetime
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.fund_data_cache import FundDataCache
+from backend.utils.timezone import now_beijing as _now_beijing
 from backend.services.fund_detail_service import fetch_all_js_texts, _parse_period_returns, _parse_extended_data
 
 logger = logging.getLogger(__name__)
-
-
-def _now_beijing() -> datetime:
-    """北京时间墙钟（naive）
-
-    2026-08-28 修复：python:3.9-slim 镜像无 tzdata，TZ=Asia/Shanghai 环境变量
-    不生效，datetime.now() 实际返回 UTC——11:58 的刷新被记成 03:58 并被前端
-    贴上"北京时间"标签。改用 ZoneInfo 显式取北京时间；PyPI tzdata 包兜底。
-    返回 naive（SQLite DateTime 存储丢弃 tzinfo，读写保持一致）。
-    """
-    try:
-        return datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
-    except Exception:
-        logger.warning("ZoneInfo 不可用，回退系统本地时间")
-        return datetime.now()
 
 CACHE_KEY_PERIOD_RETURNS = "period_returns"
 CACHE_KEY_REFRESH_TIME = "detail_last_refreshed"

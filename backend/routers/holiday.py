@@ -1,4 +1,5 @@
 from __future__ import annotations
+from backend.utils.timezone import now_beijing
 """调休/节假日日历同步路由
 
 - GET    /api/holiday        查看已同步的调休日历（?year=2026）
@@ -8,7 +9,6 @@ from __future__ import annotations
 """
 
 import logging
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -115,9 +115,9 @@ async def update_holiday_config(
         )).scalars().first()
         if row:
             row.config_value = val
-            row.updated_at = datetime.now()
+            row.updated_at = now_beijing()
         else:
-            db.add(SystemConfig(config_key=key, config_value=val, updated_at=datetime.now()))
+            db.add(SystemConfig(config_key=key, config_value=val, updated_at=now_beijing()))
     await db.commit()
     return await get_holiday_config(db)
 
@@ -132,7 +132,7 @@ async def manual_sync(
     url = body.url if body and body.url else None
     summary = await sync_holiday_calendar(db, year=year, url_template=url)
     if summary.get("synced_years"):
-        now_iso = datetime.now().isoformat(timespec="seconds")
+        now_iso = now_beijing().isoformat(timespec="seconds")
         row = (await db.execute(
             select(SystemConfig).where(SystemConfig.config_key == CFG_LAST_SYNC)
         )).scalars().first()

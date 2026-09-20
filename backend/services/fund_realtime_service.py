@@ -28,6 +28,7 @@
   - 单基金估值结果: 60s TTL
   - fundgz 失败: 5min 冷却防反爬穿透
 """
+from backend.utils.timezone import now_beijing
 
 import asyncio
 import json
@@ -314,7 +315,7 @@ class FundRealtimeService:
                 FundRealtimeService._spot_quote_time = ts.strftime("%Y-%m-%d %H:%M")
                 FundRealtimeService._spot_quote_time_ts = ts
         elif not FundRealtimeService._spot_quote_time:
-            FundRealtimeService._spot_quote_time = datetime.now().strftime(
+            FundRealtimeService._spot_quote_time = now_beijing().strftime(
                 "%Y-%m-%d %H:%M"
             )
 
@@ -464,6 +465,19 @@ class FundRealtimeService:
 
     # ── 数据源实现 ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _merge_etf_cache(spot: dict[str, dict]) -> dict[str, dict]:
+        """按需腾讯结果并入现有缓存（仍新鲜时），避免小 dict 整体覆盖全市场快照"""
+        existing = FundRealtimeService._etf_spot_cache
+        if existing and time.time() - FundRealtimeService._etf_ts < SPOT_CACHE_TTL:
+            existing.update(spot)
+            merged = existing
+        else:
+            merged = spot
+        FundRealtimeService._etf_spot_cache = merged
+        FundRealtimeService._etf_ts = time.time()
+        return merged
+
     async def _get_etf_spot(
         self, codes: Optional[list[str]] = None
     ) -> Optional[dict[str, dict]]:
@@ -474,12 +488,13 @@ class FundRealtimeService:
         """
         now = time.time()
         # 快路径：缓存新鲜且覆盖全部所需代码；codes=None 表示需要全市场快照
-        # （/etf-scan），腾讯按需写入的部分缓存不得冒充（2026-09-12 复查）
+        # （/etf-scan），腾讯按需写入的部分缓存不得冒充（与锁内路径同一口径）
         _cache = FundRealtimeService._etf_spot_cache
         if (
             _cache is not None
             and now - FundRealtimeService._etf_ts < SPOT_CACHE_TTL
-            and (codes is None or all(c in _cache for c in codes))
+            and (codes is not None and all(c in _cache for c in codes)
+                 or codes is None and len(_cache) >= 1000)
         ):
             return _cache
 
@@ -524,8 +539,7 @@ class FundRealtimeService:
                             }
                             for c, q in quotes.items()
                         }
-                        FundRealtimeService._etf_spot_cache = spot
-                        FundRealtimeService._etf_ts = time.time()
+                        spot = FundRealtimeService._merge_etf_cache(spot)
                         logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
                         return spot
                 return None
@@ -576,8 +590,7 @@ class FundRealtimeService:
                             }
                             for c, q in quotes.items()
                         }
-                        FundRealtimeService._etf_spot_cache = spot
-                        FundRealtimeService._etf_ts = time.time()
+                        spot = FundRealtimeService._merge_etf_cache(spot)
                         logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
                         return spot
                 return None
