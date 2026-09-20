@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 # 流式处理块大小：每批处理 5 只基金后推送一次结果
 _STREAM_CHUNK_SIZE = 5
 
+# 第零层质量过滤的空数据告警只提示一次（避免每轮分析刷屏）
+_quarterly_empty_warned = False
+
 
 def _inject_regime_params(params_json, snapshot) -> dict:
     """把市场环境快照注入因子 params（_ 前缀 = 引擎内部字段，不落库）
@@ -102,6 +105,17 @@ class AnalysisService:
             .order_by(FundQuarterly.fund_id, FundQuarterly.report_date)
         )
         records = result.scalars().all()
+        if not records:
+            # fund_quarterly 目前全仓无写入链路（只有读取），空表意味着
+            # 清盘否决/规模冲击/仓位漂移/机构认可度全部静默失效 —— 显式告警而非假装有数据
+            global _quarterly_empty_warned
+            if not _quarterly_empty_warned:
+                _quarterly_empty_warned = True
+                logger.warning(
+                    "第零层质量过滤未生效：fund_quarterly 表为空（无季报同步任务写入），"
+                    "清盘风险/规模冲击/仓位漂移/机构认可度检查均按中性处理"
+                )
+            return {}
         by_fund: dict[int, list[dict]] = {}
         for r in records:
             by_fund.setdefault(r.fund_id, []).append({

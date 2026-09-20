@@ -57,6 +57,24 @@ const SignalBacktest: React.FC = () => {
   const [result, setResult] = useState<BacktestSummary | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
 
+  // ── 回测调仓费率（后端 system_config 持久化，0 = 不计成本）──
+  const [feePct, setFeePct] = useState<number>(0.6);
+  const [feeSaving, setFeeSaving] = useState(false);
+
+  const saveFee = async (value: number) => {
+    setFeeSaving(true);
+    try {
+      const res = await backtestApi.updateFeeConfig(value);
+      const next = res.data?.fee_pct ?? value;
+      setFeePct(next);
+      setSnackbar({ open: true, message: `调仓费率已保存为 ${next}%`, severity: 'success' });
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err?.displayMessage || '保存费率失败', severity: 'error' });
+    } finally {
+      setFeeSaving(false);
+    }
+  };
+
   // ── 自动全量回测状态 ──
   const [autoCfg, setAutoCfg] = useState<AutoBacktestConfig | null>(null);
   const [batchRows, setBatchRows] = useState<BacktestBatchItem[]>([]);
@@ -79,6 +97,9 @@ const SignalBacktest: React.FC = () => {
     backtestBatchApi.getConfig()
       .then((r) => setAutoCfg(r.data))
       .catch(() => { /* 配置加载失败保持 null */ });
+    backtestApi.getFeeConfig()
+      .then((r) => setFeePct(r.data?.fee_pct ?? feePct))
+      .catch(() => { /* 读不到配置则沿用默认展示值 */ });
     loadBatch();
     // 批量结果 60s 轮询：手动触发一轮全量回测后逐只落库，可实时看到进度
     const t = setInterval(() => {
@@ -345,7 +366,7 @@ const SignalBacktest: React.FC = () => {
                       {r.excess_return != null ? `${r.excess_return.toFixed(2)}pp` : '—'}
                     </TableCell>
                     <TableCell align="right">
-                      {r.max_drawdown != null ? `${r.max_drawdown.toFixed(2)}pp` : '—'}
+                      {r.max_drawdown != null ? `${r.max_drawdown.toFixed(2)}%` : '—'}
                     </TableCell>
                     <TableCell align="right">
                       {r.avg_effectiveness != null ? `${r.avg_effectiveness.toFixed(1)}` : '—'}
@@ -404,6 +425,19 @@ const SignalBacktest: React.FC = () => {
           size="small"
           sx={{ width: 130 }}
         />
+        <Tooltip title="每次调仓按 |Δ仓位| × 费率扣减收益（申购+赎回综合口径）；0 表示不计成本。失焦即保存">
+          <TextField
+            label="调仓费率(%)"
+            type="number"
+            value={feePct}
+            onChange={(e) => setFeePct(Math.max(0, parseFloat(e.target.value) || 0))}
+            onBlur={() => { void saveFee(feePct); }}
+            inputProps={{ min: 0, max: 5, step: 0.1 }}
+            size="small"
+            disabled={feeSaving}
+            sx={{ width: 130 }}
+          />
+        </Tooltip>
         <Button
           variant="contained"
           startIcon={loading ? <CircularProgress size={18} color="inherit" /> : <RunIcon />}
@@ -432,7 +466,7 @@ const SignalBacktest: React.FC = () => {
                     {s.label}
                   </Typography>
                   <Typography variant="h5" sx={{ color: s.value != null ? statColor(s.value) : 'text.disabled', fontWeight: 700 }}>
-                    {s.value != null ? `${s.value >= 0 ? '+' : ''}${s.value.toFixed(2)}${s.label.includes('胜') || s.label.includes('有效') ? '%' : '%'}` : '-'}
+                    {s.value != null ? `${s.value >= 0 ? '+' : ''}${s.value.toFixed(2)}%` : '-'}
                   </Typography>
                 </CardContent>
               </Card>

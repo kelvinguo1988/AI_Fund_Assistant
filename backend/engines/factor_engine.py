@@ -183,10 +183,18 @@ def apply_cross_sectional_zscore(
     if len(t) == 3:
         t = [t[0], (t[0] + t[1]) / 2, (t[1] + t[2]) / 2, t[2]]
 
-    return {
-        code: 1.0 if z > t[0] else 0.5 if z > t[1] else 0.0 if z > t[2] else -0.5 if z > t[3] else -1.0
-        for code, z in ((code, (val - mean) / std) for code, val in scores.items())
-    }
+    # NaN 守护：脏数据（缺行/异常净值）会让 np.std 变 NaN，且所有 NaN 比较落空
+    # → 原本全池被误判成 -1.0 满负档。非有限值一律中性，std 失效时整因子中性。
+    def _bucket(val: float) -> float:
+        if not np.isfinite(val) or not np.isfinite(std) or std == 0:
+            return 0.0
+        z = (val - mean) / std
+        return (
+            1.0 if z > t[0] else 0.5 if z > t[1]
+            else 0.0 if z > t[2] else -0.5 if z > t[3] else -1.0
+        )
+
+    return {code: _bucket(val) for code, val in scores.items()}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -215,6 +223,11 @@ def calculate_price_percentile(fund_data: FundData, params: Optional[dict] = Non
         return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative")
 
     history = np.array(fund_data.close_history[-window:]) if fund_data.close_history else np.array([current_close])
+    if len(history) < 2:
+        # 2026-09-20 复查修复：单点历史（close_history 为空但 close 有值）时
+        # percentile 恒为 1.0 → 命中 >0.8 规则永远拿 -1.0，新基金被稳定惩罚
+        logger.warning(f"价格百分位历史不足 2 个点 code={fund_data.code}，取中性分")
+        return FactorScoreResult("price_percentile", "价格百分位", 0.0, 0.0, "negative")
     pct = percentile_rank(current_close, history)
 
     rules = [

@@ -104,10 +104,14 @@ def beta_alpha_ir(
         return None, None, None
     beta = cov / var_b
 
-    # CAPM 年化 Alpha
+    # CAPM 年化 Alpha（几何：期末/期初比值先还原为总收益再年化；
+    # 原实现误把比值当收益率 +1，Alpha 被系统性高估且短窗口失真更大）
     years = n / 252.0
-    ann_f = (1 + fund_vals[-1] / fund_vals[0]) ** (1 / years) - 1 if years > 0 else 0.0
-    ann_b = (1 + bench_vals[-1] / bench_vals[0]) ** (1 / years) - 1 if years > 0 else 0.0
+    if years > 0 and fund_vals[0] > 0 and bench_vals[0] > 0:
+        ann_f = (fund_vals[-1] / fund_vals[0]) ** (1 / years) - 1
+        ann_b = (bench_vals[-1] / bench_vals[0]) ** (1 / years) - 1
+    else:
+        ann_f = ann_b = 0.0
     rf = RF_ANNUAL / 100
     alpha = (ann_f - rf) - beta * (ann_b - rf)
 
@@ -200,7 +204,8 @@ class FundCompareService:
             if si:
                 item.scale_growth = si["growth"]
                 item.institution_pct = si["institution"]
-            if series and len(series) > 30 and bench_series:
+            # 2026-09-12 收官修复：基准失败只降级归因指标（原连年化/回撤/夏普都跳过）
+            if series and len(series) > 30:
                 for label, from_date in [(f"近{years}年", start_years), ("成立以来", None)]:
                     if from_date is None:
                         sub = series  # 全序列=成立以来（受拉取上限约束）

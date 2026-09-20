@@ -7,6 +7,10 @@
 4. 动态阈值：规模冲击 + 仓位漂移 → 上调买入阈值
 
 所有原有因子计算函数（calculate_*）完全不变。
+
+前置条件：依赖 quarterly_history（fund_quarterly 表）。该表当前无同步写入链路，
+空表时清盘否决/规模冲击/仓位漂移/机构认可度均按中性处理（第 1~4 项实际不生效），
+仅棺材钉/心电图两个纯净值形态判定始终有效。AnalysisService 在空表时会打一次告警。
 """
 
 from __future__ import annotations

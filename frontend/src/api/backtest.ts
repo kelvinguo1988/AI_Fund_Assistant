@@ -16,6 +16,19 @@ export const backtestApi = {
         timeout: 180000,
       })
       .then((r) => r.data),
+
+  /** 回测调仓费率配置 */
+  getFeeConfig: () =>
+    apiClient
+      .get<ApiResponse<{ fee_pct: number; default: number; min: number; max: number }>>(
+        `${BASE}/config/fee`,
+      )
+      .then((r) => r.data),
+
+  updateFeeConfig: (feePct: number) =>
+    apiClient
+      .put<ApiResponse<{ fee_pct: number }>>(`${BASE}/config/fee`, { fee_pct: feePct })
+      .then((r) => r.data),
 };
 
 /* ── 自动全量回测 ── */

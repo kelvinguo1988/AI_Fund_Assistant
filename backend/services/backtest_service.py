@@ -23,6 +23,58 @@ POSITION_MAP = {
     "heavy_sell": 0.1,
 }
 
+# 单次调仓综合费率（申购+赎回各按半程合计的典型值）
+# 用于让回测收益更接近真实申赎成本，避免零费用下高换手策略超额虚高
+DEFAULT_ROUND_TRIP_FEE_PCT = 0.6
+
+# system_config 键与取值范围（0 = 不计成本，回到纯信号口径）；
+# 实际生效值走 load_fee_pct()，可在回测页调整
+FEE_CONFIG_KEY = "backtest_fee_pct"
+FEE_MIN, FEE_MAX = 0.0, 5.0
+
+
+async def load_fee_pct(db: AsyncSession) -> float:
+    """读取回测调仓费率；未配置/非法值回落到默认，并夹在合法区间内"""
+    from backend.models.system_config import SystemConfig
+
+    row = (await db.execute(
+        select(SystemConfig).where(SystemConfig.config_key == FEE_CONFIG_KEY)
+    )).scalars().first()
+    if row is None or not (row.config_value or "").strip():
+        return DEFAULT_ROUND_TRIP_FEE_PCT
+    try:
+        value = float(row.config_value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"回测费率配置无法解析（{row.config_value!r}），用默认 {DEFAULT_ROUND_TRIP_FEE_PCT}"
+        )
+        return DEFAULT_ROUND_TRIP_FEE_PCT
+    return min(max(value, FEE_MIN), FEE_MAX)
+
+
+async def save_fee_pct(db: AsyncSession, fee_pct: float) -> float:
+    """写入回测调仓费率（夹在 [FEE_MIN, FEE_MAX]）"""
+    from datetime import datetime
+
+    from backend.models.system_config import SystemConfig
+
+    value = min(max(float(fee_pct), FEE_MIN), FEE_MAX)
+    row = (await db.execute(
+        select(SystemConfig).where(SystemConfig.config_key == FEE_CONFIG_KEY)
+    )).scalars().first()
+    if row:
+        row.config_value = str(value)
+        row.updated_at = datetime.now()
+    else:
+        db.add(SystemConfig(
+            config_key=FEE_CONFIG_KEY,
+            config_value=str(value),
+            description="回测单次调仓综合费率（%），0 表示不计交易成本",
+            updated_at=datetime.now(),
+        ))
+    await db.commit()
+    return value
+
 
 class BacktestService:
     """信号回测服务"""
@@ -55,6 +107,7 @@ class BacktestService:
         fund_id: int,
         period: int = 365,
         effectiveness_window: int = 5,
+        fee_pct: Optional[float] = None,
     ) -> Optional[BacktestSummary]:
         """运行信号回测
 
@@ -62,6 +115,9 @@ class BacktestService:
             fund_id: 基金 ID
             period: 回测天数（净值序列长度）
             effectiveness_window: 信号有效性评估窗口（交易日数）
+            fee_pct: 单次调仓综合费率（%）；None 时读 system_config 配置
+                     批量回测应在轮次开始时 load_fee_pct 一次，逐只复用同一口径
+                     （费率中途被改会让同轮结果不可比）
 
         Returns:
             BacktestSummary 或 None（基金不存在 / 无净值数据）
@@ -88,17 +144,23 @@ class BacktestService:
         # 3. 获取该基金的历史信号
         signal_map = await self._get_signal_map(fund_id)
 
-        # 4. 按日期对齐 + 计算累计收益
-        points = self._build_points(dates, navs, signal_map, effectiveness_window)
+        # 4. 未显式传费率时读配置
+        if fee_pct is None:
+            fee_pct = await load_fee_pct(self.db)
 
-        # 5. 计算统计指标
+        # 5. 按日期对齐 + 计算累计收益
+        points = self._build_points(
+            dates, navs, signal_map, effectiveness_window, fee_pct=fee_pct
+        )
+
+        # 6. 计算统计指标
         total_nav_return = points[-1].nav_return if points else 0.0
         total_strategy_return = points[-1].strategy_return if points else 0.0
         excess_return = round(total_strategy_return - total_nav_return, 4)
         max_drawdown = self._calc_max_drawdown(points)
         signal_count = sum(1 for p in points if p.signal_direction is not None)
 
-        # 6. 信号有效性统计
+        # 7. 信号有效性统计
         eff_stats = self._calc_effectiveness_stats(points)
 
         return BacktestSummary(
@@ -176,6 +238,7 @@ class BacktestService:
         navs: list[float],
         signal_map: dict[str, dict],
         effectiveness_window: int = 5,
+        fee_pct: Optional[float] = None,
     ) -> list[BacktestPoint]:
         """构建回测数据点序列
 
@@ -186,6 +249,8 @@ class BacktestService:
         无信号日默认 hold（50% 仓位）。
 
         收益累计：几何复利（非加法），strategy_nav 维护策略净值。
+        成本：仓位变动日扣减 |Δ仓位| × 调仓费率（默认 DEFAULT_ROUND_TRIP_FEE_PCT，
+        实际由 system_config.backtest_fee_pct 决定，0 表示不计成本）。
         """
         # 非交易日信号（周末/节假日运行分析）前向对齐到下一交易日
         aligned_signal_map = self._align_signals_to_trading_days(dates, signal_map)
@@ -197,8 +262,13 @@ class BacktestService:
         strategy_nav = 1.0
         initial_nav = navs[0] if navs else 1.0
 
+        # 生效费率（None → 默认值，保持单测与无库场景可用）
+        fee = DEFAULT_ROUND_TRIP_FEE_PCT if fee_pct is None else fee_pct
+
         # 前一日信号决定的仓位（next-bar execution）
         prev_position = default_position
+        # 上一日实际生效仓位（调仓成本基准；首日建仓不计费）
+        prev_applied_position = default_position
 
         for i in range(len(dates)):
             d = dates[i]
@@ -233,8 +303,11 @@ class BacktestService:
             # 策略收益 = 当日涨跌 × 仓位（仓位由前一日信号决定，避免前视偏差）
             position = prev_position
             strategy_daily = daily_return * position
+            # 调仓成本：|仓位变动| × 单次综合费率，在变化当日扣减
+            turnover_cost = abs(position - prev_applied_position) * fee
+            prev_applied_position = position
             # 几何复利：(1+r1)(1+r2)...-1
-            strategy_nav *= (1 + strategy_daily / 100)
+            strategy_nav *= (1 + (strategy_daily - turnover_cost) / 100)
             strategy_cum_return = round((strategy_nav - 1) * 100, 4)
 
             # 当日信号更新为下一日的 prev_position（next-bar execution）
@@ -316,19 +389,24 @@ class BacktestService:
 
     @staticmethod
     def _calc_max_drawdown(points: list[BacktestPoint]) -> float:
-        """计算策略累计收益的最大回撤 (%)"""
+        """计算策略净值最大回撤 (%)，负值
+
+        在净值指数空间 (1 + 累计收益/100) 做几何回撤 (peak-index)/peak，
+        而非"累计收益百分点"的差值——后者会把高涨幅后回落的回撤系统性放大
+        （+100%→+80% 真实回撤 10%，百分点口径误报 20）。
+        """
         if not points:
             return 0.0
 
-        returns = [p.strategy_return for p in points]
-        peak = returns[0]
-        max_dd = 0.0
+        peak = 1.0
+        worst = 0.0
+        for p in points:
+            index = 1.0 + p.strategy_return / 100.0
+            if index > peak:
+                peak = index
+            if peak > 0:
+                dd = (index / peak - 1) * 100.0
+                if dd < worst:
+                    worst = dd
 
-        for r in returns:
-            if r > peak:
-                peak = r
-            dd = peak - r
-            if dd > max_dd:
-                max_dd = dd
-
-        return round(max_dd, 4)
+        return round(worst, 4)

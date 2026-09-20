@@ -83,8 +83,10 @@ class AutoBacktestService:
             )).scalars().all())
             total = ok = failed = 0
 
-            from backend.services.backtest_service import BacktestService
+            from backend.services.backtest_service import BacktestService, load_fee_pct
             svc = BacktestService(self.db)
+            # 一轮一个费率口径：逐只重读会让中途改配置导致同轮结果不可比
+            fee_pct = await load_fee_pct(self.db)
 
             for i, fund in enumerate(funds):
                 # 12 小时兜底：单轮超时则终止，已完成的逐只结果保留
@@ -97,7 +99,7 @@ class AutoBacktestService:
                     # 检查点，_running 永久锁死（后续触发全部 409/跳过）。
                     # 单只上限 10 分钟（净值拉取重试最坏 ~80s × 3 接口 + 余量）
                     summary = await asyncio.wait_for(
-                        svc.run_backtest(fund_id=fund.id), timeout=600.0
+                        svc.run_backtest(fund_id=fund.id, fee_pct=fee_pct), timeout=600.0
                     )
                     await self._upsert_result(fund, summary)
                     ok += 1

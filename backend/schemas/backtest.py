@@ -25,7 +25,7 @@ class BacktestSummary(BaseModel):
     total_nav_return: float                   # 净值总收益 (%)
     total_strategy_return: float              # 策略总收益 (%)
     excess_return: float                      # 超额收益 (%)
-    max_drawdown: float                       # 策略最大回撤 (%)
+    max_drawdown: float                       # 策略净值最大回撤 (%，负值)
     signal_count: int                         # 有信号的天数
     total_days: int                           # 净值序列总天数
     effectiveness_window: int = 5             # 有效性评估窗口 (交易日)
