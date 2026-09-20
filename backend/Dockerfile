@@ -1,38 +1,41 @@
+# syntax=docker/dockerfile:1
 # ============================================================================
-# 基金量化交易系统 — 后端 Dockerfile（优化版）
+# 基金量化交易系统 — 后端 Dockerfile
 # 基于 python:3.9-slim，适配 SQLAlchemy 2.0 + aiosqlite
-# 优化点：
-#   1. 使用阿里云 apt 镜像源（Debian）— 避免 deb.debian.org 国内极慢
-#   2. 使用阿里云 pip 镜像源 — 避免 pypi.org 国内慢
-#   3. 安装依赖与复制代码分层，利用 Docker 缓存
+#
+# 镜像源策略（ARG 控制，默认官方源）：
+#   - GitHub Actions runner 在海外，走 deb.debian.org / pypi.org 才有速度
+#   - 国内设备（QNAP）本地构建时在 docker-compose.yml 传参切阿里云：
+#       APT_MIRROR_HOST=mirrors.aliyun.com
+#       PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 # ============================================================================
 
 FROM python:3.9-slim AS base
 
-# 元数据
+ARG APT_MIRROR_HOST=""
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 LABEL maintainer="fund-quant-team"
 LABEL description="基金量化交易系统后端服务"
 
-# 设置环境变量：Python 非交互式 + 不生成 .pyc + 实时日志 + pip 镜像源
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-    PIP_TRUSTED_HOST=mirrors.aliyun.com
+    PIP_INDEX_URL=${PIP_INDEX_URL}
 
-# 替换 Debian apt 源为阿里云镜像源（deb.debian.org 国内极慢，24分钟+）
-# python:3.9-slim 基于 Debian Trixie，使用 DEB822 格式的 sources 文件
-RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
-
-# 安装系统编译依赖（akshare/numpy 可能需要 C 扩展）
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+# 显式传入 APT_MIRROR_HOST 时才替换 apt 源（deb.debian.org 与镜像站路径结构一致）
+# gcc/g++/libffi-dev：py-mini-racer 等无 aarch64 预编译 wheel 的依赖在构建期需要编译链
+RUN if [ -n "$APT_MIRROR_HOST" ]; then \
+      sed -i "s|deb.debian.org|$APT_MIRROR_HOST|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+      || sed -i "s|deb.debian.org|$APT_MIRROR_HOST|g" /etc/apt/sources.list 2>/dev/null \
+      || true; fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
         gcc \
         g++ \
         libffi-dev \
-        && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # 设置工作目录为项目根目录（与 config.py 中 PROJECT_ROOT 对齐）
 WORKDIR /app
@@ -40,7 +43,7 @@ WORKDIR /app
 # 先复制 requirements.txt 利用 Docker 缓存层
 COPY requirements.txt /app/backend/requirements.txt
 
-# 安装 Python 依赖（使用阿里云镜像源）
+# 安装 Python 依赖
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 # 复制后端代码

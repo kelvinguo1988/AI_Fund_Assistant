@@ -18,6 +18,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # QNAP 在国内，本地构建走阿里云镜像；CI 海外 runner 不传参（默认官方源）
+        APT_MIRROR_HOST: mirrors.aliyun.com
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
     container_name: fund-quant-backend
     restart: unless-stopped
     env_file:
