@@ -3,7 +3,7 @@
  * 仅供量价特征排名参考，不构成投资建议。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Box,
   Typography,
@@ -39,7 +39,6 @@ const ETFScanPage: React.FC = () => {
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
     open: false, message: '', severity: 'success',
   });
-  const poolRef = useRef<Set<string>>(new Set());
 
   const loadScan = useCallback(async () => {
     setLoading(true);
@@ -49,7 +48,6 @@ const ETFScanPage: React.FC = () => {
       const d = res.data as ETFScanResult;
       if (d?.error) setError(d.error);
       setResult(d);
-      poolRef.current = new Set((res.data as ETFScanResult)?.pool_codes ?? []);
     } catch (err: any) {
       setError(err?.response?.data?.detail || err?.message || '扫描失败');
     } finally {
@@ -67,7 +65,6 @@ const ETFScanPage: React.FC = () => {
       await fundApi.create({
         code: item.code, name: item.name, fund_type: 'etf',
       } as FundCreate);
-      poolRef.current.add(item.code);
       setResult((prev) => prev ? {
         ...prev,
         movers: prev.movers.map((x) => x.code === item.code ? { ...x, in_pool: true } : x),

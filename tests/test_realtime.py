@@ -156,7 +156,6 @@ async def test_fundgz_failure_falls_back_to_holdings(monkeypatch):
 
         monkeypatch.setattr(FundRealtimeService, "_get_stock_spot", _fake_stock_spot)
         monkeypatch.setattr(FundRealtimeService, "_get_index_pct", _fake_index)
-        monkeypatch.setattr(_mod, "_fund_benchmark_text", lambda code: "")
         import backend.services.index_valuation_service as _iv_mod
         monkeypatch.setattr(_iv_mod.OtcTradeStatusService,
                             "get_status_map", _fake_status_map)

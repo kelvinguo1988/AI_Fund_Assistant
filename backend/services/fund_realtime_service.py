@@ -241,7 +241,6 @@ class FundRealtimeService:
     _hk_ts: float = 0.0
     _index_ts: float = 0.0
     # 兼容别名（渐进迁移；新代码用分字段）
-    _spot_ts: float = 0.0
     _spot_lock: Optional[asyncio.Lock] = None
 
     # 单基金估值缓存 {code: (ts, result_dict)}
@@ -402,7 +401,6 @@ class FundRealtimeService:
                 )
                 # 近似映射依赖估值缓存（1h TTL，乐咕日频数据日内一次）
                 await IndexValuationService.get_valuations()
-                fund_tags_map = _fund_tags_map()
                 in_trading_hours = _in_trading_hours()
                 for f in otc_funds:
                     r = results.get(f.code)
@@ -412,9 +410,10 @@ class FundRealtimeService:
                     # A': 申购/赎回可执行性 + 手续费
                     hints.extend(OtcTradeStatusService.trade_hints(f.code, status_map.get(f.code)))
                     # C': 高低估区间（直接映射 / 主动基金基准近似；固收+ 排除）
-                    is_fixed_income = "固收+/偏债" in (fund_tags_map.get(f.code) or "")
+                    # 直接取调用方已传入的 ORM 字段，避免在异步路径内旁路同步读库
+                    is_fixed_income = "固收+/偏债" in (getattr(f, "tags", None) or "")
                     v_hint = IndexValuationService.match_fund_hint(
-                        f.name or "", _fund_benchmark_text(f.code),
+                        f.name or "", getattr(f, "benchmark_text", None) or "",
                         is_fixed_income=is_fixed_income,
                     )
                     if v_hint:
@@ -559,7 +558,7 @@ class FundRealtimeService:
                     }
                 self._mark_source_ok(EM_SOURCE)
                 FundRealtimeService._etf_spot_cache = spot
-                FundRealtimeService._spot_ts = now
+                FundRealtimeService._etf_ts = now
                 logger.info(f"ETF 实时快照刷新: {len(spot)} 只")
                 return spot
             except Exception as e:
@@ -578,7 +577,7 @@ class FundRealtimeService:
                             for c, q in quotes.items()
                         }
                         FundRealtimeService._etf_spot_cache = spot
-                        FundRealtimeService._spot_ts = time.time()
+                        FundRealtimeService._etf_ts = time.time()
                         logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
                         return spot
                 return None
@@ -734,7 +733,7 @@ class FundRealtimeService:
                     tencent_map = await self._get_tencent_pct(codes)
                     if tencent_map:
                         FundRealtimeService._hk_spot_cache = tencent_map
-                        FundRealtimeService._spot_ts = time.time()
+                        FundRealtimeService._hk_ts = time.time()
                         logger.info(f"港股实时行情(腾讯按需): {len(tencent_map)}/{len(codes)} 只")
                         return tencent_map
                 return None
@@ -797,7 +796,7 @@ class FundRealtimeService:
                     )
                     if "000300" in pct_map:
                         FundRealtimeService._index_pct_cache = pct_map["000300"]
-                        FundRealtimeService._spot_ts = time.time()
+                        FundRealtimeService._index_ts = time.time()
                         return pct_map["000300"]
                 return None
 
@@ -1138,24 +1137,6 @@ def _in_trading_hours() -> bool:
     return (570 <= mins < 690) or (780 <= mins < 900)
 
 
-def _fund_benchmark_text(code: str) -> str:
-    """查库取基金基准文本（指数匹配用；无记录返回空）"""
-    try:
-        import sqlite3
-        from backend.config import settings
-        db_path = Path(settings.DATABASE_DIR) / settings.DATABASE_NAME
-        conn = sqlite3.connect(str(db_path), timeout=5)
-        try:
-            row = conn.execute(
-                "SELECT benchmark_text FROM funds WHERE code = ?", (code,)
-            ).fetchone()
-            return (row[0] or "") if row else ""
-        finally:
-            conn.close()
-    except Exception:
-        return ""
-
-
 async def _feature_flag(db, key: str, default: bool = True) -> bool:
     """读 system_config 功能开关（缺省开）"""
     try:
@@ -1169,19 +1150,3 @@ async def _feature_flag(db, key: str, default: bool = True) -> bool:
         return (row.config_value or "").lower() == "true"
     except Exception:
         return default
-
-
-def _fund_tags_map() -> dict:
-    """查库 {code: tags}（固收+ 判定用；查不到返回空）"""
-    try:
-        import sqlite3
-        from backend.config import settings
-        db_path = Path(settings.DATABASE_DIR) / settings.DATABASE_NAME
-        conn = sqlite3.connect(str(db_path), timeout=5)
-        try:
-            return {c: (t or "") for c, t in
-                    conn.execute("SELECT code, tags FROM funds")}
-        finally:
-            conn.close()
-    except Exception:
-        return {}
