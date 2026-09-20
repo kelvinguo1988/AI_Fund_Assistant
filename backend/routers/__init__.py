@@ -11,7 +11,6 @@ from backend.routers.analysis import router as analysis_router
 from backend.routers.system_config import router as system_config_router
 from backend.routers.ai_chat import router as ai_chat_router
 from backend.routers.ai_skill import router as ai_skill_router
-from backend.routers.ai_skill import router as ai_skill_router
 from backend.routers.backtest import router as backtest_router
 from backend.routers.holiday import router as holiday_router
 

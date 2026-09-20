@@ -138,9 +138,13 @@ async def fetch_batch(db: AsyncSession, batch_size: int = FETCH_BATCH_SIZE) -> d
         url = THS_DETAIL_URL.format(code=code)
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         resp = requests.get(url, headers=headers, timeout=12)
+        # 2026-09-12 收官修复：非 200 或反爬页（0 成分）按失败处理——
+        # 原返回空集会让调用方 delete 旧行后插 0 行，静默清掉已建映射
         if resp.status_code != 200:
-            return name, set()
+            raise RuntimeError(f"HTTP {resp.status_code}")
         stocks = set(re.findall(r'>(\d{6})<', resp.text))
+        if not stocks:
+            raise RuntimeError("反爬页/空成分")
         return name, stocks
 
     fetched = stocks_n = failed = 0

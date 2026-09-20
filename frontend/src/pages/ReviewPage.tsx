@@ -34,7 +34,6 @@ import {
   Tab as MuiTab,
   Tabs as MuiTabs,
 } from '@mui/material';
-import { reviewApi as _unusedGuard } from '../api/review';
 import { aiApi } from '../api/ai';
 import { pct, growthColor } from '../utils/format';
 
@@ -92,7 +91,7 @@ const ReviewPage: React.FC = () => {
       const res = await compareApi.run(pkSelected, pkYears);
       setPkReport(res.data);
     } catch (err: any) {
-      setError(err?.response?.data?.detail || err?.message || 'PK 失败');
+      setSnackbar({ open: true, message: err?.displayMessage || err?.message || 'PK 失败', severity: 'error' });
     } finally {
       setPkLoading(false);
     }
@@ -131,12 +130,11 @@ const ReviewPage: React.FC = () => {
     if (!report) return;
     setAiReading(true);
     try {
-      const res = await aiApi.chat({
+      await aiApi.chat({
         content: `请用简洁专业的口吻解读以下投资复盘报告，指出关键风险与后续观察点：\n\n${report.summary_md}`,
         context_type: 'pool',
       });
       setSnackbar({ open: true, message: 'AI 解读已生成，请到 AI 对话窗口查看', severity: 'success' });
-      void res;
     } catch (err: any) {
       setSnackbar({ open: true, message: err?.message || 'AI 解读失败', severity: 'error' });
     } finally {
