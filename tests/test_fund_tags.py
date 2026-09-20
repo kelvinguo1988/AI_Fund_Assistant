@@ -93,6 +93,86 @@ class TestExposureTags:
         assert parse_exposure_tags([{"stock_name": "x", "ratio": None}]) is None
 
 
+# ── 暴露聚合改造（2026-09-20 设计①②：去噪/并集/别名/联动）────────────
+
+
+class TestExposureV2:
+    def test_noise_concepts_dropped(self):
+        """业绩事件/持股类/指数编制组合概念不参与赛道聚合"""
+        cm = {"300308": ["2026中报预增", "国家大基金持股", "中国AI 50", "同花顺出海50"]}
+        out = parse_exposure_tags(
+            [{"stock_code": "300308", "stock_name": "某某无关股", "ratio": 8.0}],
+            concept_map=cm,
+        )
+        assert out is None  # 唯一命中是噪声 → 无有效桶
+
+    def test_alias_merge(self):
+        """THS 概念别名归一：CPO概念 与光模块关键词入同一桶"""
+        holds = [
+            {"stock_code": "1", "stock_name": "中际旭创", "ratio": 10.0},
+            {"stock_code": "2", "stock_name": "某新易盛无关", "ratio": 9.0},
+        ]
+        out = parse_exposure_tags(holds, concept_map={"2": ["CPO概念"]})
+        assert "光模块/CPO×2 19.0%" in out
+
+    def test_union_multi_bucket(self):
+        """并集模型：一票同时计入 THS 概念桶与关键词桶"""
+        holds = [{"stock_code": "300308", "stock_name": "中际旭创", "ratio": 8.05}]
+        out = parse_exposure_tags(
+            holds, concept_map={"300308": ["液冷服务器", "F5G概念"]},
+        )
+        assert "光模块/CPO×1 8.1%" in out
+        assert "AI服务器×1 8.1%" in out
+        assert "(覆盖100%)" in out
+
+    def test_min_bucket_and_top4(self):
+        """<2% 桶丢弃；最多输出前 4 桶"""
+        holds = [{"stock_name": f"无关{i}", "ratio": 1.0} for i in range(6)]
+        holds[0]["stock_name"] = "中际旭创"  # 8%? ratio 1.0 → 1% <2 被弃
+        assert parse_exposure_tags(holds) is None
+
+    def test_theme_linkage_concentrated(self, monkeypatch):
+        """前两桶合计≥50% → 主标签补持仓推定主题（018957 场景）"""
+        import backend.services.fund_tag_service as tm
+        monkeypatch.setattr(tm, "fetch_xq_basic", lambda code: None)
+        holds = [
+            {"stock_name": "中际旭创", "ratio": 9.9},
+            {"stock_name": "新易盛", "ratio": 9.5},
+            {"stock_name": "天孚通信", "ratio": 9.2},
+            {"stock_name": "源杰科技", "ratio": 8.8},
+            {"stock_name": "东山精密", "ratio": 8.5},
+            {"stock_name": "深南电路", "ratio": 8.1},
+            {"stock_name": "生益科技", "ratio": 7.9},
+            {"stock_name": "沪电股份", "ratio": 7.6},
+            {"stock_name": "某某无关", "ratio": 5.0},
+        ]
+        result = tm.build_double_tags(
+            "018957", "中航机遇领航混合发起C", "otc", holds,
+            f10={"official_type": "混合型-偏股",
+                 "benchmark": "沪深300指数收益率*70%+中债综合指数收益率*25%+中证港股通综合指数收益率*5%"},
+        )
+        assert "光模块/CPO" in (result["tags"] or "")
+        assert result["position_tag"] == "含港股" or result["position_tag"] == "光模块/CPO"
+
+    def test_theme_linkage_not_fired_when_diffuse(self, monkeypatch):
+        """分散持仓不触发联动"""
+        import backend.services.fund_tag_service as tm
+        monkeypatch.setattr(tm, "fetch_xq_basic", lambda code: None)
+        holds = [
+            {"stock_name": "工商银行", "ratio": 6.0},
+            {"stock_name": "贵州茅台", "ratio": 5.5},
+            {"stock_name": "宁德时代", "ratio": 5.0},
+            {"stock_name": "招商银行", "ratio": 4.8},
+            {"stock_name": "美的集团", "ratio": 4.5},
+        ]
+        result = tm.build_double_tags(
+            "000001", "某某分散混合", "otc", holds,
+            f10={"official_type": "混合型-偏股",
+                 "benchmark": "沪深300指数收益率*70%+中债综合指数收益率*30%"},
+        )
+        assert "光模块/CPO" not in (result["tags"] or "")
+
+
 @pytest.mark.asyncio
 async def test_build_double_tags_mutual(db_session, monkeypatch):
     """互认基金端到端：F10 档案缺失 → 名称解析兜底"""
@@ -106,6 +186,55 @@ async def test_build_double_tags_mutual(db_session, monkeypatch):
     assert result["is_mutual_fund"] is True
     assert "互认基金" in (result["tags"] or "")
     assert result["fund_type_official"] == "互认基金"
+
+
+@pytest.mark.asyncio
+async def test_find_dirty_tag_fund_ids(db_session):
+    """启动自愈扫描：仅命中 active 且基准/暴露/标签缺失的基金"""
+    from backend.models.fund import Fund
+    from backend.services.fund_service import find_dirty_tag_fund_ids
+
+    ok = Fund(code="510300", name="完好的", fund_type="etf", status="active",
+              tags="宽基", benchmark_text="沪深300*95%", exposure_tags="x")
+    dirty = Fund(code="017103", name="缺暴露", fund_type="otc", status="active",
+                 tags="混合", benchmark_text="数字经济*80%")
+    disabled = Fund(code="000002", name="停用且无标签", fund_type="otc", status="disabled")
+    db_session.add_all([ok, dirty, disabled])
+    await db_session.commit()
+
+    ids = await find_dirty_tag_fund_ids(db_session)
+    assert ids == [dirty.id]
+
+
+@pytest.mark.asyncio
+async def test_recompute_double_tags_end_to_end(db_session, monkeypatch):
+    """重算入口：F10 档案 + 库内持仓 → tags/benchmark/exposure 全部落库"""
+    import backend.services.fund_tag_service as tm
+    monkeypatch.setattr(tm, "fetch_f10_profile", lambda code: {
+        "official_type": "混合型-偏股",
+        "benchmark": "中证数字经济主题指数收益率*80%+人民币活期存款利率(税后)*20%",
+    })
+    monkeypatch.setattr(tm, "fetch_xq_basic", lambda code: None)
+
+    from backend.models.fund import Fund
+    from backend.models.fund_holding import FundHolding
+    from backend.services.fund_service import recompute_double_tags
+
+    f = Fund(code="017103", name="大摩数字经济混合C", fund_type="otc", status="active")
+    db_session.add(f)
+    await db_session.commit()
+    for c, n, r in [("300308", "中际旭创", 8.05), ("300502", "新易盛", 7.99)]:
+        db_session.add(FundHolding(
+            fund_id=f.id, stock_code=c, stock_name=n, ratio=r,
+            quarter_label="2026年2季度股票投资明细", report_date="",
+        ))
+    await db_session.commit()
+
+    fund = await recompute_double_tags(db_session, f.id)
+    assert fund is not None
+    assert "数字经济/科技" in (fund.tags or "")
+    assert fund.benchmark_text and "数字经济" in fund.benchmark_text
+    assert fund.exposure_tags and "光模块/CPO×2 16.0%" in fund.exposure_tags
 
 
 @pytest_asyncio.fixture

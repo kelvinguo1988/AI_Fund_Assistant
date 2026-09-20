@@ -244,53 +244,8 @@ class FundService:
         }
 
     async def refresh_themes(self, fund_id: int) -> Optional[Fund]:
-        """刷新指定基金的相关主题
-
-        Args:
-            fund_id: 基金 ID
-
-        Returns:
-            更新后的 Fund 对象或 None
-        """
-        fund = await self.get_fund(fund_id)
-        if fund is None:
-            return None
-
-        # 2026-08-30 重构：双层标签（主=官方类型+基准定位，副=持仓赛道暴露）
-        # 原抓"相关主题基金"区当分类用，实测严重失真（固收+ 被标 CPO）
-        from backend.services.fund_holding_service import get_latest_holdings
-        from backend.services.fund_tag_service import build_double_tags
-
-        holdings = await get_latest_holdings(self.db, fund.id, limit=50)
-        holds_payload = [
-            {"stock_name": h.stock_name, "stock_code": h.stock_code, "ratio": h.ratio}
-            for h in holdings
-        ]
-        # 真概念映射（THS 表，渐进获取；无数据返回空 → 关键词回退）
-        from backend.services.concept_map_service import get_stock_concepts
-        concept_map = await get_stock_concepts(
-            self.db, [h.stock_code for h in holdings]
-        )
-        result = await run_with_timeout(
-            build_double_tags,
-            fund.code, fund.name or "", fund.fund_type, holds_payload,
-            timeout=25.0, concept_map=concept_map,
-        )
-        # F10 瞬时失败：保留旧 official/benchmark，避免瞬时网络错误
-        # 把已正确的分类冲掉（2026-08-30 复查修复）
-        # F10+XQ 双失败（total）：旧 tags 整体保留，不写名称兜底标签
-        if result.get("_fetch_failed") == "total" and fund.tags:
-            await self.db.refresh(fund)
-            return fund
-        fund.tags = result["tags"]
-        if not result.get("_fetch_failed") or fund.fund_type_official is None:
-            fund.fund_type_official = result["fund_type_official"]
-        if not result.get("_fetch_failed") or fund.benchmark_text is None:
-            fund.benchmark_text = result["benchmark_text"]
-        fund.exposure_tags = result["exposure_tags"]
-        await self.db.commit()
-        await self.db.refresh(fund)
-        return fund
+        """刷新指定基金的双层标签（手动刷新入口，逻辑见 recompute_double_tags）"""
+        return await recompute_double_tags(self.db, fund_id)
 
     async def batch_update_status(self, ids: list[int], action: str) -> None:
         """批量更新基金状态
@@ -307,6 +262,92 @@ class FundService:
         await self.db.commit()
 
 
+async def recompute_double_tags(db: AsyncSession, fund_id: int) -> Optional[Fund]:
+    """重算并持久化单只基金的双层标签（手动刷新/持仓新季度联动/启动自愈共用）
+
+    保护语义（2026-08-30 复查修复）：F10 瞬时失败保留旧 official/benchmark；
+    F10+雪球双失败（total）时旧 tags 整体保留，不写名称兜底标签。
+    """
+    fund = (await db.execute(select(Fund).where(Fund.id == fund_id))).scalars().first()
+    if fund is None:
+        return None
+
+    from backend.services.fund_holding_service import get_latest_holdings
+    from backend.services.fund_tag_service import build_double_tags
+
+    holdings = await get_latest_holdings(db, fund.id, limit=50)
+    holds_payload = [
+        {"stock_name": h.stock_name, "stock_code": h.stock_code, "ratio": h.ratio}
+        for h in holdings
+    ]
+    # 真概念映射（THS 表，渐进获取；未覆盖股票由关键词并集兜底）
+    from backend.services.concept_map_service import get_stock_concepts
+    concept_map = await get_stock_concepts(
+        db, [h.stock_code for h in holdings]
+    )
+    result = await run_with_timeout(
+        build_double_tags,
+        fund.code, fund.name or "", fund.fund_type, holds_payload,
+        timeout=25.0, concept_map=concept_map,
+    )
+    if result.get("_fetch_failed") == "total" and fund.tags:
+        await db.refresh(fund)
+        return fund
+    fund.tags = result["tags"]
+    if not result.get("_fetch_failed") or fund.fund_type_official is None:
+        fund.fund_type_official = result["fund_type_official"]
+    if not result.get("_fetch_failed") or fund.benchmark_text is None:
+        fund.benchmark_text = result["benchmark_text"]
+    fund.exposure_tags = result["exposure_tags"]
+    await db.commit()
+    await db.refresh(fund)
+    return fund
+
+
+async def find_dirty_tag_fund_ids(db: AsyncSession) -> list[int]:
+    """存量脏标签基金扫描（启动自愈用）：基准缺失 / 暴露从未生成 / 无标签"""
+    from sqlalchemy import or_
+
+    rows = (await db.execute(
+        select(Fund.id).where(
+            Fund.status == "active",
+            or_(
+                Fund.benchmark_text.is_(None),
+                Fund.exposure_tags.is_(None),
+                Fund.tags.is_(None),
+            ),
+        ).order_by(Fund.id)
+    )).scalars().all()
+    return list(rows)
+
+
+async def self_heal_dirty_tags() -> dict:
+    """启动自愈（设计③）：逐只限频重刷存量脏标签基金
+
+    F10/概念表抓取均走网络，2s 间隔串行防封禁；单只失败仅告警。
+    """
+    from backend.database import async_session_factory
+
+    stats = {"total": 0, "done": 0, "failed": 0}
+    async with async_session_factory() as db:
+        ids = await find_dirty_tag_fund_ids(db)
+    stats["total"] = len(ids)
+    if not ids:
+        return stats
+    logger.info("存量标签自愈开始：%d 只基金待重刷", len(ids))
+    for fid in ids:
+        try:
+            async with async_session_factory() as db:
+                await recompute_double_tags(db, fid)
+            stats["done"] += 1
+        except Exception as e:
+            stats["failed"] += 1
+            logger.warning("存量标签自愈失败 fund_id=%s: %s", fid, e)
+        await asyncio.sleep(2.0)
+    logger.info("存量标签自愈完成: %s", stats)
+    return stats
+
+
 async def enrich_fund_themes(codes: list[str]) -> None:
     """后台任务：为新导入基金异步补全相关主题标签
 
@@ -319,9 +360,6 @@ async def enrich_fund_themes(codes: list[str]) -> None:
     from backend.database import async_session_factory
 
     async with async_session_factory() as session:
-        from backend.services.fund_holding_service import get_latest_holdings
-        from backend.services.fund_tag_service import build_double_tags
-
         for code in codes:
             try:
                 result = await session.execute(select(Fund).where(Fund.code == code))
@@ -329,38 +367,10 @@ async def enrich_fund_themes(codes: list[str]) -> None:
                 # 仅当确实无标签时补全，用户手动填写的不覆盖
                 if fund is None or fund.tags:
                     continue
-                holdings = await get_latest_holdings(session, fund.id, limit=50)
-                holds_payload = [
-                    {"stock_name": h.stock_name, "stock_code": h.stock_code, "ratio": h.ratio}
-                    for h in holdings
-                ]
-                from backend.services.concept_map_service import get_stock_concepts
-                concept_map = await get_stock_concepts(
-                    session, [h.stock_code for h in holdings]
-                )
-                tags_result = await run_with_timeout(
-                    build_double_tags,
-                    code, fund.name or "", fund.fund_type, holds_payload,
-                    timeout=25.0, concept_map=concept_map,
-                )
-                fund.tags = tags_result["tags"]
-                if not tags_result.get("_fetch_failed") or fund.fund_type_official is None:
-                    fund.fund_type_official = tags_result["fund_type_official"]
-                if not tags_result.get("_fetch_failed") or fund.benchmark_text is None:
-                    fund.benchmark_text = tags_result["benchmark_text"]
-                fund.exposure_tags = tags_result["exposure_tags"]
-                await session.flush()
-                logger.info("基金 %s 标签补全: %s", code, fund.tags)
+                await recompute_double_tags(session, fund.id)
+                logger.info("基金 %s 标签补全完成", code)
             except Exception as e:
                 logger.warning("后台标签补全失败 %s: %s", code, e)
-        try:
-            await session.commit()
-        except Exception as e:
-            logger.warning("后台主题写入失败，已回滚: %s", e)
-            try:
-                await session.rollback()
-            except Exception:
-                pass
 
 
 def _primary_tag(tags: Optional[str]) -> Optional[str]:

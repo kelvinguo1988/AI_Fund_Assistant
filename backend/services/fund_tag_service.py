@@ -11,7 +11,9 @@
   互认基金（968 开头等）F10 无档案 → 名称解析 + "互认基金"标记兜底。
 
 副标签（动态暴露，随季报变动）:
-  库内 fund_holdings 最新季度持仓 → 内置产业链关键词映射 → 赛道聚合计数与占比。
+  库内 fund_holdings 最新季度持仓，每股赛道归属 = THS 概念表（噪声剔除+
+  别名归一）∪ 产业链关键词命中（并集，一票可入多桶）→ 按占比聚合取前 4。
+  集中度联动主标签：Top1≥40% 或前两桶≥50% 时主题追加（2026-09-20 设计）。
 """
 
 import logging
@@ -109,25 +111,154 @@ def extract_industry_words(text: str) -> list[str]:
     return found
 
 # ── 副标签：持仓赛道关键词映射（股票名称 → 产业链）──────────────────
+# 2026-09-20 扩容（设计确认④）：AI 算力链之外增加存储/设备材料/创新药/CXO/
+# 机器人等重点赛道；与 THS 概念表命中求并集（不再互为 fallback）。
 _EXPOSURE_RULES: list[tuple[str, str]] = [
-    (r"旭创|新易盛|源杰|天孚|光迅|仕佳|德科立|太辰光|剑桥|永鼎|长飞|亨通|中天", "光模块/CPO"),
-    # PCB/覆铜板（2026-08-31 用户反馈缺失：金安国纪/建滔积层板等）
-    (r"金安国纪|建滔|生益|深南电路|沪电|鹏鼎|胜宏|兴森|景旺|崇达|依顿|博敏|中富", "PCB/覆铜板"),
-    (r"寒武纪|中芯|华虹|海光|澜起|兆易|韦尔|卓胜微|圣邦|长电|通富|甬矽", "半导体/算力芯片"),
-    (r"工业富联|浪潮|紫光|中科曙光|拓维|神州数码|烽火", "AI服务器"),
-    (r"宁德|亿纬|国轩|欣旺达|阳光电源|隆基|通威|晶澳| TCL中环", "新能源"),
+    # ── AI 算力链 ──
+    (r"旭创|新易盛|源杰|天孚|光迅|仕佳|德科立|太辰光|剑桥|永鼎|长飞|亨通|中天科技|华工科技|联特|铭普|博创", "光模块/CPO"),
+    (r"金安国纪|建滔|生益|深南电路|沪电|鹏鼎|胜宏|兴森|景旺|崇达|依顿|博敏|中富电路|方正科技", "PCB/覆铜板"),
+    (r"寒武纪|中芯|华虹|海光|澜起|韦尔|卓胜微|圣邦|长电|通富|甬矽", "半导体/算力芯片"),
+    (r"工业富联|浪潮|紫光股份|中科曙光|拓维|神州数码|烽火|华勤", "AI服务器"),
+    # ── 存储与半导体上游（2026-09 新增）──
+    (r"德明利|江波龙|佰维|普冉|东芯|朗科|兆易|北京君正|香农芯创|太极实业|深科技", "存储芯片"),
+    (r"北方华创|中微公司|拓荆|中科飞测|精测|华海清科|盛美|芯源微|至纯科技|雅克|鼎龙|华特气体|金宏气体|安集|沪硅|立昂微|TCL中环|神工|石英股份", "半导体设备材料"),
+    # ── 制造与消费 ──
+    (r"宁德|亿纬|国轩|欣旺达|阳光电源|隆基|通威|TCL中环", "新能源"),
     (r"贵州茅台|五粮液|泸州老窖|山西汾酒|洋河", "白酒"),
+    (r"东山精密|立讯|歌尔|蓝思|环旭|领益智造|精研科技|长盈精密|安洁科技|比亚迪电子", "消费电子/精密制造"),
+    (r"美的|格力|海尔|海信", "家电"),
+    # ── 医药（2026-09 扩容拆桶）──
+    (r"恒瑞|百济|信达生物|康方|君实|荣昌生物|复星医药|科伦药业|翰森|人福", "创新药"),
+    (r"药明|康龙化成|凯莱英|泰格|博腾|九洲药业|普洛药业|昭衍", "CXO"),
+    (r"迈瑞|联影|惠泰|奕瑞|南微医学|华大智造|爱尔|通策|片仔癀|云南白药", "医药"),
+    # ── 军工/机器人/汽车/金融资源 ──
+    (r"中航|沈飞|航发|西飞|洪都|菲利华|航天电子|紫光国微|振芯|国睿", "军工"),
+    (r"三花|拓普|绿的谐波|鸣志|步科|汇川|埃斯顿|恒立液压|旭升集团|五洲新春|秦川机床|拓斯达", "人形机器人"),
+    (r"比亚迪|长城汽车|赛力斯|长安汽车|上汽|广汽", "汽车"),
     (r"保险|人寿|平安|太保|新华", "保险"),
     (r"银行|工商|建设|招商银行|兴业|宁波银行", "银行"),
     (r"铜|铝|神火|紫金|江铜|云铝|洛阳钼业", "有色"),
-    (r"迈瑞|恒瑞|药明|爱尔|片仔癀", "医药"),
-    (r"中航|沈飞|航发|西飞|洪都", "军工"),
     (r"腾讯|阿里|美团|快手|网易|百度", "互联网"),
-    (r"美的|格力|海尔|海信", "家电"),
     (r"长江电力|华能|国电|三峡", "电力"),
-    (r"比亚迪|长城汽车|赛力斯|长安汽车|上汽|广汽", "汽车"),
-    (r"东山精密|立讯|歌尔|蓝思|环旭", "消费电子/精密制造"),
 ]
+
+# ── THS 概念噪声过滤（设计确认①）──
+# 业绩事件（"2026中报预增"）、持股/资金面（"国家大基金持股"）、指数编制组合
+# （"中国AI 50""同花顺出海50"）等概念不表达产业链暴露，聚合前剔除。
+_NOISE_CONCEPT_RE = re.compile(
+    r"20\d{2}|预增|预减|扭亏|年报|中报|季报"
+    r"|持股|重仓|举牌|增持|减持"
+    r"|涨停|跌停|连板|新高|新低|摘帽|破发|定增|重组"
+    r"|出海50|新质50|AI ?50|GDR|ADR"
+)
+
+# THS 概念名 → 标准赛道桶（与关键词桶对齐，避免同赛道裂成两桶）
+_CONCEPT_ALIAS: dict[str, str] = {
+    "CPO概念": "光模块/CPO",
+    "F5G概念": "光模块/CPO",
+    "光通信": "光模块/CPO",
+    "液冷服务器": "AI服务器",
+    "算力概念": "AI服务器",
+    "东数西算": "AI服务器",
+    "PCB概念": "PCB/覆铜板",
+    "存储器": "存储芯片",
+    "MCU芯片": "半导体/算力芯片",
+    "半导体概念": "半导体/算力芯片",
+    "芯片概念": "半导体/算力芯片",
+    "创新药概念": "创新药",
+    "CRO概念": "CXO",
+    "CXO概念": "CXO",
+    "机器人概念": "人形机器人",
+    "同花顺果指数": "消费电子/精密制造",
+    "苹果概念": "消费电子/精密制造",
+    "白酒概念": "白酒",
+    "国防军工": "军工",
+}
+
+
+def _stock_tracks(
+    stock_name: str,
+    concepts: Optional[list[str]],
+) -> set[str]:
+    """单只股票的赛道归属 = 去噪后的 THS 概念（别名归一） ∪ 关键词命中"""
+    tracks: set[str] = set()
+    for c in concepts or []:
+        if _NOISE_CONCEPT_RE.search(c):
+            continue
+        tracks.add(_CONCEPT_ALIAS.get(c, c))
+    for pat, label in _EXPOSURE_RULES:
+        if re.search(pat, stock_name):
+            tracks.add(label)
+    return tracks
+
+
+def exposure_stats(
+    holdings: list[dict],
+    concept_map: Optional[dict[str, list[str]]] = None,
+) -> Optional[dict]:
+    """持仓赛道聚合统计（并集模型：一票可计入多桶，桶间有重叠）
+
+    Returns:
+        {buckets: [(label, count, pct)...按 pct 降序], coverage: 命中占比%} 或 None
+    """
+    bucket_pct: dict[str, float] = defaultdict(float)
+    bucket_n: dict[str, int] = defaultdict(int)
+    total = 0.0
+    matched = 0.0
+    for h in holdings:
+        ratio = h.get("ratio")
+        if ratio is None:
+            continue
+        ratio = float(ratio)
+        total += ratio
+        tracks = _stock_tracks(
+            str(h.get("stock_name") or ""),
+            (concept_map or {}).get(str(h.get("stock_code") or "")),
+        )
+        if tracks:
+            matched += ratio
+        for t in tracks:
+            bucket_pct[t] += ratio
+            bucket_n[t] += 1
+
+    if not total:
+        return None
+    # 桶占比 <2% 无信息量；降序取前 4（设计确认①）
+    buckets = sorted(
+        ((label, bucket_n[label], pct) for label, pct in bucket_pct.items() if pct >= 2.0),
+        key=lambda x: x[2], reverse=True,
+    )[:4]
+    return {
+        "buckets": buckets,
+        "coverage": round(matched / total * 100, 1) if buckets else 0.0,
+    }
+
+
+def format_exposure(stats: Optional[dict]) -> Optional[str]:
+    """stats → "光模块/CPO×3 20.9%, PCB/覆铜板×3 18.6% (覆盖87%)" """
+    if not stats or not stats["buckets"]:
+        return None
+    parts = [f"{label}×{n} {pct:.1f}%" for label, n, pct in stats["buckets"]]
+    return f"{', '.join(parts)} (覆盖{stats['coverage']:.0f}%)"
+
+
+def theme_from_stats(stats: Optional[dict]) -> Optional[str]:
+    """持仓集中度联动（设计确认②）：Top1≥40% 或前两桶合计≥50% → Top1 赛道名"""
+    if not stats or not stats["buckets"]:
+        return None
+    top1 = stats["buckets"][0]
+    top2_pct = stats["buckets"][1][2] if len(stats["buckets"]) > 1 else 0.0
+    if top1[2] >= 40.0 or top1[2] + top2_pct >= 50.0:
+        return top1[0]
+    return None
+
+
+def parse_exposure_tags(
+    holdings: list[dict],
+    concept_map: Optional[dict[str, list[str]]] = None,
+) -> Optional[str]:
+    """从库内最新持仓反推赛道暴露（格式化入口）"""
+    return format_exposure(exposure_stats(holdings, concept_map=concept_map))
 
 
 def parse_primary_tags(
@@ -135,8 +266,13 @@ def parse_primary_tags(
     benchmark: Optional[str],
     fund_name: str,
     fund_type: Optional[str] = None,
+    theme_tag: Optional[str] = None,
 ) -> tuple[list[str], Optional[str]]:
     """解析主标签
+
+    Args:
+        theme_tag: 持仓集中度推定的赛道名（设计②），非空时追加为标签，
+                   基准给不出定位时兼作 position_tag
 
     Returns:
         (tags, position_tag) — tags 为分类词列表；position_tag 为从基准
@@ -194,64 +330,18 @@ def parse_primary_tags(
         if re.search(pat, name) and label not in tags:
             tags.append(label)
 
+    # 4b. 持仓集中度联动（设计②）：宽基基准给不出主题时，重仓赛道补定位
+    if theme_tag:
+        if theme_tag not in tags:
+            tags.append(theme_tag)
+        if position_tag is None:
+            position_tag = theme_tag
+
     # 5. 场内 ETF 简化
     if fund_type == "etf" and "ETF" in name and "宽基指数" not in tags and position_tag is None:
         tags.append("场内ETF")
 
     return tags, position_tag
-
-
-def parse_exposure_tags(
-    holdings: list[dict],
-    concept_map: Optional[dict[str, list[str]]] = None,
-) -> Optional[str]:
-    """从库内最新持仓反推赛道暴露
-
-    Args:
-        holdings: [{stock_name, ratio}] 最新季度持仓（含占比%）
-        concept_map: {stock_code: [真概念名]}（THS 概念映射表，优先使用；
-                     未覆盖股票回落关键词规则）
-
-    Returns:
-        "CPO×2 19.5%, 半导体/算力芯片×2 13.8%, 其他 45.1%" 或 None
-    """
-    bucket: dict[str, float] = defaultdict(float)
-    count: dict[str, int] = defaultdict(int)
-    total = 0.0
-    matched = 0.0
-    for h in holdings:
-        name = str(h.get("stock_name") or "")
-        ratio = h.get("ratio")
-        if ratio is None:
-            continue
-        total += float(ratio)
-        hit = None
-        # ① 真概念映射优先（THS 板块原名）
-        code = str(h.get("stock_code") or "")
-        concepts = (concept_map or {}).get(code)
-        if concepts:
-            hit = concepts[0]  # 主概念（首个）
-        else:
-            # ② 关键词规则回退
-            for pat, label in _EXPOSURE_RULES:
-                if re.search(pat, name):
-                    hit = label
-                    break
-        if hit:
-            bucket[hit] += float(ratio)
-            count[hit] += 1
-            matched += float(ratio)
-
-    if not total:
-        return None
-    parts = [
-        f"{label}×{count[label]} {bucket[label]:.1f}%"
-        for label in sorted(bucket, key=bucket.get, reverse=True)
-    ]
-    other = total - matched
-    if other > 0.5:
-        parts.append(f"其他 {other:.1f}%")
-    return ", ".join(parts)
 
 
 class F10FetchError(RuntimeError):
@@ -421,8 +511,13 @@ def build_double_tags(
         is_mutual = not code.startswith(("0", "1", "5")) or code.startswith("968")
         official_type = "互认基金" if is_mutual else None
 
+    # 先聚合持仓赛道（供主标签联动② + 副标签格式化共用一次计算）
+    exp_stats = (
+        exposure_stats(holdings, concept_map=concept_map) if holdings else None
+    )
     tags, position_tag = parse_primary_tags(
-        official_type, benchmark, name, fund_type=fund_type
+        official_type, benchmark, name, fund_type=fund_type,
+        theme_tag=theme_from_stats(exp_stats),
     )
     if is_mutual and "互认基金" not in tags:
         tags.insert(0, "互认基金")
@@ -450,10 +545,7 @@ def build_double_tags(
         except Exception:
             pass
 
-    exposure = (
-        parse_exposure_tags(holdings, concept_map=concept_map)
-        if holdings else None
-    )
+    exposure = format_exposure(exp_stats)
     return {
         "tags": ",".join(tags) if tags else None,
         "fund_type_official": official_type,

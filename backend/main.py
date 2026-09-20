@@ -95,6 +95,28 @@ async def _prewarm_market_cache():
         logger.warning(f"市场数据缓存预热失败: {e}")
 
 
+_tag_heal_task = None  # 后台自愈任务强引用（防 GC 取消）
+
+
+async def _self_heal_tags():
+    """启动后延迟修复存量脏标签（benchmark/暴露缺失的历史基金）
+
+    等 5 分钟让预热与首波请求先走，避免抢 akshare 并发额度；
+    F10 抓取自带限频（串行 + 间隔），整轮失败仅告警不影响服务。
+    """
+    try:
+        import asyncio
+        await asyncio.sleep(300)
+        from backend.services.fund_service import self_heal_dirty_tags
+        stats = await self_heal_dirty_tags()
+        if stats["total"]:
+            logger.info("存量标签自愈任务结束: %s", stats)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning(f"存量标签自愈任务失败: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化数据库 + 加载调度器 + 应用反爬补丁"""
@@ -110,6 +132,10 @@ async def lifespan(app: FastAPI):
 
     # 后台预热市场数据缓存（不阻塞启动）
     asyncio.ensure_future(_prewarm_market_cache())
+
+    # 存量脏标签自愈（延迟执行，保留引用防 GC 取消）
+    global _tag_heal_task
+    _tag_heal_task = asyncio.ensure_future(_self_heal_tags())
 
     # 启动调度器
     from backend.scheduler.task_scheduler import task_scheduler

@@ -85,7 +85,7 @@ async def run_refresh_all_details() -> None:
         update_extended_detail_cache,
         get_last_refreshed_time,
     )
-    from backend.services.fund_holding_service import refresh_holdings
+    from backend.services.fund_holding_service import refresh_holdings, get_latest_holdings
     from backend.services.fund_manager_service import refresh_managers
 
     state = get_refresh_state()
@@ -142,9 +142,20 @@ async def run_refresh_all_details() -> None:
                 for _attempt in range(4):
                     try:
                         async with async_session_factory() as fund_db:
+                            # 持仓同步 → 出现新季报则联动重算双层标签（设计③，
+                            # 暴露副标签随季报自动更新，不再依赖手动刷新）
+                            before = await get_latest_holdings(fund_db, fund.id, limit=1)
                             await refresh_holdings(fund_db, fund.id, fund.code)
+                            after = await get_latest_holdings(fund_db, fund.id, limit=1)
                             await refresh_managers(fund_db, fund.id, fund.code)
                             await fund_db.commit()
+                            if after and (not before or before[0].quarter_label != after[0].quarter_label):
+                                try:
+                                    from backend.services.fund_service import recompute_double_tags
+                                    await recompute_double_tags(fund_db, fund.id)
+                                    logger.info("基金 %s 新季报 %s，双层标签已重算", fund.code, after[0].quarter_label)
+                                except Exception as e:  # noqa: BLE001
+                                    logger.warning("新季度持仓联动重算标签失败 %s: %s", fund.code, e)
                         result["status"] = "ok"
                         break
                     except Exception as e:  # noqa: BLE001
