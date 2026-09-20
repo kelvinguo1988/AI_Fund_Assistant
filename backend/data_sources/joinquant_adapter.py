@@ -6,6 +6,7 @@
 """
 
 import logging
+import time
 from datetime import date, timedelta
 from typing import Optional
 
@@ -46,6 +47,7 @@ class JoinQuantAdapter(BaseDataSource):
     def __init__(self, user: str = "", password: str = "") -> None:
         self._available = False
         self._jq = None
+        self._auth_checked_at = 0.0
         if user and password:
             try:
                 import jqdatasdk as jq  # type: ignore  # lazy import
@@ -60,9 +62,14 @@ class JoinQuantAdapter(BaseDataSource):
     @property
     def available(self) -> bool:
         if self._available and self._jq:
+            # is_auth() 是同步网络调用且可能在事件循环内被触发（manager
+            # 降级链探测）：节流 60s 一次，避免频繁卡 loop。
+            now = time.monotonic()
+            if now - self._auth_checked_at < 60:
+                return self._available
+            self._auth_checked_at = now
             try:
-                # 检查连接是否仍然有效
-                return self._jq.is_auth()
+                self._available = bool(self._jq.is_auth())
             except Exception:
                 self._available = False
         return self._available

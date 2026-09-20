@@ -39,6 +39,16 @@ router = APIRouter()
 # 后台任务强引用（防止 asyncio.create_task 结果被 GC 回收中途取消）
 _refresh_task: Optional[asyncio.Task] = None
 
+# 冷路径抓取去重锁（lazy：Python 3.9 避免 import 期绑定事件循环）
+_detail_cold_lock: Optional[asyncio.Lock] = None
+
+
+def _get_detail_cold_lock() -> asyncio.Lock:
+    global _detail_cold_lock
+    if _detail_cold_lock is None:
+        _detail_cold_lock = asyncio.Lock()
+    return _detail_cold_lock
+
 
 @router.get("/export")
 async def export_funds(db: AsyncSession = Depends(get_db)):
@@ -93,17 +103,19 @@ async def lookup_fund_name(
 
     if not name:
         # 场外排行表不含 ETF，用 ETF 行情表兜底
+        # 注意：_call 本身是协程且内部已有超时+信号量+重试，必须直接 await；
+        # 旧实现误把协程函数交给 run_with_timeout 进线程池，只拿到未执行的
+        # coroutine 对象，此兜底路径从未生效过。
         try:
             import akshare as ak
-            from backend.utils.concurrency import run_with_timeout
 
-            df = await run_with_timeout(adapter._call, ak.fund_etf_spot_em, timeout=25.0)
+            df = await adapter._call(ak.fund_etf_spot_em)
             if df is not None and not df.empty:
                 match = df[df["代码"] == code]
                 if not match.empty:
                     name = str(match.iloc[0]["名称"])
         except Exception as e:
-            logger.debug("ETF 名称查询失败 code=%s: %s", code, e)
+            logger.warning("ETF 名称查询失败 code=%s: %s", code, e)
 
     fund_type = guess_fund_type(code) if name else None
     return ApiResponse(data={"code": code, "name": name, "fund_type": fund_type})
@@ -307,19 +319,35 @@ async def get_funds_detail(
     codes = ordered_codes
     name_map = {f.code: f.name for f in ordered}
 
-    # 2026-08-29 修复：原先 fetch_period_returns 与 update_period_returns_cache
-    # 内部各抓一次全部 pingzhongdata JS——冷缓存时请求数翻倍（最易触发反爬的路径）
-    # 改为复用缓存写入的返回值
-    # 2026-09-20 修复：该函数返回的是记录列表（含 code/name/return_*），
-    # 原按 dict.get 取值必抛 AttributeError → 无缓存冷路径恒定 500
-    fresh_items, _js_texts = await update_period_returns_cache(db, codes, name_map)
+    def _from_cache(items: list[dict], updated: Optional[str]):
+        cached_by_code = {item.get("code"): item for item in items}
+        ordered_items = [cached_by_code[c] for c in ordered_codes if c in cached_by_code]
+        extra = [item for item in items if item.get("code") not in ordered_set]
+        ordered_items.extend(extra)
+        return ApiResponse(data=FundDetailResponse(
+            funds=[FundPeriodReturn(**item) for item in ordered_items],
+            updated_at=updated,
+        ))
 
-    new_updated = await get_last_refreshed_time(db)
+    # 并发去重：冷路径全池抓 pingzhongdata 是最易触发东财反爬的路径，
+    # 进程内锁保证同一时刻只有一轮全池抓取；后来者锁内重查缓存直接命中。
+    async with _get_detail_cold_lock():
+        cached_data, updated_at = await get_cached_period_returns(db)
+        if cached_data:
+            return _from_cache(cached_data, updated_at)
 
-    return ApiResponse(data=FundDetailResponse(
-        funds=[FundPeriodReturn(**item) for item in fresh_items],
-        updated_at=new_updated,
-    ))
+        # 2026-08-29 修复：原先 fetch_period_returns 与 update_period_returns_cache
+        # 内部各抓一次全部 pingzhongdata JS——冷缓存时请求数翻倍
+        # 改为复用缓存写入的返回值
+        # 2026-09-20 修复：该函数返回记录列表，原按 dict.get 取值必抛
+        # AttributeError → 无缓存冷路径恒定 500
+        fresh_items, _js_texts = await update_period_returns_cache(db, codes, name_map)
+        new_updated = await get_last_refreshed_time(db)
+
+        return ApiResponse(data=FundDetailResponse(
+            funds=[FundPeriodReturn(**item) for item in fresh_items],
+            updated_at=new_updated,
+        ))
 
 
 @router.get("/detail/status", response_model=ApiResponse[FundDetailStatus])
@@ -491,6 +519,15 @@ async def holding_overlap(
 
     from backend.models.fund_holding import FundHolding
     from sqlalchemy import func
+
+    # 仅统计各基金最新季度持仓。旧实现对全部历史季度 SUM(ratio)，
+    # 同一股票被 8-12 个季度重复计入，total_ratio 虚高数倍。
+    latest_quarter = (
+        select(func.max(FundHolding.quarter_label))
+        .where(FundHolding.fund_id == FundHolding.fund_id)
+        .correlate(FundHolding)
+        .scalar_subquery()
+    )
     rows = (await db.execute(
         select(
             FundHolding.stock_code,
@@ -498,7 +535,10 @@ async def holding_overlap(
             func.count(func.distinct(FundHolding.fund_id)).label("funds_count"),
             func.sum(FundHolding.ratio).label("total_ratio"),
         )
-        .where(FundHolding.fund_id.in_([f.id for f in funds]))
+        .where(
+            FundHolding.fund_id.in_([f.id for f in funds]),
+            FundHolding.quarter_label == latest_quarter,
+        )
         .group_by(FundHolding.stock_code)
         .order_by(func.count(func.distinct(FundHolding.fund_id)).desc())
         .limit(30)

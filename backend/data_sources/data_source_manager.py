@@ -109,10 +109,13 @@ class DataSourceManager(BaseDataSource):
             if not src.active and src.should_retry:
                 logger.info(f"尝试恢复数据源 [{src.name}]...")
                 try:
-                    # 用一次基础调用测试是否恢复
-                    src.adapter.available
-                    # 假设成功（具体恢复在 get_fund_data 的实际调用中验证）
-                    src.mark_recovered()
+                    # 探测必须看结果：旧实现只"读取 available 属性"且不判断，
+                    # AKShare 属性恒 True 且不抛异常 → 冷却期形同虚设，降级
+                    # 源立即复原。现在探测失败则维持降级、重新计时冷却。
+                    if src.adapter.available:
+                        src.mark_recovered()
+                    else:
+                        src.mark_degraded()
                 except Exception:
                     src.mark_degraded()
 

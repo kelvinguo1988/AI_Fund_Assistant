@@ -36,7 +36,16 @@ _JS_REQUESTS_TIMEOUT: float = 25.0
 # pingzhongdata 专用并发信号量（8 并发）— JS 文件下载极轻量，不应与大重量
 # akshare 接口共享全局 Semaphore(5)，否则 40-60 只基金 × 全局 5 并发 =
 # 大量排队等 slot，导致 _fetch_js 超时堆积。
-_PINGZHONG_SEM = asyncio.Semaphore(8)
+# lazy 构造：Python 3.9 Semaphore 在 import 期构造会绑定当时的 event loop，
+# 运行期 loop 不同会抛 "Future attached to a different loop"。
+_PINGZHONG_SEM: Optional["asyncio.Semaphore"] = None
+
+
+def _get_pingzhong_sem() -> "asyncio.Semaphore":
+    global _PINGZHONG_SEM
+    if _PINGZHONG_SEM is None:
+        _PINGZHONG_SEM = asyncio.Semaphore(8)
+    return _PINGZHONG_SEM
 
 # _fetch_js 失败重试配置
 _MAX_RETRIES = 1  # 超时/网络错误重试 1 次
@@ -195,7 +204,7 @@ def _fetch_js(code: str) -> Optional[str]:
 async def fetch_fund_detail(code: str) -> dict[str, Any]:
     """一站式获取单只基金基础数据"""
     js_text = await run_with_timeout(
-        _fetch_js, code, timeout=_JS_TIMEOUT, semaphore=_PINGZHONG_SEM,
+        _fetch_js, code, timeout=_JS_TIMEOUT, semaphore=_get_pingzhong_sem(),
     )
     if not js_text:
         return {"period_returns": {}, "fund_name": "", "extended_data": {}}
@@ -219,7 +228,7 @@ async def fetch_all_js_texts(codes: list[str]) -> dict[str, str]:
     async def fetch_one(code: str) -> tuple[str, Optional[str]]:
         try:
             text = await run_with_timeout(
-                _fetch_js, code, timeout=_JS_TIMEOUT, semaphore=_PINGZHONG_SEM,
+                _fetch_js, code, timeout=_JS_TIMEOUT, semaphore=_get_pingzhong_sem(),
             )
             return code, text
         except Exception as e:

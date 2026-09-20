@@ -108,11 +108,40 @@ class MarketService:
     def _cache_set(key: str, val: object) -> None:
         MarketService._cache[key] = (time.time(), val)
 
+    # ── 失败冷却 + 断供埋点 ────────────────────────────────────────────
+    # 旧实现降级链全失败只留 warning 日志：断供无人知，且每 5 分钟 TTL 一过
+    # 就重打整条源链。现在整链失败记 error_logs 并冷却 2 分钟（对齐
+    # MarketRegimeService._FAIL_TTL 的做法）。
+    _FAIL_TTL = 120
+    _fail_cache: dict[str, float] = {}
+
+    def _failed_recently(self, key: str) -> bool:
+        return time.time() < MarketService._fail_cache.get(key, 0.0)
+
+    @staticmethod
+    def _mark_failed(key: str, err: object) -> None:
+        MarketService._fail_cache[key] = time.time() + MarketService._FAIL_TTL
+        try:
+            from backend.services.error_log_service import (
+                log_source_failure, classify_source_error,
+            )
+            msg = f"{type(err).__name__}: {err}" if isinstance(err, Exception) else str(err)
+            log_source_failure(
+                module=f"market.{key}",
+                message=(msg or "")[:300] or "降级链全部无数据",
+                category=classify_source_error(msg),
+                detail="fallback chain exhausted",
+            )
+        except Exception:
+            pass
+
     async def get_market_capital_flow(self) -> Optional[MarketCapitalFlow]:
         """获取大盘资金流概况"""
         cached = self._cache_get("market_capital_flow")
         if cached is not None:
             return cached  # type: ignore[return-value]
+        if self._failed_recently("market_capital_flow"):
+            return None
         try:
             df = await _rate_limited_call(ak.stock_market_fund_flow)
             if df is None or df.empty:
@@ -177,7 +206,8 @@ class MarketService:
                 _fetch_index_flow, "399001.SZ", timeout=20.0
             )
             if not sh_data:
-                return None
+                # 不直接 return：落入 except 继续走 push2 实时兜底
+                raise ValueError("datacenter-web 无大盘资金流数据")
 
             YI = 10_000  # 万元→亿 (1亿 = 10000万元)
 
@@ -227,6 +257,7 @@ class MarketService:
             self._cache_set("market_capital_flow", result)
             return result
 
+        self._mark_failed("market_capital_flow", "四级降级链全部失败")
         return None
 
     async def _fetch_capital_flow_push2his(self) -> Optional[MarketCapitalFlow]:
@@ -362,6 +393,8 @@ class MarketService:
         cached = self._cache_get("sector_flow_rankings")
         if cached is not None:
             return cached  # type: ignore[return-value]
+        if self._failed_recently("sector_flow_rankings"):
+            return {}
         symbol_map = {
             "当天": "即时",
             "周": "5日排行",
@@ -369,15 +402,19 @@ class MarketService:
         }
 
         results: dict[str, SectorFlowRanking] = {}
+        errors: list[str] = []
         for tf_label, symbol in symbol_map.items():
             try:
                 df = await _rate_limited_call(ak.stock_fund_flow_industry, symbol=symbol)
                 ranking = self._parse_ths_sector_df(df, tf_label, symbol)
                 results[tf_label] = ranking
             except Exception as e:
+                errors.append(f"{tf_label}:{type(e).__name__}")
                 logger.warning(f"板块资金流获取失败 {tf_label}: {type(e).__name__}: {e}")
                 results[tf_label] = SectorFlowRanking(timeframe=tf_label)
 
+        if len(errors) == len(symbol_map):
+            self._mark_failed("sector_flow_rankings", "; ".join(errors))
         self._cache_set("sector_flow_rankings", results)
         return results
 
@@ -423,9 +460,12 @@ class MarketService:
         cached = self._cache_get("hsgt_flow")
         if cached is not None:
             return cached  # type: ignore[return-value]
+        if self._failed_recently("hsgt_flow"):
+            return None
         try:
             df = await _rate_limited_call(ak.stock_hsgt_fund_flow_summary_em)
             if df is None or df.empty:
+                self._mark_failed("hsgt_flow", "接口返回空数据")
                 return None
 
             hsgt = HSGTFlow()
@@ -458,6 +498,7 @@ class MarketService:
             return hsgt
         except Exception as e:
             logger.warning(f"沪深港通资金流获取失败: {e}")
+            self._mark_failed("hsgt_flow", e)
             return None
 
     async def get_market_adv_decline(self) -> Optional[MarketAdvDecline]:
@@ -465,9 +506,12 @@ class MarketService:
         cached = self._cache_get("market_adv_decline")
         if cached is not None:
             return cached  # type: ignore[return-value]
+        if self._failed_recently("market_adv_decline"):
+            return None
         try:
             df = await _rate_limited_call(ak.stock_board_industry_summary_ths)
             if df is None or df.empty:
+                self._mark_failed("market_adv_decline", "接口返回空数据")
                 return None
 
             up = int(df["上涨家数"].sum())
@@ -481,6 +525,7 @@ class MarketService:
             return result
         except Exception as e:
             logger.warning(f"涨跌分布获取失败: {e}")
+            self._mark_failed("market_adv_decline", e)
             return None
 
     async def get_market_turnover(self) -> Optional[MarketTurnover]:
@@ -488,10 +533,13 @@ class MarketService:
         cached = self._cache_get("market_turnover")
         if cached is not None:
             return cached  # type: ignore[return-value]
+        if self._failed_recently("market_turnover"):
+            return None
         try:
             # 获取最近交易日
             today_data = await _rate_limited_call(ak.stock_sse_summary)
             if today_data is None or today_data.empty:
+                self._mark_failed("market_turnover", "接口返回空数据")
                 return None
             today_str = today_data[today_data["项目"] == "报告时间"].iloc[0, 1]
 
@@ -555,4 +603,5 @@ class MarketService:
             return result
         except Exception as e:
             logger.warning(f"两市成交额获取失败: {e}")
+            self._mark_failed("market_turnover", e)
             return None

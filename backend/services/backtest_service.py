@@ -97,7 +97,12 @@ class BacktestService:
             return cached[1]
         from backend.data_sources.akshare_adapter import AKShareAdapter
         adapter = AKShareAdapter()
-        fund_data = await adapter.get_fund_data(fund_code, period=period)
+        try:
+            fund_data = await adapter.get_fund_data(fund_code, period=period)
+        except Exception as e:
+            # adapter 主备双失败现在上抛（为打通降级链），回测按"无数据"处理
+            logger.warning(f"回测净值拉取失败 {fund_code}: {e}")
+            return None
         if fund_data is not None:
             BacktestService._nav_cache[key] = (now, fund_data)
         return fund_data
@@ -130,7 +135,7 @@ class BacktestService:
         # 2. 获取净值序列（10 分钟缓存）
         fund_data = await self._get_nav_series(fund.code, period)
 
-        if not fund_data.close_history or not fund_data.date_history:
+        if not fund_data or not fund_data.close_history or not fund_data.date_history:
             logger.warning(f"基金 {fund.code} 无净值数据")
             return None
 

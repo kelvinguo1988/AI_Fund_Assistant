@@ -7,6 +7,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.fund_data_cache import FundDataCache
@@ -70,6 +71,26 @@ async def get_last_refreshed_time(db: AsyncSession) -> Optional[str]:
     return None
 
 
+async def _upsert_cache_row(
+    db: AsyncSession, cache_key: str, data_json: str, now: datetime
+) -> None:
+    """原子 upsert —— 替代 select-then-insert。
+
+    并发请求下两个会话同时判"无行"再各自 INSERT 会撞 cache_key 唯一约束
+    （IntegrityError → 500），交给 SQLite ON CONFLICT 做原子写入。
+    调用方负责 commit。
+    """
+    stmt = (
+        sqlite_insert(FundDataCache)
+        .values(cache_key=cache_key, data_json=data_json, updated_at=now)
+        .on_conflict_do_update(
+            index_elements=["cache_key"],
+            set_={"data_json": data_json, "updated_at": now},
+        )
+    )
+    await db.execute(stmt)
+
+
 async def update_period_returns_cache(
     db: AsyncSession,
     codes: list[str],
@@ -97,37 +118,9 @@ async def update_period_returns_cache(
     ]
 
     now = _now_beijing()
-    # Upsert
-    stmt = select(FundDataCache).where(
-        FundDataCache.cache_key == CACHE_KEY_PERIOD_RETURNS
-    )
-    result = await db.execute(stmt)
-    cached = result.scalars().first()
-    if cached:
-        cached.data_json = json.dumps(data, ensure_ascii=False)
-        cached.updated_at = now
-    else:
-        db.add(FundDataCache(
-            cache_key=CACHE_KEY_PERIOD_RETURNS,
-            data_json=json.dumps(data, ensure_ascii=False),
-            updated_at=now,
-        ))
-
+    await _upsert_cache_row(db, CACHE_KEY_PERIOD_RETURNS, json.dumps(data, ensure_ascii=False), now)
     # Update refresh timestamp
-    ts_stmt = select(FundDataCache).where(
-        FundDataCache.cache_key == CACHE_KEY_REFRESH_TIME
-    )
-    ts_result = await db.execute(ts_stmt)
-    ts_cache = ts_result.scalars().first()
-    if ts_cache:
-        ts_cache.updated_at = now
-    else:
-        db.add(FundDataCache(
-            cache_key=CACHE_KEY_REFRESH_TIME,
-            data_json='"ok"',
-            updated_at=now,
-        ))
-
+    await _upsert_cache_row(db, CACHE_KEY_REFRESH_TIME, '"ok"', now)
     await db.commit()
     return data, js_texts
 
@@ -175,13 +168,6 @@ async def set_cached_json(db: AsyncSession, cache_key: str, data: Any) -> str:
     """通用缓存写入 — 返回 updated_at ISO 字符串"""
     now = _now_beijing()
     json_str = json.dumps(data, ensure_ascii=False, default=str)
-    stmt = select(FundDataCache).where(FundDataCache.cache_key == cache_key)
-    result = await db.execute(stmt)
-    cached = result.scalars().first()
-    if cached:
-        cached.data_json = json_str
-        cached.updated_at = now
-    else:
-        db.add(FundDataCache(cache_key=cache_key, data_json=json_str, updated_at=now))
+    await _upsert_cache_row(db, cache_key, json_str, now)
     await db.commit()
     return now.isoformat()

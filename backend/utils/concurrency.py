@@ -52,12 +52,27 @@ _AKSHARE_POOL: concurrent.futures.ThreadPoolExecutor = concurrent.futures.Thread
 # ── 全局并发信号量 ─────────────────────────────────────────────────────
 # 替代原"全局时间戳 + sleep(3)"串行限流。允许 5 个请求并发，不再强制串行等待。
 # akshare/东财接口实测可承受 5 并发，配合 UA 轮换 + patch 超时，稳定性足够。
-_AKSHARE_SEM: asyncio.Semaphore = asyncio.Semaphore(5)
+# 注意：Python 3.9 的 Semaphore 构造时会绑定 get_event_loop()。若在 import 期
+# 构造而实际在 uvicorn 后建的 loop 中使用，会抛 "Future attached to a different
+# loop"。因此必须 lazy 到首次 await 前（运行期）再构造。
+_AKSHARE_SEM: Optional[asyncio.Semaphore] = None
+
+
+def get_akshare_sem() -> asyncio.Semaphore:
+    global _AKSHARE_SEM
+    if _AKSHARE_SEM is None:
+        _AKSHARE_SEM = asyncio.Semaphore(5)
+    return _AKSHARE_SEM
 
 # ── 默认超时 ──────────────────────────────────────────────────────────
 # 单次 akshare 调用默认超时。eastmoney_patch 已注入 20s requests 超时，
 # 这里 25s 留 5s 缓冲（DNS/连接建立 + 数据解析）。
 DEFAULT_TIMEOUT: float = 25.0
+
+# 信号量排队等待上限：与请求超时分离。全池刷新（40-60 只 × 并发 5）时
+# 排队是正常现象，旧实现把排队时间计入 25s 请求超时 → 误判网络超时 →
+# 上层指数退避重试放大请求量，与防封禁目标相反。
+SEM_QUEUE_TIMEOUT: float = 120.0
 
 # User-Agent 池（与各模块原有池保持一致，集中管理避免重复定义）
 USER_AGENTS: list[str] = [
@@ -121,18 +136,30 @@ async def run_with_timeout(
         asyncio.TimeoutError: 超时
         Exception: 原函数抛出的异常
     """
-    sem = semaphore if semaphore is not None else _AKSHARE_SEM
+    sem = semaphore if semaphore is not None else get_akshare_sem()
     loop = asyncio.get_running_loop()
     partial = functools.partial(func, *args, **kwargs)
 
     async def _run():
-        async with sem:
+        # 排队与请求分开计时：只有真正拿到信号量之后的执行才算超时，
+        # 排队超过 SEM_QUEUE_TIMEOUT 才放弃（避免误判触发上层重试风暴）。
+        try:
+            await asyncio.wait_for(sem.acquire(), timeout=SEM_QUEUE_TIMEOUT)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(
+                f"信号量排队超时（等待>{SEM_QUEUE_TIMEOUT:.0f}s，并发饱和）"
+            ) from None
+        try:
             # 进入信号量后再轮换 UA，确保每次实际请求前都换 UA
             rotate_ua_for_akshare()
-            return await loop.run_in_executor(_AKSHARE_POOL, partial)
+            return await asyncio.wait_for(
+                loop.run_in_executor(_AKSHARE_POOL, partial), timeout=timeout
+            )
+        finally:
+            sem.release()
 
     try:
-        return await asyncio.wait_for(_run(), timeout=timeout)
+        return await _run()
     except asyncio.TimeoutError:
         func_name = getattr(func, "__name__", repr(func))
         logger.warning(

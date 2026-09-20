@@ -232,7 +232,11 @@ class AKShareAdapter(BaseDataSource):
             try:
                 fund_data = await fallback(code, period)
             except Exception as e2:
+                # 主备双失败必须上抛：旧实现静默返回空 FundData，manager 的
+                # 降级链（JoinQuant 备源）永不触发，断供只表现为"基金被质量
+                # 过滤否决"且无 error_logs。_call 内部已做过重试，这里直接抛。
                 logger.error(f"{fallback_name}数据获取也失败 code={code}: {e2}")
+                raise
 
         # 补充债券收益率
         try:
