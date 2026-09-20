@@ -1,9 +1,11 @@
 """信号回测路由"""
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -12,8 +14,42 @@ from backend.schemas.backtest import BacktestSummary
 from backend.services.backtest_service import BacktestService
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _batch_task_ref = None  # 后台任务强引用（防 GC 取消）
+
+
+# ── 回测成本参数 ─────────────────────────────────────────────────────
+
+class BacktestFeeConfig(BaseModel):
+    """回测调仓费率（%）；0 表示不计交易成本"""
+    fee_pct: float = Field(..., ge=0, le=5, description="单次调仓综合费率（0~5%）")
+
+
+@router.get("/config/fee", response_model=ApiResponse[dict])
+async def get_fee_config(db: AsyncSession = Depends(get_db)):
+    """读取回测调仓费率配置"""
+    from backend.services.backtest_service import (
+        DEFAULT_ROUND_TRIP_FEE_PCT, FEE_MAX, FEE_MIN, load_fee_pct,
+    )
+    fee = await load_fee_pct(db)
+    return ApiResponse(data={
+        "fee_pct": fee,
+        "default": DEFAULT_ROUND_TRIP_FEE_PCT,
+        "min": FEE_MIN,
+        "max": FEE_MAX,
+    })
+
+
+@router.put("/config/fee", response_model=ApiResponse[dict])
+async def update_fee_config(
+    body: BacktestFeeConfig,
+    db: AsyncSession = Depends(get_db),
+):
+    """更新回测调仓费率（保存即对下一次回测生效）"""
+    from backend.services.backtest_service import save_fee_pct
+    saved = await save_fee_pct(db, body.fee_pct)
+    return ApiResponse(data={"fee_pct": saved})
 
 
 @router.get("/{fund_id}", response_model=ApiResponse[BacktestSummary])
@@ -59,7 +95,6 @@ def _result_to_out(r) -> dict:
 @router.get("/batch/results", response_model=ApiResponse[list[dict]])
 async def list_batch_results(db: AsyncSession = Depends(get_db)):
     """自动回测的逐基金结果（按完成时间倒序）"""
-    from sqlalchemy import select
     from backend.models.backtest_result import BacktestResult
     rows = (await db.execute(
         select(BacktestResult).order_by(BacktestResult.finished_at.desc())

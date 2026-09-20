@@ -82,12 +82,29 @@ def parse_holiday_source(data: dict) -> list[tuple[str, bool, str]]:
 
 
 async def fetch_holiday_json(year: int, url_template: str) -> dict:
-    """抓取并解析某年节假日 JSON。url_template 中的 {year} 会被替换。"""
+    """抓取并解析某年节假日 JSON。url_template 中的 {year} 会被替换。
+
+    URL 由用户在系统配置里自由填写 → 抓取前做 SSRF 校验（仅 HTTPS、
+    域名解析后的 IP 不得为内网/保留段），并禁止跟随重定向（防跳转打内网）。
+    """
     import requests
 
+    from backend.services.connectivity_service import _validate_public_url
+
     url = url_template.replace("{year}", str(year))
+    _validate_public_url(url)
+
+    def _check_hop(request: "requests.Request") -> "requests.Request":
+        # 逐跳转校验：否则公网域名 302 → http://169.254.169.254 可绕过入口检查
+        _validate_public_url(request.url)
+        return request
+
     # 用 asyncio.to_thread 包裹同步 requests, 复用东财补丁注入的默认超时
-    resp = await asyncio.to_thread(requests.get, url, timeout=20)
+    resp = await asyncio.to_thread(
+        lambda: requests.get(
+            url, timeout=20, allow_redirects=True, resolution_callback=_check_hop
+        )
+    )
     resp.raise_for_status()
     return resp.json()
 

@@ -118,13 +118,20 @@ async def test_channel(
 
     try:
         from backend.push.feishu import FeishuPush
-        if ch.channel_type == "feishu":
-            pusher = FeishuPush(webhook_url=ch.webhook_url or "")
-            await pusher.send_test()
-        else:
-            raise HTTPException(status_code=400, detail=f"暂不支持 {ch.channel_type} 类型测试")
+    except ImportError as e:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"推送模块不可用: {e}")
+
+    if ch.channel_type != "feishu":
+        # 不支持的类型必须先返回 400：放进 try 会被下方兜底 except 重包装成 500
+        raise HTTPException(status_code=400, detail=f"暂不支持 {ch.channel_type} 类型测试")
+
+    try:
+        pusher = FeishuPush(webhook_url=ch.webhook_url or "", secret=ch.token)
+        ok = await pusher.send_test()
     except Exception as e:
         logger.error(f"推送测试失败: {e}")
-        raise HTTPException(status_code=500, detail=f"推送测试失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="推送测试失败，详见服务端日志")
 
+    if not ok:
+        raise HTTPException(status_code=502, detail="渠道返回失败，请检查 Webhook 地址与签名密钥")
     return ApiResponse()

@@ -188,7 +188,10 @@ async def serve_frontend_index():
 async def serve_frontend(full_path: str):
     """提供前端静态资源 + SPA 路由回退"""
     # 不影响 API 路由（FastAPI 优先匹配精确路由）
-    file_path = FRONTEND_DIST / full_path
+    # 防目录穿越：percent-decode 后的 ../ 不会被 uvicorn 归一化，须校验解析路径仍在 dist 内
+    file_path = (FRONTEND_DIST / full_path).resolve()
+    if not file_path.is_relative_to(FRONTEND_DIST) and file_path != FRONTEND_DIST:
+        raise HTTPException(status_code=404, detail="Not Found")
     if file_path.is_file():
         return FileResponse(file_path)
 

@@ -10,6 +10,8 @@ python-dotenv==1.0.1
 tzdata>=2024.1
 openai==1.35.0
 chinese-calendar>=1.9.1
+# 直接依赖（原经 akshare 传递引入）：调休同步的 SSRF 逐跳校验用到 2.31+ 的 resolution_callback
+requests>=2.31.0
 numpy>=1.24.0
 pytest>=7.4.0
 pytest-asyncio>=0.23.0

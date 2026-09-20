@@ -31,14 +31,24 @@ _PRIVATE_NETS = [
     ipaddress.ip_network("fc00::/7"),
 ]
 
-CONNECT_TIMEOUT = 5.0
-MIN_TEST_INTERVAL = 30.0  # 最短测试间隔(秒)，防止频繁调用
+# 常被用作 SSRF 探测目标：未指定地址 / 链路本地 / 保留段（含 169.254.169.254 元数据）
+_blocked_addr_types = ("is_unspecified", "is_link_local", "is_reserved", "is_multicast", "is_loopback")
 
-_last_test_at: float = 0.0
+
+def _is_blocked_address(addr: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:
+    if any(addr in net for net in _PRIVATE_NETS):
+        return True
+    return any(getattr(addr, t, False) for t in _blocked_addr_types)
 
 
 def _validate_public_url(url: str) -> None:
-    """校验 URL 为公网 HTTPS 地址，防止 SSRF"""
+    """校验 URL 为公网 HTTPS 地址，防止 SSRF
+
+    除字面 IP 外还解析域名：否则 attacker.com → 127.0.0.1 / 169.254.169.254
+    这类 DNS 指向内网的域名可绕过纯字符串检查。
+    """
+    import socket
+
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise ValueError(f"仅支持 HTTPS 地址，收到: {parsed.scheme}")
@@ -46,12 +56,28 @@ def _validate_public_url(url: str) -> None:
     if not hostname:
         raise ValueError(f"无法解析主机名: {url}")
     try:
-        addr = ipaddress.ip_address(hostname)
-    except ValueError:
-        return  # 域名，允许
-    for net in _PRIVATE_NETS:
-        if addr in net:
-            raise ValueError(f"不允许访问内网地址: {hostname}")
+        candidates = [hostname]
+        try:
+            addr = ipaddress.ip_address(hostname)
+        except ValueError:
+            # 域名 → 解析全部 A/AAAA 记录逐一校验
+            infos = socket.getaddrinfo(hostname, parsed.port or 443, proto=socket.IPPROTO_TCP)
+            candidates = sorted({i[4][0] for i in infos})
+        for cand in candidates:
+            try:
+                ip = ipaddress.ip_address(cand)
+            except ValueError:
+                continue
+            if _is_blocked_address(ip):
+                raise ValueError(f"不允许访问内网/保留地址: {cand} (host={hostname})")
+    except socket.gaierror:
+        raise ValueError(f"域名无法解析: {hostname}")
+
+
+CONNECT_TIMEOUT = 5.0
+MIN_TEST_INTERVAL = 30.0  # 最短测试间隔(秒)，防止频繁调用
+
+_last_test_at: float = 0.0
 
 
 async def _test_single(client: httpx.AsyncClient, name: str, url: str) -> ConnectivityItem:

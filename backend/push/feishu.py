@@ -1,7 +1,11 @@
 """飞书 Webhook 推送"""
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import time
 from typing import Optional
 
 import httpx
@@ -9,6 +13,16 @@ import httpx
 from backend.push.base import BasePush
 
 logger = logging.getLogger(__name__)
+
+
+def _gen_sign(secret: str, timestamp: int) -> str:
+    """飞书自定义机器人「加签」校验值
+
+    飞书约定：以 f"{timestamp}\n{secret}" 为 key、空串为消息体做 HMAC-SHA256 后 base64。
+    """
+    string_to_sign = f"{timestamp}\n{secret}"
+    digest = hmac.new(string_to_sign.encode("utf-8"), b"", hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("utf-8")
 
 
 class FeishuPush(BasePush):
@@ -210,6 +224,10 @@ class FeishuPush(BasePush):
     async def _post(self, payload: dict) -> bool:
         """发送 HTTP POST 请求到飞书 Webhook"""
         try:
+            if self.secret:
+                # 配置了签名密钥就必须带签名，否则飞书端返回 19021 校验失败（此前静默不生效）
+                ts = int(time.time())
+                payload = {**payload, "timestamp": str(ts), "sign": _gen_sign(self.secret, ts)}
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.post(
                     self.webhook_url,

@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from backend.database import get_db
 from backend.models.holiday_calendar import HolidayCalendar
 from backend.models.system_config import SystemConfig
 from backend.schemas.common import ApiResponse
+from backend.services.connectivity_service import _validate_public_url
 from backend.services.holiday_sync_service import (
     DEFAULT_HOLIDAY_SYNC_URL,
     auto_sync_if_enabled,
@@ -97,6 +98,11 @@ async def update_holiday_config(
     """更新调休同步配置（地址/时间/开关）"""
     updates: dict[str, str] = {}
     if body.sync_url is not None:
+        # 保存即校验：该地址后续会被服务端 requests.get 抓取，须防内网/元数据探测
+        try:
+            _validate_public_url(body.sync_url.replace("{year}", "2026"))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"同步地址不合法：{e}")
         updates[CFG_URL] = body.sync_url
     if body.auto_sync_time is not None:
         updates[CFG_TIME] = body.auto_sync_time
