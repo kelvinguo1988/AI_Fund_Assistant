@@ -82,6 +82,9 @@ QUALITY_CONFIG = {
     "drift_position_change_pct": 30.0,        # 漂移：相邻两季度仓位变动 ≥ 30%
     "high_purity_min_position_pct": 85.0,     # 高纯度：最低仓位 ≥ 85%
     "high_purity_max_range_pct": 10.0,        # 高纯度：仓位极差 ≤ 10%
+    # 场外申购可执行性约束（信号后处理，不参与评分）：
+    # 1=暂停申购/封闭期时买入信号降级为观望；0=关闭
+    "otc_pause_veto_buy": 1,
 
     # ── 固定偏置 ──
     "institution_approval_bonus": 0.5,        # 机构认可度：连续上升加分
@@ -135,6 +138,7 @@ PARAM_META: dict[str, tuple[str, str]] = {
     "drift_position_change_pct":          ("漂移：相邻两季度仓位变动阈值", "动态阈值"),
     "high_purity_min_position_pct":       ("高纯度：最低股票仓位",             "动态阈值"),
     "high_purity_max_range_pct":          ("高纯度：仓位极差上限",             "动态阈值"),
+    "otc_pause_veto_buy":                 ("暂停申购/封闭期买入降级为观望（1=开 0=关）", "动态阈值"),
     "institution_approval_bonus":         ("机构认可度：连续上升加分",         "固定偏置"),
     "institution_decline_penalty":        ("机构认可度：大幅下降减分",         "固定偏置"),
     "institution_min_change_pct":         ("机构认可度：最小有效变动（百分点）", "固定偏置"),
@@ -773,6 +777,37 @@ def determine_signal(
         strength = "hold"
 
     return direction, strength, "; ".join(warnings)
+
+
+def apply_otc_trade_constraint(
+    signal,
+    otc_status: Optional[dict],
+    cfg: dict = QUALITY_CONFIG,
+):
+    """按场外申购状态约束买入信号的可执行性（不改评分，仅降级决策）
+
+    - 暂停申购 / 封闭期：买入 → 观望（不可执行的买入提示对场外无操作意义）
+    - 限大额：保留买入信号，追加单笔受限警告
+    - 卖出信号不约束：赎回通常开放，暂停赎回由 trade_hints 单独提示
+    状态缺失（数据源失败/场内标的/测试屏蔽）或开关关闭时原样返回。
+    """
+    if not cfg.get("otc_pause_veto_buy", 1) or not otc_status:
+        return signal
+    if signal.signal_direction != "buy":
+        return signal
+    purchase = str(otc_status.get("purchase") or "").strip()
+    if purchase in ("暂停申购", "封闭期"):
+        signal.signal_direction = "hold"
+        signal.signal_strength = "hold"
+        signal.equity_ratio = 0.5
+        signal.operation_advice = (
+            f"综合评分 {signal.weighted_score}，该基金当前{purchase}不可申购，"
+            "买入提示暂不可执行，建议持有观望"
+        )
+        signal.quality_warnings.append(f"场外{purchase}：买入信号已降级为观望")
+    elif purchase == "限大额":
+        signal.quality_warnings.append("场外限大额申购：加仓单笔金额可能受限")
+    return signal
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -1,13 +1,14 @@
 """加权评分引擎 + 信号生成
 
-评分规则（-6.4 ~ +6.4 五档对称体系）：
+评分规则（-8.5 ~ +8.5 五档对称体系）：
 - 因子分值范围: -1.0 ~ +1.0 / 因子
-- 加权求和: Σ(score × weight)，总权重 ≈ 6.4 → 总分范围 ≈ -6.4 ~ +6.4
+- 加权求和: Σ(score × weight)，钳位 ±8.5（当前 active 因子总权重 8.3）
 - 阈值可从 system_config 表动态加载，通过 /api/system/scoring-config 前端可调。
 
 变更记录:
 - 2025-05: 因子分值从 0-5 改为 -1~+1，加权求和替代归一化
 - 2026-05: 8 因子体系总权重 6.4，钳位范围对应调整
+- 2026-09: 11 因子总权重 8.3，钳位与末档兜底统一为 ±8.5
 """
 
 import json
@@ -61,7 +62,10 @@ DEFAULT_THRESHOLDS: list[dict] = [
         "equity_ratio": 0.3,
     },
     {
-        "min_score": -6.4,
+        # 末档为 catch-all：min_score 对齐钳位下界 -8.5（总权重 8.3），
+        # 任何 score < -3.0 都落入强烈减仓，与买入侧 ±3.0 对称可达。
+        # 旧值 -6.4 在 -9~9 输入框外且语义误导（实际边界是 -3.0）。
+        "min_score": -8.5,
         "label": "强烈减仓",
         "signal_direction": "sell",
         "signal_strength": "heavy_sell",
@@ -74,7 +78,7 @@ DEFAULT_THRESHOLDS: list[dict] = [
 @dataclass
 class SignalResult:
     """信号判定结果"""
-    weighted_score: float          # 归一化总分 -6.0 ~ +6.0
+    weighted_score: float          # 归一化总分 -8.5 ~ +8.5（钳位，与 active 因子总权重对齐）
     raw_score: float               # 原始加权求和值（内部使用）
     signal_direction: str          # buy / sell / hold
     signal_strength: str           # heavy_buy / moderate_buy / hold / moderate_sell / heavy_sell

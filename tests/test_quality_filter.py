@@ -34,6 +34,7 @@ from backend.engines.quality_filter import (
     compute_dynamic_thresholds,
     determine_signal,
     apply_factor_corrections,
+    apply_otc_trade_constraint,
 )
 
 
@@ -518,6 +519,56 @@ class TestComputeWithQualityFilter:
         signal = compute_with_quality_filter(scores, weights, qf)
         assert signal.original_score != signal.weighted_score
         assert abs(signal.weighted_score - (signal.original_score + 0.5)) < 0.01
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 场外申购可执行性约束测试
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestOtcTradeConstraint:
+    def _make_buy_signal(self):
+        factors = make_default_factors_config()
+        scores = [
+            FactorScoreResult(f["code"], f["name"], 0.3, 0.3, "positive")
+            for f in factors
+        ]
+        weights = [f["weight"] for f in factors]
+        qf = QualityFilterResult(
+            fund_code="TEST",
+            dynamic_buy_threshold=QUALITY_CONFIG["base_buy_threshold"],
+            dynamic_sell_threshold=QUALITY_CONFIG["base_sell_threshold"],
+        )
+        signal = compute_with_quality_filter(scores, weights, qf)
+        assert signal.signal_direction == "buy"  # 前置校验：构造确为买入
+        return signal
+
+    def test_pause_purchase_downgrades_buy_to_hold(self):
+        signal = apply_otc_trade_constraint(self._make_buy_signal(), {"purchase": "暂停申购"})
+        assert signal.signal_direction == "hold"
+        assert signal.signal_strength == "hold"
+        assert signal.equity_ratio == 0.5
+        assert any("暂停申购" in w for w in signal.quality_warnings)
+
+    def test_closed_period_downgrades_buy(self):
+        signal = apply_otc_trade_constraint(self._make_buy_signal(), {"purchase": "封闭期"})
+        assert signal.signal_direction == "hold"
+
+    def test_limited_purchase_keeps_buy_with_warning(self):
+        signal = apply_otc_trade_constraint(self._make_buy_signal(), {"purchase": "限大额"})
+        assert signal.signal_direction == "buy"
+        assert any("限大额" in w for w in signal.quality_warnings)
+
+    def test_sell_signal_untouched(self):
+        signal = self._make_buy_signal()
+        signal.signal_direction = "sell"
+        out = apply_otc_trade_constraint(signal, {"purchase": "暂停申购"})
+        assert out.signal_direction == "sell"
+
+    def test_no_status_or_switch_off_passthrough(self):
+        base = self._make_buy_signal()
+        assert apply_otc_trade_constraint(base, None).signal_direction == "buy"
+        assert apply_otc_trade_constraint(base, {}).signal_direction == "buy"
+        assert apply_otc_trade_constraint(base, {"purchase": "暂停申购"}, cfg={"otc_pause_veto_buy": 0}).signal_direction == "buy"
 
 
 # ═══════════════════════════════════════════════════════════════════════

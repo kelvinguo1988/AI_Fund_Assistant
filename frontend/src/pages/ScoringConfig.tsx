@@ -97,7 +97,7 @@ const ScoringConfig: React.FC = () => {
         <Box>
           <Typography variant="h5">评分配置</Typography>
           <Typography variant="body2" color="text.secondary">
-            评分范围：-6.0 ~ +6.0，档位按 min_score 降序排列。数值越低的分档越靠后。
+            评分范围：-8.5 ~ +8.5（钳位上限 = 因子总权重），档位按 min_score 降序排列。数值越低的分档越靠后。
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
@@ -132,7 +132,7 @@ const ScoringConfig: React.FC = () => {
                 </TableCell>
                 <TableCell>
                   <TextField size="small" type="number" value={tier.min_score}
-                    inputProps={{ step: 0.1, min: -6, max: 6 }}
+                    inputProps={{ step: 0.1, min: -9, max: 9 }}
                     onChange={(e) => updateTier(i, 'min_score', parseFloat(e.target.value) || 0)}
                     sx={{ width: 90 }} />
                 </TableCell>

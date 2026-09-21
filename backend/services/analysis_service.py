@@ -4,7 +4,7 @@ from backend.utils.timezone import now_beijing
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, AsyncGenerator, Optional
 
@@ -20,6 +20,7 @@ from backend.engines.quality_filter import (
     QualityFilterResult,
     merge_quality_config,
     build_quality_filter,
+    apply_otc_trade_constraint,
 )
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
@@ -65,6 +66,8 @@ class _AnalysisConfig:
     qf: Any
     regime_snapshot: Any
     regime_factors: list[dict]
+    # 场外申购/赎回状态 {code: {"purchase","redeem","fee"}}；空 = 不可用时跳过约束
+    otc_status_map: dict = field(default_factory=dict)
 
 
 class AnalysisService:
@@ -435,12 +438,21 @@ class AnalysisService:
             if f.get("code", "").startswith("market_") else f
             for f in active_factors
         ]
+        # 场外申购状态（类级缓存 1h，不额外打接口）；失败/测试屏蔽时空 dict，
+        # 买入可执行性约束自动跳过，不阻塞主流程
+        otc_status_map: dict = {}
+        try:
+            from backend.services.index_valuation_service import OtcTradeStatusService
+            otc_status_map = await OtcTradeStatusService.get_status_map()
+        except Exception as e:
+            logger.warning(f"场外申购状态获取失败，跳过买入可执行性约束: {e}")
         return _AnalysisConfig(
             active_factors=active_factors,
             thresholds_json=thresholds_json,
             qf=qf,
             regime_snapshot=regime_snapshot,
             regime_factors=regime_factors,
+            otc_status_map=otc_status_map,
         )
 
     async def _score_and_store(
@@ -473,6 +485,12 @@ class AnalysisService:
             factor_weights=corrected_weights,
             quality_result=qf_result,
             thresholds_json=cfg.thresholds_json,
+        )
+        # 场外申购可执行性约束：暂停申购/封闭期 → 买入降级观望（可配开关）
+        signal = apply_otc_trade_constraint(
+            signal,
+            cfg.otc_status_map.get(fund.code),
+            cfg.qf.cfg,
         )
         return await self._save_result(
             fund, signal, corrected_scores, qf_result=qf_result,

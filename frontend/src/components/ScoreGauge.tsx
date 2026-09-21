@@ -13,7 +13,8 @@ interface ScoreGaugeProps {
 
 const ScoreGauge: React.FC<ScoreGaugeProps> = ({ score, height = 200 }) => {
   const option = useMemo(() => {
-    const clampedScore = Math.max(-6, Math.min(6, score));
+    // 总分钳位 ±8.5（与 active 因子总权重对齐，见后端 scoring_engine）
+    const clampedScore = Math.max(-8.5, Math.min(8.5, score));
 
     // 根据评分确定颜色
     let color: string;
@@ -25,8 +26,8 @@ const ScoreGauge: React.FC<ScoreGaugeProps> = ({ score, height = 200 }) => {
       color = '#95A5A6'; // 灰（中性）
     }
 
-    // 分值在 -6~+6 范围中的比例（0~1）
-    const ratio = Math.max(0, (clampedScore + 6) / 12);
+    // 表盘刻度 -9~+9（略宽于钳位范围，刻度间距 3 更整洁）映射为 0~1
+    const ratio = Math.max(0, (clampedScore + 9) / 18);
 
     return {
       series: [
@@ -34,8 +35,8 @@ const ScoreGauge: React.FC<ScoreGaugeProps> = ({ score, height = 200 }) => {
           type: 'gauge',
           startAngle: 210,
           endAngle: -30,
-          min: -6,
-          max: 6,
+          min: -9,
+          max: 9,
           splitNumber: 6,
           itemStyle: {
             color,

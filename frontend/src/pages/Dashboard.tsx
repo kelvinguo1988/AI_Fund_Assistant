@@ -719,7 +719,7 @@ const Dashboard: React.FC = () => {
                   <TableCell>基金代码</TableCell>
                   <TableCell>基金名称</TableCell>
                   <TableCell>实时估值</TableCell>
-                  <TableCell>评分(-6~+6)</TableCell>
+                  <TableCell>评分(-8.5~+8.5)</TableCell>
                   <TableCell>权益仓位</TableCell>
                   <TableCell>信号</TableCell>
                   <TableCell>强度</TableCell>

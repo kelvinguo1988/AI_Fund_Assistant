@@ -137,13 +137,14 @@ async def get_scoring_config(db: AsyncSession = Depends(get_db)):
             data = json.loads(raw)
             if isinstance(data, list):
                 thresholds = [ScoringTier(**t) for t in data]
-                # 自动迁移：确保末档为 catch-all（min_score 等于理论最小值 -6.4）
-                # 避免重复追加：仅当末档不是 heavy_sell 时才追加
+                # 自动迁移：确保末档为 catch-all（min_score 等于钳位下界，
+                # 取自 DEFAULT_THRESHOLDS 末档，勿再硬编码）
+                catch_all_floor = DEFAULT_THRESHOLDS[-1]["min_score"]
                 last = thresholds[-1]
-                if last.min_score > -6.4 and last.signal_strength != "heavy_sell":
+                if last.min_score > catch_all_floor and last.signal_strength != "heavy_sell":
                     catch_all = DEFAULT_THRESHOLDS[-1]
                     thresholds.append(ScoringTier(
-                        min_score=-6.4,
+                        min_score=catch_all_floor,
                         label=catch_all["label"],
                         signal_direction=catch_all["signal_direction"],
                         signal_strength=catch_all["signal_strength"],
@@ -161,7 +162,7 @@ async def get_scoring_config(db: AsyncSession = Depends(get_db)):
                     else:
                         db.add(SystemConfig(config_key="scoring_thresholds", config_value=raw))
                     await db.commit()
-                    logger.info("评分配置自动迁移：追加末档 catch-all（min_score=-6.4）")
+                    logger.info(f"评分配置自动迁移：追加末档 catch-all（min_score={catch_all_floor}）")
                 return ApiResponse(data=ScoringConfigOut(thresholds=thresholds))
         except Exception as e:  # 含 JSONDecodeError 等，统一回退默认值
             logger.warning("评分阈值配置解析失败，使用默认值: %s", e)

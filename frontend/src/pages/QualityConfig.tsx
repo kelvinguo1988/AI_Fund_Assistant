@@ -35,6 +35,7 @@ const CATEGORY_ORDER = [
   '前置否决-清盘',
   '因子修正',
   '动态阈值',
+  '市场环境阈值',
   '固定偏置',
 ];
 
@@ -44,6 +45,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   '前置否决-清盘': '⚠️',
   '因子修正': '✏️',
   '动态阈值': '📐',
+  '市场环境阈值': '🧭',
   '固定偏置': '➕',
 };
 
@@ -193,7 +195,7 @@ const QualityConfig: React.FC = () => {
         修改以下参数后点击"保存改动"，新配置将在下次分析时生效。所有参数均有硬编码默认值，可随时恢复。
       </Typography>
 
-      {/* ── 6 个分类卡片 ── */}
+      {/* ── 分类卡片（按 CATEGORY_ORDER 分组） ── */}
       <Grid container spacing={3}>
         {CATEGORY_ORDER.map((cat) => {
           const items = grouped[cat];
