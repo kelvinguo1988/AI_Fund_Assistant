@@ -474,7 +474,7 @@ const FundPool: React.FC = () => {
                 />
               </TableCell>
               <TableCell sx={{ width: 88 }}>代码</TableCell>
-              <TableCell sx={{ width: '20%' }}>名称</TableCell>
+              <TableCell sx={{ width: '20%', minWidth: 170 }}>名称</TableCell>
               <TableCell sx={{ width: 64 }}>类型</TableCell>
               <TableCell sx={{ width: '44%', minWidth: 400 }}>标签</TableCell>
               <TableCell sx={{ width: 76 }}>状态</TableCell>
