@@ -171,18 +171,22 @@ const isStyleDrift = (f: FundOut): boolean => {
   return DEFENSIVE.test(f.tags) && AGGRESSIVE.test(f.exposure_tags);
 };
 
-/** 解析暴露串 "A×6 55.3%, B×2 9.2% (覆盖75%)" → 桶列表 + 覆盖率（覆盖不再拼进 chip） */
-const parseExposure = (raw?: string | null): { buckets: { text: string; label: string }[]; coverage: string } => {
-  if (!raw) return { buckets: [], coverage: '' };
+/** 暴露桶解析："A×6 55.3%, B×2 9.2% (覆盖75%)" → 结构化桶 + 覆盖率
+ *  ×N=归入该赛道的前十大重仓只数；pct=其合计占净值比；赛道并集归类可重叠 */
+interface ExposureBucket { text: string; label: string; count: number; pct: number }
+const parseExposure = (raw?: string | null): { buckets: ExposureBucket[]; coverageNum: number | null } => {
+  if (!raw) return { buckets: [], coverageNum: null };
   let s = raw;
-  let coverage = '';
-  const m = s.match(/\s*[（(](覆盖[^）)]+)[)）]\s*$/);
-  if (m) { coverage = m[1]; s = s.slice(0, m.index); }
-  const buckets = s.split(',').map((t) => t.trim()).filter(Boolean).map((t) => ({
-    text: t,
-    label: t.split('×')[0].trim(),
-  }));
-  return { buckets, coverage };
+  let coverageNum: number | null = null;
+  const m = s.match(/\s*[（(]覆盖\s*([\d.]+)\s*%[)）]\s*$/);
+  if (m) { coverageNum = parseFloat(m[1]); s = s.slice(0, m.index); }
+  const buckets = s.split(',').map((t) => t.trim()).filter(Boolean).map((t) => {
+    const bm = t.match(/^(.*?)×(\d+)\s+([\d.]+)\s*%$/);
+    return bm
+      ? { text: t, label: bm[1].trim(), count: parseInt(bm[2], 10), pct: parseFloat(bm[3]) }
+      : { text: t, label: t.split('×')[0].trim(), count: 0, pct: 0 };
+  });
+  return { buckets, coverageNum };
 };
 
 /** 分类分组表头样式 */
@@ -293,24 +297,19 @@ const FundPool: React.FC = () => {
       <TableCell>{fund.fund_type === 'etf' ? 'ETF' : '场外'}</TableCell>
       <TableCell sx={{ width: '44%', minWidth: 400 }}>
         {(() => {
-          const { buckets, coverage } = parseExposure(fund.exposure_tags);
-          const top1 = buckets[0];
-          // 赛道联动标签与 Top1 暴露 chip 同名时去重（权重信息在暴露 chip 上更全）
-          const tagList = (fund.tags || '').split(',').map((t) => t.trim()).filter(Boolean)
-            .filter((t) => t !== top1?.label);
-          const rest = buckets.slice(1, 3);
-          const hidden = buckets.length > 3 ? buckets.slice(3) : [];
+          const { buckets, coverageNum } = parseExposure(fund.exposure_tags);
+          const bucketLabels = new Set(buckets.map((b) => b.label));
+          const rawTags = [...new Set((fund.tags || '').split(',').map((t) => t.trim()).filter(Boolean))];
+          // 去重：① 与赛道桶同名（信息在桶 chip 上更全）② 是另一标签的子串
+          //（"混合型-偏股" 已含 "混合"/"偏股"，不再重复展示）
+          const typeTags = rawTags.filter(
+            (t) => !bucketLabels.has(t) && !rawTags.some((u) => u !== t && u.includes(t))
+          );
           return (
             <>
+              {/* 第一行：基金分类标签前置（类型/市场/主题），风格漂移角标收尾 */}
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, alignItems: 'center' }}>
-                {/* 持仓暴露 Top1 赛道前置主视觉（用户确认：具体板块是第一眼信息） */}
-                {top1 && (
-                  <Tooltip title={`当前持仓赛道暴露（随季报变动）：${fund.exposure_tags}`}>
-                    <Chip label={top1.text} size="small"
-                      sx={{ backgroundColor: '#00897B', color: '#fff', fontWeight: 600 }} />
-                  </Tooltip>
-                )}
-                {tagList.map((tag) => (
+                {typeTags.map((tag) => (
                   <Chip key={tag} label={tag} size="small"
                     sx={{ backgroundColor: getThemeColor(tag), color: '#fff' }} />
                 ))}
@@ -321,23 +320,25 @@ const FundPool: React.FC = () => {
                   </Tooltip>
                 )}
               </Box>
-              {/* 第二行：其余赛道桶（描边弱化）+ 覆盖率，与主标签分行不混排 */}
-              {(rest.length > 0 || coverage) && (
+              {/* 第二行：持仓赛道暴露（全量展示不折叠），统一实心青色 chip */}
+              {buckets.length > 0 && (
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, alignItems: 'center', mt: 0.4 }}>
-                  {rest.map((tag) => (
-                    <Chip key={tag.text} label={tag.text} size="small" variant="outlined"
-                      sx={{ fontSize: '0.7rem' }} />
-                  ))}
-                  {hidden.length > 0 && (
-                    <Tooltip title={`其余赛道：${hidden.map((b) => b.text).join('、')}`}>
-                      <Chip label={`+${hidden.length}`} size="small" variant="outlined"
-                        sx={{ fontSize: '0.7rem', color: 'text.secondary' }} />
+                  {buckets.map((b) => (
+                    <Tooltip key={b.text}
+                      title={b.count
+                        ? `前十大重仓中归入该赛道的股票 ${b.count} 只，合计占基金净值 ${b.pct}%（随季报变动；一只股票可归多个赛道，各赛道占比之和不等于 100%）`
+                        : `当前持仓赛道暴露（随季报变动）：${fund.exposure_tags}`}>
+                      <Chip label={b.text} size="small"
+                        sx={{ backgroundColor: '#00897B', color: '#fff', fontWeight: 600 }} />
                     </Tooltip>
-                  )}
-                  {coverage && (
-                    <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
-                      ({coverage})
-                    </Typography>
+                  ))}
+                  {coverageNum !== null && (
+                    <Tooltip title={`以上赛道覆盖了前十大重仓的 ${coverageNum}%，其余 ${(100 - coverageNum).toFixed(0)}% 未匹配任何已知赛道（可能是现金、债券或其他行业个股）`}>
+                      <Typography variant="caption" color="text.secondary"
+                        sx={{ fontSize: '0.65rem', cursor: 'help', textDecoration: 'underline dotted' }}>
+                        (覆盖{coverageNum}%)
+                      </Typography>
+                    </Tooltip>
                   )}
                 </Box>
               )}
