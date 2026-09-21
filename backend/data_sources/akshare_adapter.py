@@ -145,6 +145,7 @@ class AKShareAdapter(BaseDataSource):
         - 无降级的独立调用保持默认 3 次
         """
         max_attempts = kwargs.pop('_max_attempts', self.MAX_RETRIES)
+        call_code = kwargs.get('symbol') or (args[0] if args else '')
 
         from backend.utils.concurrency import run_with_timeout
 
@@ -187,7 +188,7 @@ class AKShareAdapter(BaseDataSource):
                 module=f"akshare.{func_name}",
                 message=f"[{reason}] {msg}"[:300],
                 category="rate_limit" if _is_rate_limited(last_exc) else classify_source_error(msg),
-                detail=f"attempts={max_attempts}",
+                detail=f"code={call_code} attempts={max_attempts}"[:200],
             )
         except Exception:
             pass

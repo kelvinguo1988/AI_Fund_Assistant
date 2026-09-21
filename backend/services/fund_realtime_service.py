@@ -953,21 +953,26 @@ class FundRealtimeService:
                 # 一只特殊基金会把全池官方估值关停一整天
                 logger.info(f"fundgz 无估值数据(code={code})，跳过该基金")
                 return None
-            # 反爬页（无 jsonpgz 标记）→ 冷却
-            FundRealtimeService._fundgz_fail_until = time.time() + FUNDGZ_FAIL_COOLDOWN
-            logger.info(f"fundgz 反爬拦截(code={code})，进入 {FUNDGZ_FAIL_COOLDOWN}s 冷却")
-            try:
-                from backend.services.error_log_service import log_source_failure
-                log_source_failure(
-                    module="realtime.fundgz",
-                    message=f"fundgz 反爬拦截(code={code})",
-                    category="rate_limit", severity="warning",
-                )
-            except Exception:
-                pass
+            # 反爬页（无 jsonpgz 标记）→ 冷却；check-and-set 保证并发 10 路里
+            # 只有首个触发者进入冷却并埋点（消息不含 code，命中 store 节流），
+            # 一次触发不再刷 10 条重复日志
+            if now >= FundRealtimeService._fundgz_fail_until:
+                FundRealtimeService._fundgz_fail_until = time.time() + FUNDGZ_FAIL_COOLDOWN
+                logger.info(f"fundgz 反爬拦截(code={code})，进入 {FUNDGZ_FAIL_COOLDOWN}s 冷却")
+                try:
+                    from backend.services.error_log_service import log_source_failure
+                    log_source_failure(
+                        module="realtime.fundgz",
+                        message="fundgz 反爬拦截，进入冷却",
+                        category="rate_limit", severity="warning",
+                        detail=f"first_code={code}",
+                    )
+                except Exception:
+                    pass
             return None
         except Exception as e:
-            FundRealtimeService._fundgz_fail_until = now + FUNDGZ_FAIL_COOLDOWN
+            if now >= FundRealtimeService._fundgz_fail_until:
+                FundRealtimeService._fundgz_fail_until = now + FUNDGZ_FAIL_COOLDOWN
             logger.warning(f"fundgz 请求失败(code={code}): {e}")
             return None
 
