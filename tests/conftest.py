@@ -32,6 +32,37 @@ def _block_heavy_network(monkeypatch):
     monkeypatch.setattr(_ft, "fetch_xq_basic", lambda code: None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_error_log_store(tmp_path, monkeypatch):
+    """error_logs 测试隔离：埋点写临时库，不污染生产错误日志表
+
+    2026-09-21 排查：导出日志 538 条中约 95% 为测试污染——
+    test_logging_and_retry 的 _call(lambda) 与 test_realtime 的
+    _mark_source_fail("eastmoney", "test") 直写真实 fund_quant.db，
+    刷爆铃铛计数并淹没真实限流告警。
+    """
+    from backend.services import error_log_service as _els
+
+    monkeypatch.setattr(_els, "DB_PATH", tmp_path / "error_logs_test.db")
+    with _els.ErrorLogStore._lock:
+        stale = _els.ErrorLogStore._instance
+        _els.ErrorLogStore._instance = None
+    if stale is not None:
+        try:
+            stale._conn.close()
+        except Exception:
+            pass
+    yield
+    with _els.ErrorLogStore._lock:
+        inst = _els.ErrorLogStore._instance
+        _els.ErrorLogStore._instance = None
+    if inst is not None:
+        try:
+            inst._conn.close()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 async def db_session():
     """共享内存库会话（原 4 个测试文件各自复制粘贴，统一于此）"""

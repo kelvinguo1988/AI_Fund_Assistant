@@ -188,7 +188,8 @@ class AKShareAdapter(BaseDataSource):
                 module=f"akshare.{func_name}",
                 message=f"[{reason}] {msg}"[:300],
                 category="rate_limit" if _is_rate_limited(last_exc) else classify_source_error(msg),
-                detail=f"code={call_code} attempts={max_attempts}"[:200],
+                detail=((f"code={call_code} " if call_code else "")
+                        + f"attempts={max_attempts}")[:200],
             )
         except Exception:
             pass
