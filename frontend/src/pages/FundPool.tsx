@@ -303,8 +303,9 @@ const FundPool: React.FC = () => {
         )}
         </Box>
         {fund.benchmark_text && (
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
-            基准: {fund.benchmark_text.length > 28 ? fund.benchmark_text.slice(0, 28) + '…' : fund.benchmark_text}
+          <Typography variant="caption" color="text.secondary"
+            sx={{ display: 'block', fontSize: '0.65rem', wordBreak: 'break-all' }}>
+            基准: {fund.benchmark_text}
           </Typography>
         )}
       </TableCell>
