@@ -244,8 +244,11 @@ class FundService:
         }
 
     async def refresh_themes(self, fund_id: int) -> Optional[Fund]:
-        """刷新指定基金的双层标签（手动刷新入口，逻辑见 recompute_double_tags）"""
-        return await recompute_double_tags(self.db, fund_id)
+        """刷新指定基金的双层标签（手动刷新入口，逻辑见 recompute_double_tags）
+
+        手动触发的单只重刷允许双失败兜底写名称解析标签（用户明确要求修）。
+        """
+        return await recompute_double_tags(self.db, fund_id, allow_fallback_on_fail=True)
 
     async def batch_update_status(self, ids: list[int], action: str) -> None:
         """批量更新基金状态
@@ -262,11 +265,15 @@ class FundService:
         await self.db.commit()
 
 
-async def recompute_double_tags(db: AsyncSession, fund_id: int) -> Optional[Fund]:
+async def recompute_double_tags(
+    db: AsyncSession, fund_id: int, allow_fallback_on_fail: bool = False
+) -> Optional[Fund]:
     """重算并持久化单只基金的双层标签（手动刷新/持仓新季度联动/启动自愈共用）
 
     保护语义（2026-08-30 复查修复）：F10 瞬时失败保留旧 official/benchmark；
     F10+雪球双失败（total）时旧 tags 整体保留，不写名称兜底标签。
+    allow_fallback_on_fail（自愈/手动刷新用）：双失败时，对「tags 或基准缺失」
+    的脏基金仍写名称解析兜底（坏标签不修等于没修）；字段齐全的基金照旧保留。
     """
     fund = (await db.execute(select(Fund).where(Fund.id == fund_id))).scalars().first()
     if fund is None:
@@ -290,9 +297,11 @@ async def recompute_double_tags(db: AsyncSession, fund_id: int) -> Optional[Fund
         fund.code, fund.name or "", fund.fund_type, holds_payload,
         timeout=25.0, concept_map=concept_map,
     )
-    if result.get("_fetch_failed") == "total" and fund.tags:
-        await db.refresh(fund)
-        return fund
+    if result.get("_fetch_failed") == "total":
+        dirty = fund.tags is None or fund.benchmark_text is None
+        if not (allow_fallback_on_fail and dirty):
+            await db.refresh(fund)
+            return fund
     fund.tags = result["tags"]
     if not result.get("_fetch_failed") or fund.fund_type_official is None:
         fund.fund_type_official = result["fund_type_official"]
@@ -321,29 +330,89 @@ async def find_dirty_tag_fund_ids(db: AsyncSession) -> list[int]:
     return list(rows)
 
 
+HEAL_FAIL_KEY = "tag_heal_fail_counts"
+HEAL_MAX_ATTEMPTS = 3  # 单只基金自愈失败上限：连续 3 轮无进展即跳过，防每启动全量打网络
+
+
+def _tag_fingerprint(fund: Fund) -> tuple:
+    return (fund.tags, fund.fund_type_official, fund.benchmark_text, fund.exposure_tags)
+
+
+async def _load_heal_counts(db: AsyncSession) -> dict[str, int]:
+    from backend.models.system_config import SystemConfig
+
+    row = (await db.execute(
+        select(SystemConfig).where(SystemConfig.config_key == HEAL_FAIL_KEY)
+    )).scalars().first()
+    if not row:
+        return {}
+    try:
+        data = json.loads(row.config_value or "{}")
+        return {str(k): int(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+async def _save_heal_counts(db: AsyncSession, counts: dict[str, int]) -> None:
+    from backend.models.system_config import SystemConfig
+
+    value = json.dumps(counts, ensure_ascii=False)
+    row = (await db.execute(
+        select(SystemConfig).where(SystemConfig.config_key == HEAL_FAIL_KEY)
+    )).scalars().first()
+    if row:
+        row.config_value = value
+    else:
+        db.add(SystemConfig(config_key=HEAL_FAIL_KEY, config_value=value))
+    await db.commit()
+
+
 async def self_heal_dirty_tags() -> dict:
     """启动自愈（设计③）：逐只限频重刷存量脏标签基金
 
     F10/概念表抓取均走网络，2s 间隔串行防封禁；单只失败仅告警。
+    双源失败时对脏字段写名称兜底（allow_fallback_on_fail）；连续
+    HEAL_MAX_ATTEMPTS 轮无进展的基金跳过，不再每启动重复抓取（防封禁）。
     """
     from backend.database import async_session_factory
 
-    stats = {"total": 0, "done": 0, "failed": 0}
+    stats = {"total": 0, "done": 0, "failed": 0, "skipped": 0}
     async with async_session_factory() as db:
         ids = await find_dirty_tag_fund_ids(db)
+        counts = await _load_heal_counts(db)
     stats["total"] = len(ids)
     if not ids:
         return stats
     logger.info("存量标签自愈开始：%d 只基金待重刷", len(ids))
     for fid in ids:
+        key = str(fid)
+        if counts.get(key, 0) >= HEAL_MAX_ATTEMPTS:
+            stats["skipped"] += 1
+            continue
         try:
             async with async_session_factory() as db:
-                await recompute_double_tags(db, fid)
-            stats["done"] += 1
+                row = (await db.execute(
+                    select(Fund).where(Fund.id == fid)
+                )).scalars().first()
+                before = _tag_fingerprint(row) if row else None
+                fund = await recompute_double_tags(db, fid, allow_fallback_on_fail=True)
+                after = _tag_fingerprint(fund) if fund is not None else None
+                if after is not None and after == before:
+                    # 抓取失败且未触发兜底 → 无进展，计数防每启动重复打网络
+                    counts[key] = counts.get(key, 0) + 1
+                else:
+                    counts.pop(key, None)
+                    stats["done"] += 1
         except Exception as e:
             stats["failed"] += 1
+            counts[key] = counts.get(key, 0) + 1
             logger.warning("存量标签自愈失败 fund_id=%s: %s", fid, e)
         await asyncio.sleep(2.0)
+    try:
+        async with async_session_factory() as db:
+            await _save_heal_counts(db, counts)
+    except Exception as e:
+        logger.warning("存量标签自愈计数保存失败: %s", e)
     logger.info("存量标签自愈完成: %s", stats)
     return stats
 

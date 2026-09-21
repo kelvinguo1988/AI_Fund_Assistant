@@ -237,6 +237,49 @@ async def test_recompute_double_tags_end_to_end(db_session, monkeypatch):
     assert fund.exposure_tags and "光模块/CPO×2 16.0%" in fund.exposure_tags
 
 
+def _make_total_fail(monkeypatch):
+    import backend.services.fund_tag_service as tm
+    from backend.services.fund_tag_service import F10FetchError
+
+    def _fail(code):
+        raise F10FetchError("F10 抓取失败(test)")
+    monkeypatch.setattr(tm, "fetch_f10_profile", _fail)
+    monkeypatch.setattr(tm, "fetch_xq_basic", lambda code: None)
+
+
+@pytest.mark.asyncio
+async def test_recompute_total_fail_keeps_old_when_fields_complete(db_session, monkeypatch):
+    """双源失败 + 字段齐全：保守保留旧标签（原保护语义不变）"""
+    _make_total_fail(monkeypatch)
+    from backend.models.fund import Fund
+    from backend.services.fund_service import recompute_double_tags
+
+    f = Fund(code="017103", name="大摩数字经济混合C", fund_type="otc", status="active",
+             tags="旧标签", benchmark_text="旧基准", fund_type_official="混合型")
+    db_session.add(f)
+    await db_session.commit()
+
+    fund = await recompute_double_tags(db_session, f.id, allow_fallback_on_fail=True)
+    assert fund.tags == "旧标签" and fund.benchmark_text == "旧基准"
+
+
+@pytest.mark.asyncio
+async def test_recompute_total_fail_writes_fallback_for_dirty(db_session, monkeypatch):
+    """双源失败 + 基准缺失（自愈目标）：写名称解析兜底，坏标签不再永久残留"""
+    _make_total_fail(monkeypatch)
+    from backend.models.fund import Fund
+    from backend.services.fund_service import recompute_double_tags
+
+    f = Fund(code="017103", name="大摩数字经济混合C", fund_type="otc",
+             status="active", tags="CPO,HALO,光模块")
+    db_session.add(f)
+    await db_session.commit()
+
+    fund = await recompute_double_tags(db_session, f.id, allow_fallback_on_fail=True)
+    assert fund.tags and fund.tags != "CPO,HALO,光模块"
+    assert "数字经济" in fund.tags
+
+
 @pytest_asyncio.fixture
 async def db_session():
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker

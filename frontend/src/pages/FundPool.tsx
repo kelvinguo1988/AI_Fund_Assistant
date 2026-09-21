@@ -277,29 +277,31 @@ const FundPool: React.FC = () => {
       <TableCell>{fund.code}</TableCell>
       <TableCell>{fund.name}</TableCell>
       <TableCell>{fund.fund_type === 'etf' ? 'ETF' : '场外'}</TableCell>
-      <TableCell>
+      <TableCell sx={{ width: '44%', minWidth: 400 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, alignItems: 'center' }}>
         {/* 持仓暴露 Top1 赛道前置主视觉（用户确认：具体板块是第一眼信息） */}
         {(fund.exposure_tags || '').split(',').filter(Boolean).slice(0, 1).map((tag) => (
           <Tooltip key={`ex-top-${tag}`} title={`当前持仓赛道暴露（随季报变动）：${fund.exposure_tags}`}>
             <Chip label={tag} size="small"
-              sx={{ backgroundColor: '#00897B', color: '#fff', mr: 0.5, mb: 0.3, fontWeight: 600 }} />
+              sx={{ backgroundColor: '#00897B', color: '#fff', fontWeight: 600 }} />
           </Tooltip>
         ))}
         {(fund.tags || '').split(',').filter(Boolean).map((tag) => (
           <Chip key={tag} label={tag} size="small"
-            sx={{ backgroundColor: getThemeColor(tag), color: '#fff', mr: 0.5, mb: 0.3 }} />
+            sx={{ backgroundColor: getThemeColor(tag), color: '#fff' }} />
         ))}
         {/* 副标签其余项（描边弱化）+ 风格漂移提示 */}
         {(fund.exposure_tags || '').split(',').filter(Boolean).slice(1, 3).map((tag) => (
           <Chip key={`ex-${tag}`} label={tag} size="small" variant="outlined"
-            sx={{ mr: 0.5, mb: 0.3, fontSize: '0.7rem' }} />
+            sx={{ fontSize: '0.7rem' }} />
         ))}
         {isStyleDrift(fund) && (
           <Tooltip title={`主标签与持仓暴露不一致——官方定位「${fund.fund_type_official ?? fund.tags}」但当前重仓押注其他赛道，注意风格漂移风险`}>
             <Chip label="漂移" size="small" color="warning"
-              sx={{ mr: 0.5, mb: 0.3, fontSize: '0.7rem' }} />
+              sx={{ fontSize: '0.7rem' }} />
           </Tooltip>
         )}
+        </Box>
         {fund.benchmark_text && (
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
             基准: {fund.benchmark_text.length > 28 ? fund.benchmark_text.slice(0, 28) + '…' : fund.benchmark_text}
@@ -471,13 +473,13 @@ const FundPool: React.FC = () => {
                   size="small"
                 />
               </TableCell>
-              <TableCell>代码</TableCell>
-              <TableCell>名称</TableCell>
-              <TableCell>类型</TableCell>
-              <TableCell>标签</TableCell>
-              <TableCell>状态</TableCell>
-              <TableCell>星标</TableCell>
-              <TableCell>操作</TableCell>
+              <TableCell sx={{ width: 88 }}>代码</TableCell>
+              <TableCell sx={{ width: '20%' }}>名称</TableCell>
+              <TableCell sx={{ width: 64 }}>类型</TableCell>
+              <TableCell sx={{ width: '44%', minWidth: 400 }}>标签</TableCell>
+              <TableCell sx={{ width: 76 }}>状态</TableCell>
+              <TableCell sx={{ width: 56 }}>星标</TableCell>
+              <TableCell sx={{ width: 96 }}>操作</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
