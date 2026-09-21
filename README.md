@@ -1,6 +1,6 @@
 # AI Fund Assistant — 基金量化交易系统
 
-> FastAPI + React 基金量化分析平台。8 因子配置体系、双层评分、Web 管理、流式 SSE 推送、自动化信号推送、数据源连通性检测、AI 多模型配置、信号回测评分。
+> FastAPI + React 基金量化分析平台。11 因子配置体系（加权总评 ±8.5）、双层评分、场外申购可执行性约束、Web 管理、流式 SSE 推送、自动化信号推送、数据源连通性检测、AI 多模型配置、信号回测评分、投资复盘与基金 PK。
 
 ---
 
@@ -14,10 +14,11 @@ AI_Fund_Assistant/
 │   ├── database.py             # SQLAlchemy 异步引擎 + 迁移
 │   ├── models/                 # ORM 模型
 │   ├── schemas/                # Pydantic Schema
-│   ├── routers/                # API 路由（8 个模块）
-│   ├── services/               # 业务逻辑层（含连通性检测、缓存、变更检测）
-│   ├── engines/                # 因子引擎 + 评分引擎 + 报告引擎
-│   │   ├── factor_engine.py    # 8 因子计算 + 信号规则 + 截面标准化
+│   ├── routers/                # API 路由（11 个模块：基金/因子/分析/回测/AI/Skills/推送/调度/报告/系统/调休）
+│   ├── services/               # 业务逻辑层（连通性检测、缓存、变更检测、复盘、基金PK、ETF扫描、概念映射、市场环境、错误日志等）
+│   ├── engines/                # 因子引擎 + 评分引擎 + 质量过滤 + 报告引擎
+│   │   ├── factor_engine.py    # 11 因子计算 + 信号规则 + 截面标准化（data_valid 剔除数据不足基金）
+│   │   ├── quality_filter.py   # 第零层质量过滤（前置否决/因子修正/偏置/动态阈值/场外申购约束）
 │   │   ├── scoring_engine.py   # 加权评分 + 信号判定
 │   │   └── report_engine.py    # 报告生成（Markdown / HTML）
 │   ├── data_sources/           # 多数据源适配器（AKShare/JoinQuant）
@@ -27,7 +28,7 @@ AI_Fund_Assistant/
 │   ├── scheduler/              # 定时任务调度（APScheduler）
 │   └── utils/                  # 通用工具（并发控制：线程池隔离 + 超时保护 + 信号量限流）
 ├── frontend/                   # React + TypeScript + MUI + Tailwind
-│   ├── src/pages/              # 11 个管理页面（含信号回测）
+│   ├── src/pages/              # 14 个管理页面（含信号回测、ETF 扫描、投资复盘、基金详情）
 │   ├── src/components/         # 图表组件（ECharts）、AI 对话、信号指示器等
 │   ├── src/api/                # API 客户端
 │   ├── src/hooks/              # 自定义 Hooks（AI 对话、分析）
@@ -42,11 +43,11 @@ AI_Fund_Assistant/
 
 ## 核心功能
 
-- **8 因子配置体系**：PE 百分位、股债性价比 FED、动量因子、波动率倒数、信息比率、MACD 信号、最大回撤、规模稳定性
-- **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -6~+6
-- **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓）
+- **11 因子配置体系**：短期/中期动量、波动率倒数、回撤修复度、收益风险比、动量加速度、趋势一致性、MACD 信号（自研 7 + MACD）+ 大盘估值分位、市场情绪、资金面（市场环境 3，共享 MarketRegimeService 快照）；扩展因子（PE 百分位/股债性价比 FED/信息比率/最大回撤/规模稳定性）可在因子管理页启用
+- **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -8.5~+8.5（钳位 = active 因子总权重 8.3）
+- **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓，末档 catch-all -8.5；正式路径信号由第零层动态阈值决策，五档仅旧计算路径生效）
 - **多数据源链**：AKShare → JoinQuant（聚宽），自动降级恢复
-- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、信号回测、系统设置（共 12 个页面）
+- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、信号回测、投资复盘、ETF 扫描、系统设置（共 14 个页面）
 - **基金详情模块**：阶段涨幅排序展示、季度持仓明细（可展开）、基金经理信息，含调仓 diff 和经理变更标注
 - **一键批量导入**：自动识别 ETF/场外类型，自动从天天基金抓取相关主题标签
 - **数据导出/导入**：支持历史报告导出备份（JSON 格式，含全部因子评分及信号）与恢复导入；基金池支持 JSON 格式一键导出，便于数据迁移与备份
@@ -64,7 +65,7 @@ AI_Fund_Assistant/
 - **市场数据缓存**：5 分钟 TTL 缓存，大幅提升仪表盘加载速度
 - **数据源连通性检测**：一键测试东方财富系列域名 + AI API 可达性，SSRF 防护，结果含延迟与状态汇总
 - **AI 开关可控**：顶栏 AI 开关一键启停，配置持久化至数据库
-- **场外交易提示与高低估区间**：场外基金提示申购/赎回可执行性（暂停申购/限大额/封闭期/暂停赎回自动阻断对应操作提示）与申购费率；跟踪指数（沪深300/中证500/上证50/中证1000）自动叠加**高低估区间提示**（近一年 PE 分位：<30% 低估——定投加码，>70% 高估——减投/止盈）；盘中估值偏离 ≥1% 时给 15:00 择时提示（未知价原则：15 点前按当日净值成交）；仪表盘新增指数高低估卡片
+- **场外交易提示、高低估区间与申购可执行性约束**：场外基金提示申购/赎回可执行性（暂停申购/限大额/封闭期/暂停赎回自动阻断对应操作提示）与申购费率；且**暂停申购/封闭期会在信号层将买入降级为观望**（第零层质量过滤开关 `otc_pause_veto_buy`，默认开，卖出信号不受影响）；跟踪指数（沪深300/中证500/上证50/中证1000）自动叠加**高低估区间提示**（近一年 PE 分位：<30% 低估——定投加码，>70% 高估——减投/止盈）；盘中估值偏离 ≥1% 时给 15:00 择时提示（未知价原则：15 点前按当日净值成交）；仪表盘新增指数高低估卡片
 - **场内 ETF 交易提示**：基金池内 ETF 的 buy/sell 信号叠加场内执行提示——溢价追高警示（价格 > IOPV 1%）、折价低成本窗口、流动性不足阻断（日成交额 < 1000 万）、放量流出预警（量比 > 2 且主力净流出）、放量流入确认；数据来自全市场 ETF 快照，零新增请求
 - **潜力 ETF 扫描**：/etf-scan 页面单次请求扫全市场 ~1600 只 ETF，三榜单（量价齐升/资金流入 Top20/换手异动），与基金池交叉标注「已持有」，一键加池；场外基金无盘中量价数据不适用
 - **错误日志与告警**：系统功能报错自动记录（限流/超时/网络/数据缺失分类，60s 节流去重；保留期 30 天且上限 2000 条，写入时自动清理超期记录）；**数据源被限流是最关键分类**，记录触发模块与接口（如 `akshare.fund_open_fund_info_em`、`realtime.eastmoney`、`patch.nid_auth`），用于排查哪个模块触发限制。前端右上角铃铛实时告警（60s 轮询未读徽标，点击看最近 10 条）；系统设置页支持分类筛选、**下载日志文件**与清空
@@ -106,7 +107,7 @@ docker compose logs -f frontend
 
 ```bash
 # 后端
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 
 # 前端
@@ -125,8 +126,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 - **添加基金**：单个添加（输入 6 位代码自动识别名称/类型）或「批量导入」（JSON 格式 `{"items":[{"code":"004011","name":"华泰柏瑞易利灵活配置混合C"}]}`，已存在的自动跳过）。
 - **双层标签（自动生成）**：导入后后台自动补全，无需手填。
-  - 主标签（彩色）：官方类型 + 业绩基准定位（如 `混合型-偏股`、`固收+/偏债`、`红利/高股息`），来自天天基金 F10 官方档案，稳定不漂移；
-  - 副标签（描边）：当前持仓赛道暴露（如 `光模块/CPO×3 26.6%`），来自最新季报持仓反推，随季报变动；
+  - 主标签（彩色，置于标签行首位并子串去重——如已有 `混合型-偏股` 不再重复显示 `混合`/`偏股`）：官方类型 + 业绩基准定位（如 `固收+/偏债`、`红利/高股息`），来自天天基金 F10 官方档案，稳定不漂移；
+  - 副标签（赛道 chips，统一实心青色、全量展示不折叠，如 `光模块/CPO×3 26.6%`）：当前持仓赛道暴露，来自最新季报持仓反推，随季报变动；`×N` = 该赛道覆盖的前十大重仓只数，`%` = 合并持仓市值占比（赛道按并集归类，同一基金各赛道占比之和不必等于 100%；行尾 `(覆盖NN%)` = 已归类赛道占前十大重仓的比例，其余为未匹配任何赛道的持仓），悬停任一 chip 可见口径说明；
   - **「漂移」警示**：主副标签不一致时高亮（如固收+ 基金重仓算力），提示风格漂移风险。
 - **刷新标签**：单只点「刷新主题」；数据不正确时重新刷新即可（重抓 F10 + 持仓）。
 - 香港互认基金（968 开头）自动标记「互认基金」+ 名称解析兜底。
@@ -174,13 +175,13 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 - **推送渠道**：/push 配置飞书机器人 Webhook（支持签名密钥），多渠道可选。
 - **数据源连通性**：/system 一键测试东财系列域名 + AI API 可达性。
-- **质量过滤**：/quality-config 32 个参数（棺材钉/心电图否决、动态阈值等），改动下次分析生效。
+- **质量过滤**：/quality-config 38 个数值参数分 7 组（前置否决棺材钉/心电图/清盘、因子修正、动态阈值、市场环境阈值调节、固定偏置，含场外申购降级开关 `otc_pause_veto_buy`），改动下次分析生效；`threshold_ref_total_weight` 配置后买卖阈值随因子总权重等比折算（本库已配 8.3，边界锚定当前口径）。
 
 ---
 
 ## 因子评分体系
 
-### 默认因子集（11 个，总权重 8.0）
+### 默认因子集（11 个，总权重 8.3，评分钳位 ±8.5）
 
 自研基金因子（7 个，基于基金净值序列）+ 市场环境因子（3 个，全池共享 MarketRegimeService 快照）+ MACD。
 
@@ -209,11 +210,11 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
   - 基金池 = 1 只：全部截面因子取中性 0.0
   - **建议基金池 ≥ 10 只**，否则请在因子管理页停用截面因子或改用规则型因子
 - **动量系 4 因子同源**（#1/#2/#6/#7 全部由 20/60 日动量派生，合计权重 3.4）：本体系为动量主导设计；若希望降低动量集中度，可停用动量加速度/趋势一致性
-- **信号判定不使用静态五档阈值**：最终方向/强度由第零层质量过滤的动态阈值决定（基础买 1.5 / 卖 -1.5，规模冲击或仓位漂移上调买入阈值），五档配置仅旧计算路径生效
+- **信号判定不使用静态五档阈值**：最终方向/强度由第零层质量过滤的动态阈值决定（基础买 1.5 / 卖 -1.5，规模冲击/仓位漂移/市场估值分位上调买入阈值；配置 `threshold_ref_total_weight` 后阈值随因子总权重等比折算，增删因子不再整体平移边界），五档配置仅旧计算路径生效
 
 ### 第零层：质量过滤
 
-前置否决（棺材钉/心电图形态、清盘风险）→ 因子修正（动量稳定性缩放波动率得分、超额持续性提升趋势一致性权重）→ 固定偏置（机构认可度/内部人增持）→ 动态阈值决策。参数在「质量过滤配置」页调整，详见 `backend/engines/quality_filter.py` 的 `QUALITY_CONFIG`。
+前置否决（棺材钉/心电图形态、清盘风险）→ 因子修正（动量稳定性缩放波动率得分、超额持续性提升趋势一致性权重）→ 固定偏置（机构认可度/内部人增持）→ 动态阈值决策 → **信号后处理：场外申购可执行性约束**（暂停申购/封闭期时买入降级为观望并附警告，限大额仅警告，卖出信号不受影响；开关 `otc_pause_veto_buy` 默认开）。参数在「质量过滤配置」页调整，详见 `backend/engines/quality_filter.py` 的 `QUALITY_CONFIG`。
 
 ### 实时净值预估（展示层，不参与信号）
 
@@ -273,22 +274,32 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/funds/refresh-details/status` | GET | 查询后台刷新进度（status/total/done/current/message/updated_at） |
 | `/api/funds/{id}/refresh-themes` | POST | 重新抓取天天基金主题标签 |
 | `/api/funds/realtime` | GET | 实时净值预估（场外 fundgz/持仓自算，场内 ETF 行情；force 跳过缓存） |
+| `/api/funds/export` | GET | 基金池导出 JSON（与 import 配套迁移/备份） |
+| `/api/funds/extended-detail` | GET | 基金扩展详情（阶段涨幅 + 持仓 + 经理聚合） |
+| `/api/funds/etf-scan` | GET | 全市场 ETF 扫描三榜单（量价齐升/资金流入/换手异动，交叉标注已持有） |
+| `/api/funds/holding-overlap` | GET | 重仓股重叠度排行（基金 PK 页抱团识别） |
+| `/api/funds/concept-map/*` | GET/POST/DELETE | 概念板块成分映射：progress 进度 / import 起步数据 / fetch 手动抓取 / export 导出 / 清空 |
 | `/api/analysis` | GET | 查询分析结果 |
 | `/api/analysis/latest` | GET | 最新分析结果 |
 | `/api/analysis/summary` | GET | 市场概况汇总（信号TOP10 + 资金流 + 板块排行 + 涨跌分布 + 成交额） |
 | `/api/analysis/trigger` | POST | 手动触发分析（同步返回全部结果） |
 | `/api/analysis/trigger-stream` | POST | 手动触发分析（SSE 流式推送，逐块返回结果） |
 | `/api/analysis/refresh-summary` | POST | 后台刷新行情缓存数据（资金流 + 板块排行 + 涨跌分布 + 成交额） |
+| `/api/analysis/export` / `import` | GET/POST | 历史报告导出备份 / 恢复导入（JSON，含全部因子评分与信号） |
+| `/api/analysis/market-regime` | GET | 市场环境快照（PE 分位 / 涨跌家数比 / 两融 7 日变化） |
+| `/api/analysis/compare` | GET | 基金 PK（2~10 只：双窗口年化/回撤/夏普 + Beta/Alpha/信息比率 + 规模与机构占比） |
 | `/api/backtest/{id}` | GET | 信号回测（含有效性评分） |
 | `/api/factors` | GET/POST | 因子 CRUD |
 | `/api/factors/export` | GET | 因子导出 JSON |
 | `/api/factors/import` | POST | 因子导入 JSON |
-| `/api/report-config` | GET/PUT | 报告配置项（14 项：5 基金维度 + 9 市场维度） |
+| `/api/report-config` | GET/PUT | 报告配置项（17 项：8 基金维度 + 9 市场维度） |
 | `/api/analysis/review` | GET | 投资复盘（start_date/end_date/fund_ids） |
 | `/api/backtest/batch/results` | GET/DELETE | 自动回测批量结果（逐基金完成时间） |
 | `/api/backtest/batch/config` | GET/PUT | 自动回测配置（开关/防封间隔） |
 | `/api/backtest/batch/run` | POST | 手动触发全量回测（409=运行中） |
+| `/api/backtest/config/fee` | GET/PUT | 回测费率参数（调仓成本口径） |
 | `/api/ai/chat` | POST | AI 对话 |
+| `/api/ai/conversations` | GET | 会话历史（按 conversation_id） |
 | `/api/ai/skills` | GET/POST | AI Skill 列表 / 新建 |
 | `/api/ai/skills/import` | POST | Skill 批量导入 JSON（按名称 upsert） |
 | `/api/ai/skills/{id}/toggle` | PATCH | Skill 启用/禁用 |
@@ -297,7 +308,10 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/schedules` | GET/POST | 调度计划 |
 | `/api/system` | GET/PUT | 系统配置（AI 开关、模型、API Key） |
 | `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
-| `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（32 个参数分 6 组，含前置否决 / 因子修正 / 动态阈值 / 固定偏置） |
+| `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（38 个数值参数分 7 组：前置否决棺材钉/心电图/清盘、因子修正、动态阈值、市场环境阈值、固定偏置；含场外申购降级开关） |
+| `/api/system/error-logs` | GET/DELETE | 错误日志查询（分类/模块筛选）/ 清空；配套 `/error-logs/count` 未读徽标、`/error-logs/download` 下载、`POST /error-logs` 前端异常上报 |
+| `/api/system/feature-flags` | GET/PUT | 提示功能开关（「场内提示与扫描」「场外提示与高低估」，关闭即停发对应数据源请求） |
+| `/api/system/index-valuations` | GET | 宽基指数高低估分位卡片（近一年 PE 分位） |
 | `/api/system/connectivity` | GET | 数据源连通性测试 |
 | `/api/holiday` | GET | 查看已同步的调休/节假日日历（`?year=2026`） |
 | `/api/holiday/config` | GET/PUT | 调休同步配置（同步地址 / 自动同步时间 / 开关 / 最近同步时间） |
@@ -325,23 +339,16 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 
 | 环境变量 | 必填 | 默认值 | 说明 |
 |---------|------|--------|------|
-| `DEFAULT_AI_MODEL` | 否 | `deepseek` | AI 模型名称 |
-| `DEFAULT_AI_BASE_URL` | 否 | `https://api.deepseek.com/v1` | AI API 基础 URL |
-
-> AI API Key 通过 Web 界面"系统配置"设置（存入 system_config 表），不再从 .env 读取。
-| `FEISHU_WEBHOOK_URL` | 否 | — | 飞书机器人 Webhook URL |
-| `FEISHU_WEBHOOK_SECRET` | 否 | — | 飞书签名密钥 |
-| `JOINQUANT_USER` | 否 | — | 聚宽账号 |
-| `JOINQUANT_PASSWORD` | 否 | — | 聚宽密码 |
 | `FUND_QUANT_DATABASE_DIR` | 否 | `data/` | 数据库目录 |
 | `FUND_QUANT_DATABASE_NAME` | 否 | `fund_quant.db` | 数据库文件名 |
 | `FUND_QUANT_HOST` | 否 | `0.0.0.0` | 服务监听地址 |
 | `FUND_QUANT_PORT` | 否 | `8000` | 服务监听端口 |
 | `FUND_QUANT_DEBUG` | 否 | `false` | 调试模式 |
 | `FUND_QUANT_CORS_ORIGINS` | 否 | `http://localhost:5173,...` | CORS 允许的来源 |
-| `TZ` | 否 | `Asia/Shanghai` | 时区 |
+| `JOINQUANT_USER` | 否 | — | 聚宽账号（备用数据源） |
+| `JOINQUANT_PASSWORD` | 否 | — | 聚宽密码 |
 
-完整项见 `.env.example`。
+> AI 模型/API Key 通过 Web 界面「系统设置」配置（存 system_config 表）；飞书 Webhook 及签名通过「推送配置」渠道管理——三者均**不再从 .env 读取**（旧 `DEFAULT_AI_MODEL` / `DEFAULT_AI_BASE_URL` / `FEISHU_WEBHOOK_URL` / `FEISHU_WEBHOOK_SECRET` 已移除）。时区由 docker-compose 的 `TZ=Asia/Shanghai` 注入。完整项见 `.env.example`。
 
 ### 运行时配置（数据库存储）
 
@@ -352,9 +359,9 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 - AI API Key（`ai_api_key`）
 - AI API 基础 URL（`ai_base_url`）
 - 系统设置页提供可视化配置卡片，支持预设模型快速切换
-- 评分阈值（`scoring_thresholds`，五档对称阈值 JSON）
-- 质量过滤参数（`quality_filter_config`，32 个数值参数，覆盖棺材钉 / 心电图 / 清盘 / 因子修正 / 动态阈值 / 固定偏置 6 组）
-- ⚠️ **关键约束**：`quality_filter_config.base_sell_threshold` 必须等于五档阈值的中性下界 **-1.5**（对应「适度减仓 / 卖出」）。若写成 `-3.0`，`(-3.0, -1.5]` 整个区间会被错归「观望」，导致**永久不出现卖出信号**。当前正确值：`{"base_buy_threshold": 1.5, "base_sell_threshold": -1.5}`（详见文末「修复记录」）。
+- 评分阈值（`scoring_thresholds`，五档对称阈值 JSON，末档 heavy_sell 为 catch-all `min_score=-8.5`，对齐钳位下界；旧值 -6.4 由启动迁移自动归一）
+- 质量过滤参数（`quality_filter_config`，38 个数值参数覆盖 7 组：棺材钉 / 心电图 / 清盘 / 因子修正 / 动态阈值 / 市场环境阈值 / 固定偏置）
+- ⚠️ **关键约束**：`quality_filter_config.base_sell_threshold` 必须等于五档阈值的中性下界 **-1.5**（对应「适度减仓 / 卖出」）。若写成 `-3.0`，`(-3.0, -1.5]` 整个区间会被错归「观望」，导致**永久不出现卖出信号**。当前配置：`{"base_buy_threshold": 1.5, "base_sell_threshold": -1.5, "threshold_ref_total_weight": 8.3}`（参考总权重配置后，买卖阈值随 active 因子总权重等比折算，调权重不再平移边界；详见文末「修复记录」）。
 - 调休/节假日同步配置（键名 → 默认值）：
   - `holiday_sync_url` → `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json`（数据源地址，`{year}` 占位符在抓取时替换为年份；可选 timor.tech 等兼容格式）
   - `holiday_auto_sync_time` → `03:00`（每日自动检查时间，HH:MM）
@@ -454,10 +461,10 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 - **根因**：`backend/routers/analysis.py` 的 `export_analysis` 调用 `payload.model_dump_json(indent=2, ensure_ascii=False)`。Pydantic v2 的 `model_dump_json()` 不接受 `ensure_ascii` 参数（`ensure_ascii` 是 `json.dumps` 的参数），抛 `TypeError` → `GET /api/analysis/export` 返回 500。
 - **修复**：改为 `json.dumps(payload.model_dump(), ensure_ascii=False, indent=2)`（commit `27e0990`）。
 
-### 已知问题（待优化，非阻塞）
+### 已知问题（后续处理情况）
 
-- **因子标准化不一致**：落库的因子分值与使用存储 `raw_value` 重新跑引擎 `apply_cross_sectional_zscore` 的结果存在偏差（short_momentum 18/22、mid_momentum 8/22 不一致），疑似 `run_analysis` 中 `normalize_cross_sectional` 的截面 cohort 或因子 `normalization` 标志传入不一致，需专项排查后最小化修改。取数与因子配置值本身均正常。
-- **部分基金因子塌缩**：实时批量分析时少数基金（价格历史不足或 akshare 抓取超时）多因子 `raw=0.0`（计算器的「数据不足」哨兵值），因子归中性 → 偏观望，属数据完整性问题。
+- **因子标准化不一致（2026-09 已修复）**：落库分值与按 `raw_value` 重跑截面 Z-score 曾存在偏差。已修复：`data_valid` 标记将数据不足基金**剔除出截面池**（不再以 0.0 哨兵值污染同池标准化），winsorize 改用 MAD 稳健界（单点离群真正钳位）；见 commit `f4ca015`。
+- **部分基金因子塌缩（已缓解）**：价格历史不足或抓取超时的因子现以 `data_valid=False` 显式标记，剔除出截面池并按中性处理，报告低分统计同步采用 data_valid 口径；根因仍是数据完整性（akshare 超时/历史短），属外部约束。
 
 ---
 
@@ -480,3 +487,24 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   - `backend/database.py` 迁移写入默认配置（`holiday_sync_url` / `holiday_auto_sync_time=03:00` / `holiday_auto_sync_enabled=true` / `holiday_last_sync_at`）。
 - **验证**：py_compile + 导入冒烟 + upsert 幂等 + 自动同步成功后开关置 false 均通过；真实网络抓取受沙箱代理限制未实跑（生产环境按默认地址可达）。
 - **说明**：当前推送闸门仍为「仅跳过周末」；`holiday_calendar` 数据尚未回接到推送闸门（如需「调休周一补班开市也推送 / 调休周六休市不推送」可后续接线，本次未改动用户既定行为）。
+
+---
+
+## 修复记录（2026-09）
+
+### 1. 全项目四维审查（后端/量化/基础设施/前端）
+
+分批修复：数据源降级链与断供埋点、量化配置真生效（signal_rules 注入、data_valid 截面池、MAD winsorize、阈值折算、复盘净值窗口锚定、回测陈旧信号丢弃）、realtime 同步 sqlite3 旁路收敛、SPA 目录穿越与 SSRF 等安全项、前端构建阻断与展示层修复。
+
+### 2. 量化配置六项整改（commit `a0d3d3e`）
+
+- **评分口径统一 ±8.5**：前端仪表盘/表头/文案/飞书推送全部对齐钳位范围（= 因子总权重 8.3 取整 8.5），评分配置输入框放宽至 ±9。
+- **五档末档 catch-all -6.4 → -8.5**：与钳位下界对称；旧值在前端输入范围外且语义误导（真实卖出边界仍由质量过滤 -1.5 决定，行为不变）。启动迁移自动归一存量库。
+- **场外申购可执行性约束（第零层新增）**：暂停申购/封闭期 → 买入信号降级为观望（附警告），限大额 → 仅警告；开关 `otc_pause_veto_buy`（默认开），复用申购状态 1h 缓存，数据源失败自动跳过不阻塞分析。
+- **`threshold_ref_total_weight=8.3`**：买卖阈值随因子总权重等比折算，此后增删因子不再整体平移边界。
+- **质量过滤配置页补「市场环境阈值」分组**（7 组 38 参数全量可见）；清理 `buy_threshold`/`sell_threshold` 死配置键（种子与存量行均删，真正生效的是五档与质量过滤动态阈值）。
+
+### 3. 其他
+
+- 基金池标签排版整改：主标签前置去重、赛道 chips 全量展示统一配色、覆盖率与 ×N/% 口径 Tooltip 说明。
+- 错误日志测试隔离：pytest 埋点写入重定向临时库，不再污染生产 `error_logs`（并一次性清理历史污染行）。
