@@ -32,6 +32,7 @@ class AnalysisResultOut(BaseModel):
     # ── 第零层扩展字段（可选，向后兼容）──
     original_score: Optional[float] = None         # 因子修正前原始评分
     dynamic_buy_threshold: Optional[float] = None  # 动态买入阈值
+    dynamic_sell_threshold: Optional[float] = None # 动态卖出阈值
     quality_warnings: Optional[List[str]] = None   # 质量过滤警告
 
     model_config = {"from_attributes": True}
@@ -53,6 +54,7 @@ class AnalysisExportItem(BaseModel):
     factor_scores: dict  # JSON dict
     original_score: Optional[float] = None
     dynamic_buy_threshold: Optional[float] = None
+    dynamic_sell_threshold: Optional[float] = None
     quality_warnings: Optional[list[str]] = None
 
 

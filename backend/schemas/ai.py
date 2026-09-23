@@ -30,6 +30,10 @@ class AISkillBase(BaseModel):
     name: str = Field(..., max_length=100, description="Skill 名称（唯一）")
     description: Optional[str] = Field(None, max_length=500, description="功能描述")
     system_prompt: str = Field(..., max_length=50_000, description="系统提示词（支持 {{fund_pool}}/{{market_regime}}/{{fund:<id>}} 占位符）")
+    tool_spec: Optional[str] = Field(
+        None, max_length=5_000,
+        description='Skill-as-tool 注册 JSON（可空）：{"description": "...", "parameters": {JSON Schema}}',
+    )
     enabled: bool = Field(True, description="是否启用")
 
 
@@ -47,6 +51,7 @@ class AISkillUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     system_prompt: Optional[str] = None
+    tool_spec: Optional[str] = Field(None, max_length=5_000)
     enabled: Optional[bool] = None
 
 

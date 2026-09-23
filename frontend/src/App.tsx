@@ -41,6 +41,8 @@ import {
   Insights as ReviewIcon,
 
   TravelExplore as ScanIcon,
+  AccountBalance as PositionsIcon,
+  AutoAwesome as WorkbenchIcon,
 } from '@mui/icons-material';
 import { useAppStore } from './store';
 import AIChatWidget from './components/AIChatWidget';
@@ -62,6 +64,8 @@ const FundDetailPage = lazy(() => import('./pages/FundDetailPage'));
 const SignalBacktest = lazy(() => import('./pages/SignalBacktest'));
 const ReviewPage = lazy(() => import('./pages/ReviewPage'));
 const ETFScanPage = lazy(() => import('./pages/ETFScanPage'));
+const PositionsPage = lazy(() => import('./pages/PositionsPage'));
+const AiWorkbench = lazy(() => import('./pages/AiWorkbench'));
 
 /* ── MUI 主题（红涨绿跌） ─────────────────────────────────────────── */
 const theme = createTheme({
@@ -93,6 +97,8 @@ const NAV_ITEMS = [
   { key: 'backtest', label: '信号回测', icon: <BacktestIcon />, path: '/backtest' },
   { key: 'etf-scan', label: 'ETF 扫描', icon: <ScanIcon />, path: '/etf-scan' },
   { key: 'review', label: '投资复盘', icon: <ReviewIcon />, path: '/review' },
+  { key: 'positions', label: '我的持仓', icon: <PositionsIcon />, path: '/positions' },
+  { key: 'ai-workbench', label: 'AI 工作台', icon: <WorkbenchIcon />, path: '/ai-workbench' },
   { key: 'system', label: '系统设置', icon: <SettingsIcon />, path: '/system' },
 ];
 
@@ -232,6 +238,8 @@ const AppLayout: React.FC = () => {
           <Route path="/backtest" element={<SignalBacktest />} />
           <Route path="/review" element={<ReviewPage />} />
           <Route path="/etf-scan" element={<ETFScanPage />} />
+          <Route path="/positions" element={<PositionsPage />} />
+          <Route path="/ai-workbench" element={<AiWorkbench />} />
           <Route path="/system" element={<SystemPage />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
         </Routes>

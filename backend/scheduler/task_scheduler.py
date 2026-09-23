@@ -182,6 +182,13 @@ class TaskScheduler:
 
                 await session.commit()
 
+                # AI 每日简报：独立任务类型，不跑全量分析（防连打行情源），
+                # 失败静默（仅埋点），不影响其他调度任务
+                if sched and sched.task_type == "ai_daily_brief":
+                    await self._run_ai_daily_brief(session, sched)
+                    logger.info(f"调度任务完成: schedule_id={schedule_id}")
+                    return
+
                 # 执行分析
                 from backend.config import settings
                 # 市场环境快照含盘中实时指标（涨跌家数）：调度分析前清缓存，
@@ -270,6 +277,50 @@ class TaskScheduler:
             )
             raise  # 上抛给 _run_task 决定是否重试
 
+
+    async def _run_ai_daily_brief(self, session, sched: Schedule) -> None:
+        """AI 每日简报：agent 解读结构化摘要 → 飞书推送。
+
+        全程静默失败（日志 + error_logs 埋点），不上抛——
+        简报属增强功能，LLM/推送异常不应触发 _run_task 的整任务重试
+        （重试会再打一轮 LLM，且对推送失败也无补救意义）。
+        """
+        from backend.services.error_log_service import log_source_failure
+
+        try:
+            from backend.ai.presets import run_collect
+            brief_md = await run_collect(session, task="daily_brief")
+        except Exception as e:
+            msg = f"AI 每日简报生成失败 schedule_id={sched.id}: {type(e).__name__}: {str(e)[:200]}"
+            logger.warning(msg)
+            log_source_failure(module=f"scheduler.ai_daily_brief.{sched.id}",
+                               message=msg, category="ai")
+            return
+
+        if not sched.channel_id:
+            logger.info(f"AI 每日简报已生成但未配置推送渠道 schedule_id={sched.id}（跳过推送）")
+            return
+        try:
+            from sqlalchemy import select as _select
+
+            from backend.models.push_channel import PushChannel
+            from backend.push.feishu import FeishuPush
+
+            channel = (await session.execute(
+                _select(PushChannel).where(PushChannel.id == sched.channel_id)
+            )).scalars().first()
+            if channel is None or not channel.enabled or channel.channel_type != "feishu":
+                logger.warning(f"AI 每日简报推送渠道不可用 schedule_id={sched.id} channel_id={sched.channel_id}")
+                return
+            pusher = FeishuPush(webhook_url=channel.webhook_url or "", secret=channel.token)
+            ok = await pusher.send(content=brief_md, title="🤖 AI 每日简报")
+            if not ok:
+                logger.warning(f"AI 每日简报推送失败 schedule_id={sched.id}（FeishuPush 内部已埋点）")
+        except Exception as e:
+            msg = f"AI 每日简报推送异常 schedule_id={sched.id}: {type(e).__name__}: {str(e)[:200]}"
+            logger.warning(msg, exc_info=True)
+            log_source_failure(module=f"scheduler.ai_daily_brief.push.{sched.id}",
+                               message=msg, category="push")
 
     async def register_auto_backtest_now(self) -> None:
         """供系统配置保存后立即重载自动回测任务（开关变更生效）"""

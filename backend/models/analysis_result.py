@@ -37,6 +37,20 @@ class AnalysisResult(Base):
     factor_scores: Mapped[str] = mapped_column(
         Text, nullable=False, comment='JSON: {"price_percentile": 4.2, "fed": 3.8, ...}'
     )
+    # ── AI Agent 诊断地基（2026-09-23）：原仅 trigger 当次返回的三+一字段落库，
+    #    供因子/质量过滤历史有效性回算（factor_audit）与前端历史详情展示 ──
+    original_score: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="因子/质量修正前原始加权分（旧行为 NULL）"
+    )
+    dynamic_buy_threshold: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="当次动态买入阈值"
+    )
+    dynamic_sell_threshold: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="当次动态卖出阈值"
+    )
+    quality_warnings: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment='JSON: ["警告1","警告2"]，无警告/旧行为 NULL'
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now
     )

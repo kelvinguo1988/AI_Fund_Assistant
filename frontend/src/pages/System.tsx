@@ -524,6 +524,7 @@ const SystemPage: React.FC = () => {
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             启用的 Skill 会注入 AI 对话的系统提示词，占位符 {'{{fund_pool}}'} / {'{{market_regime}}'} / {'{{fund:<id>}}'} 自动渲染数据上下文。
+            另填 tool_spec（JSON：{'{"description": "...", "parameters": {...}}'}）即注册为 Agent 可调用工具（skill-&#123;id&#125;，按需拉取本技能指导，不再全量注入）。
           </Typography>
           {skillsLoading && <LinearProgress sx={{ mb: 2 }} />}
           <TableContainer component={Paper} variant="outlined">
@@ -539,7 +540,12 @@ const SystemPage: React.FC = () => {
               <TableBody>
                 {skills.map((sk) => (
                   <TableRow key={sk.id}>
-                    <TableCell>{sk.name}</TableCell>
+                    <TableCell>
+                      {sk.name}
+                      {sk.tool_spec?.trim() && (
+                        <Chip size="small" label={`工具化 skill_${sk.id}`} color="secondary" variant="outlined" sx={{ ml: 1 }} />
+                      )}
+                    </TableCell>
                     <TableCell sx={{ maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {sk.description || '-'}
                     </TableCell>

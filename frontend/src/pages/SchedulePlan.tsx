@@ -29,8 +29,13 @@ import {
 import { Add as AddIcon, Edit as EditIcon, Delete as DeleteIcon } from '@mui/icons-material';
 import { scheduleApi } from '../api/schedule';
 import { pushApi } from '../api/push';
-import type { ScheduleOut, ScheduleCreate, ScheduleUpdate, PushChannelOut } from '../types';
+import type { ScheduleOut, ScheduleCreate, ScheduleUpdate, ScheduleTaskType, PushChannelOut } from '../types';
 import ConfirmDialog from '../components/ConfirmDialog';
+
+const TASK_TYPE_LABELS: Record<ScheduleTaskType, string> = {
+  analysis_push: '分析推送',
+  ai_daily_brief: 'AI 每日简报',
+};
 
 const SchedulePlan: React.FC = () => {
   const [schedules, setSchedules] = useState<ScheduleOut[]>([]);
@@ -45,6 +50,7 @@ const SchedulePlan: React.FC = () => {
   const [formCronExpr, setFormCronExpr] = useState('');
   const [formChannelId, setFormChannelId] = useState<number | null>(null);
   const [formEnabled, setFormEnabled] = useState(true);
+  const [formTaskType, setFormTaskType] = useState<ScheduleTaskType>('analysis_push');
 
   const loadData = async () => {
     try {
@@ -61,7 +67,7 @@ const SchedulePlan: React.FC = () => {
   const handleOpenAdd = () => {
     setEditSchedule(null);
     setFormName(''); setFormTimePoint('14:50'); setFormCronExpr('');
-    setFormChannelId(null); setFormEnabled(true);
+    setFormChannelId(null); setFormEnabled(true); setFormTaskType('analysis_push');
     setDialogOpen(true);
   };
 
@@ -69,6 +75,7 @@ const SchedulePlan: React.FC = () => {
     setEditSchedule(s);
     setFormName(s.name); setFormTimePoint(s.time_point || '');
     setFormCronExpr(s.cron_expr || ''); setFormChannelId(s.channel_id); setFormEnabled(s.enabled);
+    setFormTaskType((s.task_type as ScheduleTaskType) || 'analysis_push');
     setDialogOpen(true);
   };
 
@@ -78,13 +85,14 @@ const SchedulePlan: React.FC = () => {
         const data: ScheduleUpdate = {
           name: formName, time_point: formTimePoint || null,
           cron_expr: formCronExpr || null, channel_id: formChannelId, enabled: formEnabled,
+          task_type: formTaskType,
         };
         await scheduleApi.update(editSchedule.id, data);
       } else {
         const data: ScheduleCreate = {
           name: formName, time_point: formTimePoint || null,
           cron_expr: formCronExpr || null, channel_id: formChannelId, enabled: formEnabled,
-          task_type: 'analysis_push',
+          task_type: formTaskType,
         };
         await scheduleApi.create(data);
       }
@@ -135,6 +143,7 @@ const SchedulePlan: React.FC = () => {
           <TableHead>
             <TableRow>
               <TableCell>名称</TableCell>
+              <TableCell>类型</TableCell>
               <TableCell>触发时间</TableCell>
               <TableCell>Cron</TableCell>
               <TableCell>推送渠道</TableCell>
@@ -147,6 +156,11 @@ const SchedulePlan: React.FC = () => {
             {schedules.map((s) => (
               <TableRow key={s.id} hover>
                 <TableCell>{s.name}</TableCell>
+                <TableCell>
+                  <Chip size="small" variant={s.task_type === 'ai_daily_brief' ? 'filled' : 'outlined'}
+                    color={s.task_type === 'ai_daily_brief' ? 'secondary' : 'default'}
+                    label={TASK_TYPE_LABELS[s.task_type as ScheduleTaskType] || s.task_type} />
+                </TableCell>
                 <TableCell><Chip label={s.time_point || '-'} size="small" /></TableCell>
                 <TableCell><Chip label={s.cron_expr || '-'} size="small" variant="outlined" /></TableCell>
                 <TableCell>{getChannelName(s.channel_id)}</TableCell>
@@ -159,7 +173,7 @@ const SchedulePlan: React.FC = () => {
               </TableRow>
             ))}
             {schedules.length === 0 && (
-              <TableRow><TableCell colSpan={7} align="center">暂无调度计划</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} align="center">暂无调度计划</TableCell></TableRow>
             )}
           </TableBody>
         </Table>
@@ -169,6 +183,15 @@ const SchedulePlan: React.FC = () => {
         <DialogTitle>{editSchedule ? '编辑调度' : '新增调度'}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
           <TextField label="调度名称" value={formName} onChange={(e) => setFormName(e.target.value)} />
+          <TextField label="任务类型" value={formTaskType} onChange={(e) => setFormTaskType(e.target.value as ScheduleTaskType)} select
+            helperText={formTaskType === 'ai_daily_brief'
+              ? 'AI 每日简报：不跑全量分析，Agent 解读信号概况/调仓摘要/市场环境生成简报并推送（需已配置 AI Key；失败静默）'
+              : '分析推送：全量多因子分析 + 按报告配置推送'}
+          >
+            {(Object.keys(TASK_TYPE_LABELS) as ScheduleTaskType[]).map((k) => (
+              <MenuItem key={k} value={k}>{TASK_TYPE_LABELS[k]}</MenuItem>
+            ))}
+          </TextField>
           <TextField label="固定时间(HH:MM)" value={formTimePoint} onChange={(e) => setFormTimePoint(e.target.value)} placeholder="14:50" />
           <TextField label="Cron表达式(可选)" value={formCronExpr} onChange={(e) => setFormCronExpr(e.target.value)} placeholder="50 14 * * mon-fri" />
           <TextField label="推送渠道" value={formChannelId ?? ''} onChange={(e) => setFormChannelId(e.target.value ? parseInt(e.target.value) : null)} select>

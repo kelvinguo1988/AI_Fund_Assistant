@@ -240,6 +240,7 @@ async def init_db() -> None:
         SystemConfig,
         FundQuarterly,
         HolidayCalendar,
+        UserPosition,
     )
 
     # 建表（先确保 WAL 模式，避免并发刷新触发 database is locked）
@@ -257,6 +258,17 @@ async def init_db() -> None:
             await conn.execute(text("ALTER TABLE analysis_results ADD COLUMN equity_ratio FLOAT NOT NULL DEFAULT 0.5"))
         except Exception as e:
             _migration_ok(e, "analysis_results.equity_ratio")
+        # 诊断地基四列（2026-09-23：original_score/动态阈值/质量警告落库，可空，旧行 NULL）
+        for col_sql in [
+            "ALTER TABLE analysis_results ADD COLUMN original_score FLOAT",
+            "ALTER TABLE analysis_results ADD COLUMN dynamic_buy_threshold FLOAT",
+            "ALTER TABLE analysis_results ADD COLUMN dynamic_sell_threshold FLOAT",
+            "ALTER TABLE analysis_results ADD COLUMN quality_warnings TEXT",
+        ]:
+            try:
+                await conn.execute(text(col_sql))
+            except Exception as e:
+                _migration_ok(e, col_sql)
         # funds 表 starred 列（星标收藏）
         try:
             await conn.execute(text("ALTER TABLE funds ADD COLUMN starred BOOLEAN NOT NULL DEFAULT 0"))
@@ -286,6 +298,18 @@ async def init_db() -> None:
                 await conn.execute(text(col_sql))
             except Exception as e:
                 _migration_ok(e, col_sql)
+
+        # AI Agent 会话工具轨迹列（2026-09-23）
+        try:
+            await conn.execute(text("ALTER TABLE ai_conversations ADD COLUMN agent_events TEXT"))
+        except Exception as e:
+            _migration_ok(e, "ai_conversations.agent_events")
+
+        # Skill-as-tool：ai_skills 加 tool_spec 列（P4，空=保持提示词注入模式）
+        try:
+            await conn.execute(text("ALTER TABLE ai_skills ADD COLUMN tool_spec TEXT"))
+        except Exception as e:
+            _migration_ok(e, "ai_skills.tool_spec")
 
         # uq_fund_date 唯一约束回填（旧库 create_all 不会补约束；并发分析曾可插重复行）
         # 先清理历史重复（保留每组最新一条），再建唯一索引

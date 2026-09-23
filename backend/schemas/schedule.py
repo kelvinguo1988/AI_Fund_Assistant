@@ -11,7 +11,7 @@ class ScheduleCreate(BaseModel):
     name: str = Field(..., description="调度名称")
     cron_expr: Optional[str] = Field(None, description="Cron 表达式")
     time_point: Optional[str] = Field(None, description="固定时间 HH:MM")
-    task_type: Literal['analysis_push'] = 'analysis_push'
+    task_type: Literal['analysis_push', 'ai_daily_brief'] = 'analysis_push'
     channel_id: Optional[int] = Field(None, description="推送渠道 ID")
     enabled: bool = Field(True, description="是否启用")
 
@@ -21,7 +21,7 @@ class ScheduleUpdate(BaseModel):
     name: Optional[str] = None
     cron_expr: Optional[str] = None
     time_point: Optional[str] = None
-    task_type: Optional[Literal['analysis_push']] = None
+    task_type: Optional[Literal['analysis_push', 'ai_daily_brief']] = None
     channel_id: Optional[int] = None
     enabled: Optional[bool] = None
 

@@ -514,6 +514,15 @@ class AnalysisService:
             for fs in factor_scores
         }, ensure_ascii=False)
 
+        # 诊断地基字段（2026-09-23）：修正前原始分/动态阈值/质量警告落库，供 factor_audit 历史回算
+        diag_fields = {
+            "original_score": signal.original_score,
+            "dynamic_buy_threshold": signal.dynamic_buy_threshold,
+            "dynamic_sell_threshold": signal.dynamic_sell_threshold,
+            "quality_warnings": json.dumps(signal.quality_warnings, ensure_ascii=False)
+            if signal.quality_warnings else None,
+        }
+
         existing_result = await self.db.execute(
             select(AnalysisResult).where(
                 AnalysisResult.fund_id == fund.id,
@@ -529,6 +538,8 @@ class AnalysisService:
             existing.operation_advice = signal.operation_advice
             existing.equity_ratio = signal.equity_ratio
             existing.factor_scores = factor_scores_json
+            for k, v in diag_fields.items():
+                setattr(existing, k, v)
             analysis_id = existing.id
         else:
             new_result = AnalysisResult(
@@ -540,6 +551,7 @@ class AnalysisService:
                 operation_advice=signal.operation_advice,
                 equity_ratio=signal.equity_ratio,
                 factor_scores=factor_scores_json,
+                **diag_fields,
             )
             self.db.add(new_result)
             await self.db.flush()
@@ -571,6 +583,7 @@ class AnalysisService:
             created_at=now_beijing(),
             original_score=signal.original_score,
             dynamic_buy_threshold=signal.dynamic_buy_threshold,
+            dynamic_sell_threshold=signal.dynamic_sell_threshold,
             quality_warnings=signal.quality_warnings or None,
         )
 
@@ -611,6 +624,10 @@ class AnalysisService:
                 operation_advice=r.operation_advice or "",
                 equity_ratio=r.equity_ratio,
                 factor_scores=factor_scores if isinstance(factor_scores, dict) else {},
+                original_score=r.original_score,
+                dynamic_buy_threshold=r.dynamic_buy_threshold,
+                dynamic_sell_threshold=r.dynamic_sell_threshold,
+                quality_warnings=json.loads(r.quality_warnings) if r.quality_warnings else None,
             )
             items.append(item)
 
@@ -655,6 +672,14 @@ class AnalysisService:
 
                 factor_scores_json = json.dumps(item.factor_scores, ensure_ascii=False) if item.factor_scores else "{}"
 
+                import_diag = {
+                    "original_score": item.original_score,
+                    "dynamic_buy_threshold": item.dynamic_buy_threshold,
+                    "dynamic_sell_threshold": item.dynamic_sell_threshold,
+                    "quality_warnings": json.dumps(item.quality_warnings, ensure_ascii=False)
+                    if item.quality_warnings else None,
+                }
+
                 if existing:
                     if not overwrite:
                         result.skipped += 1
@@ -665,6 +690,8 @@ class AnalysisService:
                     existing.operation_advice = item.operation_advice
                     existing.equity_ratio = item.equity_ratio
                     existing.factor_scores = factor_scores_json
+                    for k, v in import_diag.items():
+                        setattr(existing, k, v)
                     result.updated += 1
                 else:
                     new_record = AnalysisResult(
@@ -676,6 +703,7 @@ class AnalysisService:
                         operation_advice=item.operation_advice,
                         equity_ratio=item.equity_ratio,
                         factor_scores=factor_scores_json,
+                        **import_diag,
                     )
                     self.db.add(new_record)
                     result.created += 1

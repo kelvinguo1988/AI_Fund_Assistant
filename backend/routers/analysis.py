@@ -63,6 +63,16 @@ async def import_analysis(
     return ApiResponse(data=result)
 
 
+def _parse_warnings_json(raw) -> list | None:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        return parsed if isinstance(parsed, list) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResultOut:
     """ORM → Schema 转换"""
     factor_scores: list[FactorScore] = []
@@ -102,6 +112,10 @@ def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResul
         equity_ratio=getattr(r, "equity_ratio", 0.5),
         factor_scores=factor_scores,
         created_at=r.created_at,
+        original_score=getattr(r, "original_score", None),
+        dynamic_buy_threshold=getattr(r, "dynamic_buy_threshold", None),
+        dynamic_sell_threshold=getattr(r, "dynamic_sell_threshold", None),
+        quality_warnings=_parse_warnings_json(getattr(r, "quality_warnings", None)),
     )
 
 

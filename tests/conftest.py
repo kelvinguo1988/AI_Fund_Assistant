@@ -19,7 +19,9 @@ import pytest
 def _block_heavy_network(monkeypatch):
     import backend.services.index_valuation_service as _iv
 
-    async def _empty_map(self, force: bool = False):
+    # 注意：原方法为 classmethod，经类访问不触发绑定，补丁函数不能再带 self，
+    # 否则 OtcTradeStatusService.get_status_map() 调用即抛 TypeError（曾被静默吞掉）
+    async def _empty_map(force: bool = False):
         return {}
 
     async def _empty_vals(force: bool = False):

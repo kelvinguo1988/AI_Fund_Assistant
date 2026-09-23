@@ -24,6 +24,11 @@ class AISkill(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False, comment="Skill 名称（唯一）")
     description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="功能描述")
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False, comment="注入的系统提示词（支持数据占位符）")
+    tool_spec: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True,
+        comment='Skill-as-tool 注册（JSON，可空）：{"description": "...", "parameters": {JSON Schema}}；'
+                '非空时 Agent 可将其作为工具 skill_<id> 调用，返回渲染后的指导文本',
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(

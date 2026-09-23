@@ -181,11 +181,13 @@ export interface PushChannelOut {
 }
 
 /* ── 调度计划 ────────────────────────────────────────────────────── */
+export type ScheduleTaskType = 'analysis_push' | 'ai_daily_brief';
+
 export interface ScheduleCreate {
   name: string;
   cron_expr?: string | null;
   time_point?: string | null;
-  task_type: 'analysis_push';
+  task_type: ScheduleTaskType;
   channel_id?: number | null;
   enabled: boolean;
 }
@@ -194,7 +196,7 @@ export interface ScheduleUpdate {
   name?: string | null;
   cron_expr?: string | null;
   time_point?: string | null;
-  task_type?: 'analysis_push' | null;
+  task_type?: ScheduleTaskType | null;
   channel_id?: number | null;
   enabled?: boolean | null;
 }
@@ -301,6 +303,7 @@ export interface AISkill {
   name: string;
   description?: string | null;
   system_prompt: string;
+  tool_spec?: string | null;
   enabled: boolean;
   created_at?: string | null;
   updated_at?: string | null;

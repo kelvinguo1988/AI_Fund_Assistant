@@ -11,6 +11,8 @@ export interface AISkillPayload {
   name: string;
   description?: string | null;
   system_prompt: string;
+  /** Skill-as-tool：JSON 字符串 {"description":"...","parameters":{...}}，填了即注册为 Agent 可调用工具 */
+  tool_spec?: string | null;
   enabled?: boolean;
 }
 
@@ -48,5 +50,15 @@ export const SKILL_EXAMPLE = JSON.stringify([
     description: "对单只基金的 top10 持仓做行业集中度与相关性分析",
     system_prompt: "基于单基金上下文，分析该基金前十大持仓：\n- 行业集中度与抱团风险\n- 持仓个股近期涨跌对净值的传导\n- 给出 1-10 的分散度评分并说明理由\n\n{{fund:1}}",
     enabled: false,
+  },
+  {
+    name: "仓位管理顾问",
+    description: "示例：填了 tool_spec 即注册为 Agent 工具（按需拉取，不占常驻上下文）",
+    system_prompt: "你是仓位管理顾问。原则：\n1. 单只基金不超过组合 20%\n2. 权益仓位参考信号强度与市场环境\n3. 场外申购先核可执行性\n\n{{market_regime}}",
+    tool_spec: JSON.stringify({
+      description: "获取仓位管理原则指导（讨论加仓/减仓/仓位比例时调用）",
+      parameters: { type: "object", properties: {} },
+    }),
+    enabled: true,
   },
 ], null, 2);

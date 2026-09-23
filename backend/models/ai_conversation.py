@@ -31,6 +31,9 @@ class AIConversation(Base):
         Integer, ForeignKey("funds.id", ondelete="SET NULL"), nullable=True, comment="关联基金 ID"
     )
     model_name: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, comment="模型名称")
+    agent_events: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment="JSON: Agent 工具调用轨迹（摘要，供回放/审计），普通对话为 NULL"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now
     )

@@ -518,12 +518,16 @@ async def holding_overlap(
 
     from backend.models.fund_holding import FundHolding
     from sqlalchemy import func
+    from sqlalchemy.orm import aliased
 
     # 仅统计各基金最新季度持仓。旧实现对全部历史季度 SUM(ratio)，
     # 同一股票被 8-12 个季度重复计入，total_ratio 虚高数倍。
+    # 注意：内外层必须用不同表实例（aliased），同模型自关联会被 SQLAlchemy
+    # 整个去掉子查询 FROM，SQLite 报 misuse of aggregate 或恒真匹配。
+    fh_latest = aliased(FundHolding)
     latest_quarter = (
-        select(func.max(FundHolding.quarter_label))
-        .where(FundHolding.fund_id == FundHolding.fund_id)
+        select(func.max(fh_latest.quarter_label))
+        .where(fh_latest.fund_id == FundHolding.fund_id)
         .correlate(FundHolding)
         .scalar_subquery()
     )

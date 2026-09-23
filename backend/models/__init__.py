@@ -16,6 +16,7 @@ from backend.models.fund_manager_record import FundManagerRecord
 from backend.models.fund_data_cache import FundDataCache
 from backend.models.fund_quarterly import FundQuarterly
 from backend.models.holiday_calendar import HolidayCalendar
+from backend.models.user_position import UserPosition
 
 __all__ = [
     "Fund",
@@ -34,4 +35,5 @@ __all__ = [
     "FundDataCache",
     "FundQuarterly",
     "HolidayCalendar",
+    "UserPosition",
 ]

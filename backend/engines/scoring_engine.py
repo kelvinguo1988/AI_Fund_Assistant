@@ -87,6 +87,7 @@ class SignalResult:
     # ── 第零层扩展字段（可选，向后兼容）──
     original_score: float = 0.0           # 因子修正前的原始评分
     dynamic_buy_threshold: float = 1.5    # 动态买入阈值
+    dynamic_sell_threshold: float = -1.5  # 动态卖出阈值
     quality_warnings: list[str] = field(default_factory=list)  # 质量过滤警告
 
 
@@ -273,5 +274,6 @@ def compute_with_quality_filter(
         equity_ratio=equity,
         original_score=round(original_score, 4),
         dynamic_buy_threshold=quality_result.dynamic_buy_threshold,
+        dynamic_sell_threshold=quality_result.dynamic_sell_threshold,
         quality_warnings=warnings,
     )

@@ -32,6 +32,7 @@ async def list_skills(db: AsyncSession = Depends(get_db)):
         AISkillOut(
             id=sk.id, name=sk.name, description=sk.description,
             system_prompt=sk.system_prompt, enabled=sk.enabled,
+            tool_spec=sk.tool_spec,
             created_at=str(sk.created_at) if sk.created_at else None,
             updated_at=str(sk.updated_at) if sk.updated_at else None,
         )
@@ -46,6 +47,7 @@ async def create_skill(body: AISkillCreate, db: AsyncSession = Depends(get_db)):
         name=body.name.strip(),
         description=body.description,
         system_prompt=body.system_prompt,
+        tool_spec=(body.tool_spec or "").strip() or None,
         enabled=body.enabled,
     )
     db.add(skill)
@@ -58,6 +60,7 @@ async def create_skill(body: AISkillCreate, db: AsyncSession = Depends(get_db)):
     return ApiResponse(data=AISkillOut(
         id=skill.id, name=skill.name, description=skill.description,
         system_prompt=skill.system_prompt, enabled=skill.enabled,
+        tool_spec=skill.tool_spec,
         created_at=str(skill.created_at), updated_at=str(skill.updated_at),
     ))
 
@@ -82,6 +85,7 @@ async def import_skills(
             if existing:
                 existing.description = item.description
                 existing.system_prompt = item.system_prompt
+                existing.tool_spec = (item.tool_spec or "").strip() or None
                 existing.enabled = item.enabled
                 existing.updated_at = now_beijing()
                 result.updated += 1
@@ -90,6 +94,7 @@ async def import_skills(
                     name=item.name.strip(),
                     description=item.description,
                     system_prompt=item.system_prompt,
+                    tool_spec=(item.tool_spec or "").strip() or None,
                     enabled=item.enabled,
                 ))
                 result.created += 1
@@ -124,6 +129,8 @@ async def update_skill(
         skill.description = body.description
     if body.system_prompt is not None:
         skill.system_prompt = body.system_prompt
+    if body.tool_spec is not None:
+        skill.tool_spec = body.tool_spec.strip() or None
     if body.enabled is not None:
         skill.enabled = body.enabled
     await db.commit()
@@ -131,6 +138,7 @@ async def update_skill(
     return ApiResponse(data=AISkillOut(
         id=skill.id, name=skill.name, description=skill.description,
         system_prompt=skill.system_prompt, enabled=skill.enabled,
+        tool_spec=skill.tool_spec,
         created_at=str(skill.created_at), updated_at=str(skill.updated_at),
     ))
 
@@ -149,6 +157,7 @@ async def toggle_skill(
     return ApiResponse(data=AISkillOut(
         id=skill.id, name=skill.name, description=skill.description,
         system_prompt=skill.system_prompt, enabled=skill.enabled,
+        tool_spec=skill.tool_spec,
         created_at=str(skill.created_at), updated_at=str(skill.updated_at),
     ))
 

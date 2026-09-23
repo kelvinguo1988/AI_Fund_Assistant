@@ -14,7 +14,7 @@ AI_Fund_Assistant/
 │   ├── database.py             # SQLAlchemy 异步引擎 + 迁移
 │   ├── models/                 # ORM 模型
 │   ├── schemas/                # Pydantic Schema
-│   ├── routers/                # API 路由（11 个模块：基金/因子/分析/回测/AI/Skills/推送/调度/报告/系统/调休）
+│   ├── routers/                # API 路由（15 个模块：基金/因子/分析/回测/AI对话/AI Agent/Skills/持仓/推送/调度/报告/系统配置/调休等）
 │   ├── services/               # 业务逻辑层（连通性检测、缓存、变更检测、复盘、基金PK、ETF扫描、概念映射、市场环境、错误日志等）
 │   ├── engines/                # 因子引擎 + 评分引擎 + 质量过滤 + 报告引擎
 │   │   ├── factor_engine.py    # 11 因子计算 + 信号规则 + 截面标准化（data_valid 剔除数据不足基金）
@@ -28,7 +28,7 @@ AI_Fund_Assistant/
 │   ├── scheduler/              # 定时任务调度（APScheduler）
 │   └── utils/                  # 通用工具（并发控制：线程池隔离 + 超时保护 + 信号量限流）
 ├── frontend/                   # React + TypeScript + MUI + Tailwind
-│   ├── src/pages/              # 14 个管理页面（含信号回测、ETF 扫描、投资复盘、基金详情）
+│   ├── src/pages/              # 16 个管理页面（含信号回测、ETF 扫描、投资复盘、基金详情、我的持仓、AI 工作台）
 │   ├── src/components/         # 图表组件（ECharts）、AI 对话、信号指示器等
 │   ├── src/api/                # API 客户端
 │   ├── src/hooks/              # 自定义 Hooks（AI 对话、分析）
@@ -47,7 +47,7 @@ AI_Fund_Assistant/
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -8.5~+8.5（钳位 = active 因子总权重 8.3）
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓，末档 catch-all -8.5；正式路径信号由第零层动态阈值决策，五档仅旧计算路径生效）
 - **多数据源链**：AKShare → JoinQuant（聚宽），自动降级恢复
-- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、信号回测、投资复盘、ETF 扫描、系统设置（共 14 个页面）
+- **Web 管理界面**：仪表盘（含市场概况、资金流、板块排行）、基金池、基金详情、因子管理、推送配置、报告配置、调度计划、评分配置、质量过滤配置、历史报告、信号回测、投资复盘、ETF 扫描、我的持仓、AI 工作台、系统设置（共 16 个页面）
 - **基金详情模块**：阶段涨幅排序展示、季度持仓明细（可展开）、基金经理信息，含调仓 diff 和经理变更标注
 - **一键批量导入**：自动识别 ETF/场外类型，自动从天天基金抓取相关主题标签
 - **数据导出/导入**：支持历史报告导出备份（JSON 格式，含全部因子评分及信号）与恢复导入；基金池支持 JSON 格式一键导出，便于数据迁移与备份
@@ -57,7 +57,10 @@ AI_Fund_Assistant/
 - **投资复盘**：选区间一键复盘——组合等权收益 vs 沪深300 官方指数、逐只基金涨跌/评分变化/信号（始→末）、区间首日信号命中率（buy 涨/sell 跌同向率），生成 Markdown 报告并支持一键 AI 解读
 - **多渠道推送**：飞书机器人富文本卡片推送（含市场全景概览 + 逐只基金分析），推送内容严格跟随报告配置项过滤，未启用的报告项不会推送
 - **AI 多模型配置**：支持 DeepSeek、智谱 GLM、通义千问、OpenAI 四种模型，系统设置页可视化配置供应商/API Key/Base URL，并支持**模型 ID 覆盖**（如 glm-4-plus / qwen-max / deepseek-reasoner，留空用预设默认）
-- **AI Skills 分析技能**：可导入的提示词扩展包，前端一键启停/删除；对话时按序注入系统提示词，支持 `{{fund_pool}}`（基金池+最新分析）/ `{{market_regime}}`（市场环境）/ `{{fund:<id>}}`（单基金详情）三个数据占位符自动渲染，详见下方「AI Skills」章节
+- **AI Skills 分析技能**：可导入的提示词扩展包，前端一键启停/删除；对话时按序注入系统提示词，支持 `{{fund_pool}}`（基金池+最新分析）/ `{{market_regime}}`（市场环境）/ `{{fund:<id>}}`（单基金详情）三个数据占位符自动渲染；填写 `tool_spec`（JSON）可将 Skill 注册为 Agent 可按需调用的工具 `skill_<id>`，详见下方「AI Skills」章节
+- **AI 分析 Agent（/ai-workbench 工作台）**：基于工具调用（ReAct）的多轮分析智能体，只读查询真实数据（15 内置工具：最新信号/基金池/持仓/因子统计/回测/市场环境/场外申购状态等），统计口径全部由 Python 引擎产出、AI 仅负责解读；SSE 流式推送思考轮次/工具调用/结果/增量文本，前端可视化时间线。内置三个一键任务：**因子诊断**（RankIC/胜率/whipsaw 解读因子与策略效果）、**调仓分析**（基于真实持仓或基金池等权近似，产出卖出/买入/观察/加仓四清单 + 组合约束与换仓代价）、**今日简报**（信号概况+调仓摘要+市场环境生成每日行动 Markdown 简报）
+- **我的持仓（/positions）**：手动建仓/编辑/删除，或一键导入支付宝/天天基金 CSV（表头别名自动识别、带引号千分位金额、池外代码逐行跳过提示）；未录入持仓时调仓分析自动降级为「基金池等权近似」口径并标注
+- **AI 每日简报调度**：调度计划新增 `ai_daily_brief` 任务类型——不跑全量分析（复用最新落库结果，防连打行情源），由 Agent 生成简报后推送飞书；生成或推送失败全程静默（仅记 error_logs），不触发调度重试
 - **信号回测**：历史信号与基金净值按日期对齐（非交易日信号前向对齐下一交易日），next-bar 执行 + 几何复利模拟仓位策略累计收益，信号有效性评分（买入看 N 日上涨/卖出看 N 日下跌），ECharts 双轴图表+评分明细表格
 - **基金 PK**：投资复盘页「基金 PK」Tab——选 2~10 只基金对比双窗口（近 N 年/成立以来）年化收益、最大回撤、夏普，**基准归因 Beta/Alpha(年化)/信息比率**（区分真选股能力与纯 Beta），规模变化倍数与机构占比（季报，识别份额膨胀与申赎敏感），无风险利率 2% 口径；支持一键 AI 解读
 - **自动全量回测**：开关控制每周日 00:00（Asia/Shanghai）自动对全部活跃基金跑一遍信号回测；周末低峰逐只随机间隔（默认 20~60s 可调）防数据源封禁，60 只基金约 30~60 分钟（12 小时兜底上限）；结果逐基金落库覆盖并标注完成时间，信号回测首页批量展示，支持手动立即触发
@@ -142,6 +145,7 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 - **手动分析**：仪表盘「触发分析」按钮，SSE 流式逐只推送进度与结果。
 - **定时自动分析**：/schedule 页新建调度（cron 或每日时点）+ 选择推送渠道，A 股交易日自动执行（节假日闸门），结果推送飞书。
+- **任务类型**：调度支持两种——`analysis_push` 分析推送（全量多因子分析 + 按报告配置推送，默认）与 `ai_daily_brief` AI 每日简报（不跑全量分析，Agent 解读信号概况/调仓摘要/市场环境生成简报并推送，需已配置 AI Key，失败静默）。
 - 推送内容跟随「报告配置」勾选项（含「前十大持仓涨跌」，推送时自动附带 top10 实时涨跌表格与持仓加权涨跌）。
 
 ### 4. 投资复盘（/review）
@@ -162,13 +166,15 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
   4. 也可点「立即全量回测」手动触发（运行中返回 409 互斥）。
 - 回撤落差口径说明：表中"回撤落差"为策略累计收益的峰谷百分点差，跨基金对比有效，非严格回撤率。
 
-### 6. AI 对话与 Skills（/system 配置）
+### 6. AI 对话、Agent 工作台与 Skills（/system 配置 + /ai-workbench）
 
 - **模型配置**：供应商下拉（DeepSeek/智谱 GLM/通义千问/OpenAI）+ API Key + Base URL；「模型 ID 覆盖」可填具体型号（如 `glm-4-plus`、`qwen-max`），留空用预设默认。
+- **AI 工作台（/ai-workbench）**：基于工具调用（ReAct）的多轮分析智能体界面。左侧历史会话列表，右侧三个一键任务卡（因子诊断 / 调仓分析 / 今日简报）+ 自由提问输入框。运行时 SSE 流式推送：思考轮次、工具调用（参数 JSON 可折叠）、结果摘要（耗时/字符数）、增量文本；Markdown 结果表格化渲染。所有数据查询走只读工具，统计口径由 Python 引擎产出，AI 仅解读；未配置 AI Key 或未启用时优雅提示错误。
 - **AI Skills（分析技能）**：导入的提示词扩展包，启用后在 AI 对话中自动注入。
   - 入口：系统设置页「AI 分析技能」→「新建（填入示例）」或「导入 JSON」；
   - JSON 格式：`[{"name":"…","description":"…","system_prompt":"…","enabled":true}]`（按名称 upsert）；
   - 提示词内可写数据占位符：`{{fund_pool}}`（基金池+最新评分）、`{{market_regime}}`（市场环境）、`{{fund:<id>}}`（单基金详情），对话时自动渲染为真实数据；
+  - **Skill-as-tool**：额外填 `tool_spec`（JSON：`{"description":"…","parameters":{…}}`）即把该 Skill 注册为 Agent 可按需调用的工具 `skill_<id>`（工具化 Skill 在列表显示徽标，不再无条件全量注入对话，改由 Agent 判断何时拉取本技能指导）；
   - 随时 Switch 启停 / 删除，立即生效。适合导入分析框架、输出规范类技能；含可执行脚本的第三方技能包（如 SkillHub）不适用本系统。
 
 ### 7. 推送与系统设置
@@ -242,7 +248,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `{{market_regime}}` | 沪深300 PE 分位、涨跌家数比、两融 7 日变化 |
 | `{{fund:<id>}}` | 指定基金最新分析详情（评分/信号/因子/建议） |
 
-**导入格式**（前端「导入 JSON」粘贴，按名称 upsert）：
+**导入格式**（前端「导入 JSON」粘贴，按名称 upsert；`tool_spec` 可选，填后即注册为 Agent 工具 `skill_<id>`）：
 
 ```json
 [
@@ -250,7 +256,8 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
     "name": "深度基本面分析",
     "description": "从持仓/风格/风险维度深度分析",
     "system_prompt": "你将扮演资深基金分析师…\n\n{{fund_pool}}\n\n{{market_regime}}",
-    "enabled": true
+    "enabled": true,
+    "tool_spec": "{\"description\": \"获取本技能指导（需要时调用）\", \"parameters\": {\"type\": \"object\", \"properties\": {}}}"
   }
 ]
 ```
@@ -303,7 +310,15 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/ai/skills` | GET/POST | AI Skill 列表 / 新建 |
 | `/api/ai/skills/import` | POST | Skill 批量导入 JSON（按名称 upsert） |
 | `/api/ai/skills/{id}/toggle` | PATCH | Skill 启用/禁用 |
-| `/api/ai/skills/{id}` | PUT/DELETE | 更新 / 删除 Skill |
+| `/api/ai/skills/{id}` | PUT/DELETE | 更新 / 删除 Skill（含 `tool_spec` 工具化注册） |
+| `/api/ai/agent/run` | POST | AI 分析 Agent（SSE 流式，ReAct 多轮工具调用；内置任务 factor_audit/rebalance/daily_brief + 自由提问） |
+| `/api/ai/agent/tools` | GET | Agent 内置工具清单（15 个；工具化 Skill 按运行注入，不在此静态清单） |
+| `/api/ai/agent/conversations` | GET | Agent 会话列表（按 conversation_id 分组，含预览/轮次/最近时间） |
+| `/api/ai/agent/factor-audit` | GET | 因子诊断统计（RankIC/胜率/whipsaw，纯 Python 引擎） |
+| `/api/ai/agent/rebalance` | GET | 调仓分析四清单（真实持仓或基金池等权近似） |
+| `/api/positions` | GET/POST | 我的持仓列表 / 建仓 |
+| `/api/positions/{id}` | PUT/DELETE | 编辑 / 删除持仓 |
+| `/api/positions/import-csv` | POST | 支付宝/天天基金 CSV 批量导入（表头别名识别、池外代码逐行跳过） |
 | `/api/push-channels` | GET/POST | 推送渠道 |
 | `/api/schedules` | GET/POST | 调度计划 |
 | `/api/system` | GET/PUT | 系统配置（AI 开关、模型、API Key） |
