@@ -228,7 +228,7 @@ def classify_source_error(exc_text: str) -> str:
     if any(k in t for k in (
         "remotedisconnected", "connection aborted", "connection reset",
         "proxyerror", "429", "too many requests", "rate limit", "限流", "封",
-        "forbidden", "verify",
+        "forbidden", "verify", "unknown javascript error",
     )):
         return "rate_limit"
     if "timeout" in t or "timed out" in t:

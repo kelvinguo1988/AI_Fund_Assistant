@@ -3,6 +3,7 @@
 import logging
 import random
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import asyncio
@@ -10,6 +11,7 @@ import asyncio
 import akshare as ak  # type: ignore
 import pandas as pd
 
+from backend.config import settings
 from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, guess_fund_type
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ _RATE_LIMIT_MARKERS = (
     "too many requests",
     "forbidden",                # 403（部分接口以 HTML 返回）
     "verify",                    # 极验/滑块验证页文案
+    "unknown javascript error",  # pingzhongdata/*.js 被风控返回非 JS → py_mini_racer JSParseException
 )
 
 
@@ -31,6 +34,18 @@ def _is_rate_limited(e: BaseException) -> bool:
     """判断异常是否为限连/封禁类（重试会加重封禁的错误）"""
     msg = str(e).lower()
     return any(marker in msg for marker in _RATE_LIMIT_MARKERS)
+
+
+def _err_brief(e: BaseException, timeout: float) -> tuple[str, str]:
+    """异常 → (类名, 简要消息)。TimeoutError 的 str 为空，补可读超时说明，
+    避免错误日志只剩 '(no error message)' 且被误归类为 other。"""
+    reason = type(e).__name__
+    msg = str(e) or (
+        f"请求超过 {timeout:.0f}s 未完成"
+        if reason.endswith("TimeoutError")
+        else "(no error message)"
+    )
+    return reason, msg
 
 
 # User-Agent 池用于反爬虫
@@ -66,7 +81,12 @@ class AKShareAdapter(BaseDataSource):
     _fund_rank_df: Optional[pd.DataFrame] = None  # 原始 DataFrame，用于增量匹配
     _cache_timestamp: float = 0.0
     _CACHE_TTL: float = 3600.0
-    _CACHE_FILE: str = "fund_name_cache.json"
+    # 落 data 目录（与 DB 同卷，尊重 FUND_QUANT_DATABASE_DIR），容器重建不丢缓存、不再触发全量重拉
+    _CACHE_FILE: str = str(Path(settings.DATABASE_DIR) / "fund_name_cache.json")
+    # 失败冷却：rank 接口一次拉 ~2 万行常态 25-60s，超时后若不等冷却，
+    # 每次名称 miss 都会再穿一次全量多轮重试（2026-09-23 报错风暴根因）
+    _fund_name_fail_ts: float = 0.0
+    _NAME_FETCH_COOLDOWN: float = 900.0
 
     # 共享数据缓存：全市场基金共用的数据（国债收益率、沪深300基准、指数估值），
     # 避免每只基金重复请求同一接口。51 只基金原实现会产生 100+ 次重复调用。
@@ -143,8 +163,11 @@ class AKShareAdapter(BaseDataSource):
         支持 _max_attempts 参数覆盖最大重试次数：
         - 有降级接口的调用（如 ETF→OTC）设 1，失败立即切接口
         - 无降级的独立调用保持默认 3 次
+        支持 _timeout 参数覆盖总超时（默认 25s）：全量类慢接口
+        （如 fund_open_fund_rank_em 一次拉 ~2 万行，常态 25-60s）需单独预算。
         """
         max_attempts = kwargs.pop('_max_attempts', self.MAX_RETRIES)
+        timeout = kwargs.pop('_timeout', 25.0)
         call_code = kwargs.get('symbol') or (args[0] if args else '')
 
         from backend.utils.concurrency import run_with_timeout
@@ -153,12 +176,11 @@ class AKShareAdapter(BaseDataSource):
         func_name = getattr(func, "__name__", repr(func))
         for attempt in range(1, max_attempts + 1):
             try:
-                result = await run_with_timeout(func, *args, timeout=25.0, **kwargs)
+                result = await run_with_timeout(func, *args, timeout=timeout, **kwargs)
                 return result
             except (asyncio.TimeoutError, ConnectionError, ConnectionResetError, Exception) as e:
                 last_exc = e
-                reason = type(e).__name__
-                msg = str(e) or "(no error message)"
+                reason, msg = _err_brief(e, timeout)
 
                 # 限连/封禁类错误：重试会加重反爬，立即放弃走降级链
                 if _is_rate_limited(e) and max_attempts > 1:
@@ -175,8 +197,7 @@ class AKShareAdapter(BaseDataSource):
                         f"[{reason}] {msg}, {delay:.1f}s 后重试..."
                     )
                     await asyncio.sleep(delay)
-        reason = type(last_exc).__name__
-        msg = str(last_exc) or "(no error message)"
+        reason, msg = _err_brief(last_exc, timeout)
         logger.error(f"{func_name} 重试后仍然失败: [{reason}] {msg}")
         # 2026-08-31 埋点：数据源失败落错误日志（限流类单独标记，供铃铛告警
         # 与日志下载排查"哪个模块触发限制"；节流去重在 store 内部）
@@ -187,7 +208,12 @@ class AKShareAdapter(BaseDataSource):
             log_source_failure(
                 module=f"akshare.{func_name}",
                 message=f"[{reason}] {msg}"[:300],
-                category="rate_limit" if _is_rate_limited(last_exc) else classify_source_error(msg),
+                category=(
+                    "rate_limit" if _is_rate_limited(last_exc)
+                    # 分类文本带上异常类名：TimeoutError 的 str 为空，
+                    # 只传 msg 会被误归 other（2026-09-23 排查）
+                    else classify_source_error(f"{reason}: {msg}")
+                ),
                 detail=((f"code={call_code} " if call_code else "")
                         + f"attempts={max_attempts}")[:200],
             )
@@ -451,6 +477,7 @@ class AKShareAdapter(BaseDataSource):
         """将基金名称映射持久化到 JSON 文件"""
         import json
         try:
+            Path(cls._CACHE_FILE).parent.mkdir(parents=True, exist_ok=True)
             with open(cls._CACHE_FILE, "w") as f:
                 json.dump(name_map, f, ensure_ascii=False)
         except Exception as e:
@@ -504,18 +531,28 @@ class AKShareAdapter(BaseDataSource):
                     return None
 
             # 仍需网络请求（只有第一个进入的协程会走到这里）
+            if time.time() - AKShareAdapter._fund_name_fail_ts < AKShareAdapter._NAME_FETCH_COOLDOWN:
+                logger.debug(f"基金名称全量拉取处于失败冷却期，跳过 code={code}")
+                return None
             try:
-                rank_df = await self._call(ak.fund_open_fund_rank_em, symbol="全部")
+                rank_df = await self._call(
+                    ak.fund_open_fund_rank_em, symbol="全部",
+                    _timeout=60.0, _max_attempts=1,
+                )
                 if rank_df is not None and not rank_df.empty:
                     name_map = dict(zip(rank_df["基金代码"].astype(str), rank_df["基金简称"]))
                     AKShareAdapter._fund_name_map = name_map
                     AKShareAdapter._fund_rank_df = rank_df
                     AKShareAdapter._cache_timestamp = now
+                    AKShareAdapter._fund_name_fail_ts = 0.0
                     # 异步写文件（不阻塞）
                     self._save_name_cache_to_file(name_map)
                     logger.info(f"基金名称缓存已填充: {len(name_map)} 只（首次网络请求）")
                     return name_map.get(code)
+                AKShareAdapter._fund_name_fail_ts = time.time()
+                logger.warning("fund_open_fund_rank_em 返回空数据，进入失败冷却")
             except Exception as e:
+                AKShareAdapter._fund_name_fail_ts = time.time()
                 logger.debug(f"场外基金名称获取失败 code={code} (rank_em): {e}")
 
         return None

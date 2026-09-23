@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 import pytest
 
@@ -92,6 +92,114 @@ class TestCallSkipsRetryOnRateLimit:
 
         # 普通超时：重试满 3 次
         assert call_count["n"] == 3
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 2.5 超时空消息可读化 + 风控 JSParse 归类（2026-09-23 报错排查）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestErrBriefAndClassify:
+    def test_timeout_empty_msg_humanized(self):
+        import asyncio
+        from backend.data_sources.akshare_adapter import _err_brief
+        reason, msg = _err_brief(asyncio.TimeoutError(), 60.0)
+        assert reason == "TimeoutError"
+        assert "60s" in msg
+
+    def test_non_timeout_empty_msg_unchanged(self):
+        from backend.data_sources.akshare_adapter import _err_brief
+        _, msg = _err_brief(RuntimeError(), 25.0)
+        assert msg == "(no error message)"
+
+    def test_jsparse_is_rate_limited(self):
+        # pingzhongdata 被风控返回非 JS → py_mini_racer JSParseException
+        from backend.data_sources.akshare_adapter import _is_rate_limited
+        assert _is_rate_limited(Exception("Unknown JavaScript error during parse")) is True
+
+    def test_classify_with_reason_prefix(self):
+        from backend.services.error_log_service import classify_source_error
+        assert classify_source_error(
+            "JSParseException: Unknown JavaScript error during parse"
+        ) == "rate_limit"
+        # 原缺陷：TimeoutError str 为空，只传 msg 落 other；带类名后命中 timeout
+        assert classify_source_error("TimeoutError: 请求超过 60s 未完成") == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_call_timeout_override_and_message(self):
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        adapter = AKShareAdapter.__new__(AKShareAdapter)
+        adapter.BASE_DELAY = 0.01
+        seen = {}
+
+        async def fake_run_with_timeout(func, *args, timeout=None, **kwargs):
+            seen["timeout"] = timeout
+            raise TimeoutError()
+
+        with patch(
+            "backend.utils.concurrency.run_with_timeout",
+            new=fake_run_with_timeout,
+        ):
+            with pytest.raises(TimeoutError):
+                await adapter._call(lambda: None, _timeout=60.0, _max_attempts=1)
+
+        assert seen["timeout"] == 60.0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 2.6 rank_em 全量名称拉取失败冷却（防重试风暴）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestFundNameFetchCooldown:
+    @staticmethod
+    def _isolate(monkeypatch, tmp_path, fail_ts):
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        monkeypatch.setattr(AKShareAdapter, "_fund_name_map", None)
+        monkeypatch.setattr(AKShareAdapter, "_fund_rank_df", None)
+        monkeypatch.setattr(AKShareAdapter, "_cache_timestamp", 0.0)
+        monkeypatch.setattr(AKShareAdapter, "_fund_name_fail_ts", fail_ts)
+        # 锁按当前事件循环 lazy 重建，避免跨用例绑旧 loop
+        monkeypatch.setattr(AKShareAdapter, "_fund_name_lock", None)
+        monkeypatch.setattr(AKShareAdapter, "_CACHE_FILE", str(tmp_path / "names.json"))
+
+    @pytest.mark.asyncio
+    async def test_cooldown_skips_network(self, tmp_path, monkeypatch):
+        import time as _t
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        self._isolate(monkeypatch, tmp_path, _t.time() - 10)
+        adapter = AKShareAdapter.__new__(AKShareAdapter)
+        adapter._call = AsyncMock()
+        assert await adapter._get_cached_fund_name("004011") is None
+        adapter._call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_after_cooldown_retries_and_empty_sets_fail_ts(self, tmp_path, monkeypatch):
+        import pandas as pd
+        import time as _t
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        self._isolate(monkeypatch, tmp_path, 0.0)
+        adapter = AKShareAdapter.__new__(AKShareAdapter)
+        adapter._call = AsyncMock(return_value=pd.DataFrame())
+        assert await adapter._get_cached_fund_name("004011") is None
+        # 空数据同样进入冷却，防止 miss 风暴反复打 rank 接口
+        assert AKShareAdapter._fund_name_fail_ts > _t.time() - 5
+        # 冷却窗口内后续查找不再发请求
+        assert await adapter._get_cached_fund_name("004011") is None
+        adapter._call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_success_resets_fail_ts(self, tmp_path, monkeypatch):
+        import pandas as pd
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        self._isolate(monkeypatch, tmp_path, 1.0)
+        adapter = AKShareAdapter.__new__(AKShareAdapter)
+        df = pd.DataFrame({"基金代码": ["004011"], "基金简称": ["华泰柏瑞易利灵活配置混合C"]})
+        adapter._call = AsyncMock(return_value=df)
+        assert await adapter._get_cached_fund_name("004011") == "华泰柏瑞易利灵活配置混合C"
+        assert AKShareAdapter._fund_name_fail_ts == 0.0
 
 
 # ═══════════════════════════════════════════════════════════════════
