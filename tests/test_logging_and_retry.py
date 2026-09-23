@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 import pytest
 
@@ -200,6 +200,119 @@ class TestFundNameFetchCooldown:
         adapter._call = AsyncMock(return_value=df)
         assert await adapter._get_cached_fund_name("004011") == "华泰柏瑞易利灵活配置混合C"
         assert AKShareAdapter._fund_name_fail_ts == 0.0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 2.7 f10/lsjz 备用净值链路翻页（服务端每页固定 20 行）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestOtcNavRawPaging:
+    @staticmethod
+    def _make_adapter():
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        adapter = AKShareAdapter.__new__(AKShareAdapter)
+        return adapter
+
+    @staticmethod
+    def _page_response(page_index, page_size=20, total_rows=100):
+        """构造 f10/lsjz 风格响应：第 n 页返回 [(n-1)*20, n*20) 区间内的行（新→旧）"""
+        from datetime import date, timedelta
+
+        start = (page_index - 1) * page_size
+        n = max(0, min(page_size, total_rows - start))
+        rows = [
+            {
+                "FSRQ": (date(2026, 9, 23) - timedelta(days=start + i)).isoformat(),
+                "DWJZ": f"{1.0 + (start + i) * 0.001:.4f}",
+                "LJJZ": "1.5",
+                "JZZZL": "0.1",
+            }
+            for i in range(n)
+        ]
+        resp = MagicMock()
+        resp.json.return_value = {"Data": {"LSJZList": rows, "TotalCount": total_rows}, "ErrCode": 0}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    @pytest.mark.asyncio
+    async def test_loops_pages_until_enough_rows(self, monkeypatch):
+        import pandas as pd
+        import requests
+
+        calls = []
+
+        def fake_get(url, headers=None, params=None, timeout=None):
+            calls.append(params)
+            return self._page_response(params["pageIndex"], total_rows=100)
+
+        async def no_sleep(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr("asyncio.sleep", no_sleep)
+        adapter = self._make_adapter()
+
+        df = await adapter._get_otc_fund_nav_raw("004011", period=50)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 50
+        # 50 条需翻 3 页（末页取回后 60≥50 提前停止）
+        assert [c["pageIndex"] for c in calls] == [1, 2, 3]
+        assert all(c["pageSize"] == 20 for c in calls)
+        assert df["净值日期"].is_monotonic_increasing
+
+    @pytest.mark.asyncio
+    async def test_partial_pages_then_failure_keeps_rows(self, monkeypatch):
+        """首页成功、次页异常 → 返回已取回的部分数据而非 None"""
+        import requests
+
+        def fake_get(url, headers=None, params=None, timeout=None):
+            if params["pageIndex"] == 1:
+                return self._page_response(1, total_rows=100)
+            raise requests.exceptions.ConnectionError("closed by peer")
+
+        async def no_sleep(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr("asyncio.sleep", no_sleep)
+        adapter = self._make_adapter()
+
+        df = await adapter._get_otc_fund_nav_raw("004011", period=60)
+        assert df is not None
+        assert len(df) == 20
+
+    @pytest.mark.asyncio
+    async def test_first_page_failure_returns_none(self, monkeypatch):
+        import requests
+
+        def fake_get(url, headers=None, params=None, timeout=None):
+            raise requests.exceptions.ConnectionError("closed by peer")
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        adapter = self._make_adapter()
+        assert await adapter._get_otc_fund_nav_raw("004011", period=60) is None
+
+    @pytest.mark.asyncio
+    async def test_max_pages_cap(self, monkeypatch):
+        """period 很大时翻页数封顶 _LSJZ_MAX_PAGES，不死循环"""
+        import requests
+
+        calls = []
+
+        def fake_get(url, headers=None, params=None, timeout=None):
+            calls.append(params["pageIndex"])
+            return self._page_response(params["pageIndex"], total_rows=10_000)
+
+        async def no_sleep(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        monkeypatch.setattr("asyncio.sleep", no_sleep)
+        adapter = self._make_adapter()
+
+        df = await adapter._get_otc_fund_nav_raw("004011", period=500)
+        assert len(calls) == adapter._LSJZ_MAX_PAGES
+        assert len(df) == adapter._LSJZ_MAX_PAGES * 20
 
 
 # ═══════════════════════════════════════════════════════════════════

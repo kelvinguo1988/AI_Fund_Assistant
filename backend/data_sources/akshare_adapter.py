@@ -368,13 +368,20 @@ class AKShareAdapter(BaseDataSource):
                     fund_data.name = str(match.iloc[0]["名称"])
                     logger.info(f"ETF 行情缓存已填充: {len(info_df)} 只（首次网络请求）")
 
+    # 天天基金 f10/lsjz 服务端实测强制每页最多 20 行（2026-09，pageSize 传更大值无效），
+    # 需按 pageIndex 翻页；上限 8 页 = 160 行，覆盖常见 period≤90，并防止异常时无限拉取。
+    _LSJZ_PAGE_SIZE: int = 20
+    _LSJZ_MAX_PAGES: int = 8
+
     async def _get_otc_fund_nav_raw(self, code: str, period: int) -> Optional[pd.DataFrame]:
         """直接调用天天基金原始 API 获取场外基金净值（备用）
 
         当 akshare 的 fund_open_fund_info_em 失败时使用此接口。
         这是天天基金前端页面真实调用的 API，稳定性远高于 akshare 的页面解析。
+        接口按页返回（每页固定 20 行），此处循环翻页拼够 period 条净值为止。
         """
         import requests
+        from backend.utils.concurrency import run_with_timeout
 
         end_date = date.today().isoformat()
         start_date = (date.today() - timedelta(days=period * 2)).isoformat()
@@ -384,28 +391,53 @@ class AKShareAdapter(BaseDataSource):
             "Referer": f"https://fund.eastmoney.com/f10/jjjz_{code}.html",
             "User-Agent": random.choice(_USER_AGENTS),
         }
-        params = {
-            "fundCode": code,
-            "pageIndex": 1,
-            "pageSize": max(period * 2, 90),
-            "startDate": start_date,
-            "endDate": end_date,
-        }
 
-        def _fetch():
-            resp = requests.get(url, headers=headers, params=params, timeout=10)
-            resp.raise_for_status()
-            return resp.json()
+        rows: list = []
+        need_pages = min(
+            (period + self._LSJZ_PAGE_SIZE - 1) // self._LSJZ_PAGE_SIZE,
+            self._LSJZ_MAX_PAGES,
+        )
+        failed = False
 
-        try:
-            from backend.utils.concurrency import run_with_timeout
-            data = await run_with_timeout(_fetch, timeout=15.0)
-        except Exception as e:
-            logger.debug(f"天天基金原始 API 获取失败 code={code}: {e}")
+        for page in range(1, need_pages + 1):
+            params = {
+                "fundCode": code,
+                "pageIndex": page,
+                "pageSize": self._LSJZ_PAGE_SIZE,
+                "startDate": start_date,
+                "endDate": end_date,
+            }
+
+            def _fetch(p=params):
+                resp = requests.get(url, headers=headers, params=p, timeout=10)
+                resp.raise_for_status()
+                return resp.json()
+
+            try:
+                data = await run_with_timeout(_fetch, timeout=15.0)
+            except Exception as e:
+                logger.debug(f"天天基金原始 API 获取失败 code={code} page={page}: {e}")
+                failed = True
+                break
+
+            page_rows = (data.get("Data") or {}).get("LSJZList") or []
+            rows.extend(page_rows)
+            if len(page_rows) < self._LSJZ_PAGE_SIZE:
+                break  # 末页或数据不足，停止翻页
+            if len(rows) >= period:
+                break
+            if page < need_pages:
+                await asyncio.sleep(random.uniform(0.4, 0.6))
+
+        if failed and not rows:
             return None
 
-        if data.get("Data") and data["Data"].get("LSJZList"):
-            df = pd.DataFrame(data["Data"]["LSJZList"])
+        if rows:
+            if len(rows) < period:
+                logger.info(
+                    f"天天基金原始 API 净值不足 code={code}: 取回 {len(rows)} 条 < period {period} 条"
+                )
+            df = pd.DataFrame(rows)
             df = df.rename(columns={
                 "FSRQ": "净值日期",
                 "DWJZ": "单位净值",
