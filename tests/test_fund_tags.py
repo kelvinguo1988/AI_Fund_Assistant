@@ -405,4 +405,16 @@ class TestTypeEquivalenceStructured:
         assert not eq("股票型", "债券型")
         assert not eq("混合型-偏股", "混合型-灵活")
         assert not eq("指数型-股票", "混合型-偏股")
-        assert not eq("QDII", "混合型-偏股")
+        assert not eq("QDII-混合偏股", "QDII-混合债券")
+
+    def test_cross_dimension_not_conflict(self):
+        """2026-09-24 告警去噪：两源各报一个维度（组织形式 vs 投资范围）不算冲突
+
+        原 "QDII vs 混合型-偏股 视为冲突" 的口径一并修正：QDII 是投资资质，
+        与混合偏股可同真，跨维度比较不产生真信号，只产生假告警。
+        """
+        from backend.services.fund_tag_service import _types_equivalent as eq
+        assert eq("指数型-海外股票", "QDII-股票")       # 162719 等，8 条假告警
+        assert eq("指数型-其他", "商品型-非QDII")        # 4 条假告警
+        assert eq("债券型-混合二级", "债券型-普通债券")  # 雪球粗桶，4 条假告警
+        assert eq("QDII", "混合型-偏股")

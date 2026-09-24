@@ -219,6 +219,9 @@ def classify_source_error(exc_text: str) -> str:
     不一致；403/verify 原漏判为 other）
     """
     t = exc_text.lower()
+    # 本机 CA 缺失的 SSL 失败含 "verify"，会被下面的极验标记误判为限流
+    if any(k in t for k in ("certificate_verify_failed", "unable to get local issuer")):
+        return "network"
     try:
         from backend.data_sources.akshare_adapter import _RATE_LIMIT_MARKERS
         if any(k in t for k in _RATE_LIMIT_MARKERS):

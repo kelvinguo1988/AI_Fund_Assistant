@@ -353,3 +353,40 @@ class _session_cm:
 
     async def __aexit__(self, *exc):
         return False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. 注册表自举（调度器不经 ai_agent 路由的惰性 import）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestRegistryBootstrap:
+    def test_package_import_populates_registry(self):
+        """仅 import 包（不碰 HTTP 路由）也必须完成内置工具注册。
+
+        曾因 data_tools 只在 ai_agent 路由函数内惰性 import，调度器生成的每日简报
+        在空注册表下静默拿到 0 个工具。
+        """
+        import backend.ai_tools  # noqa: F401  仅包导入
+        from backend.ai_tools.registry import _REGISTRY
+
+        assert "list_fund_pool" in _REGISTRY
+        assert len(_REGISTRY) >= 15
+
+    def test_preset_task_tools_all_resolvable(self):
+        """三个预置任务声明的 allowed_tools 必须真实存在且能注入。"""
+        from backend.ai.presets import PRESET_TASKS
+        from backend.ai_tools.registry import tool_specs
+
+        for task, cfg in PRESET_TASKS.items():
+            allowed = cfg.get("allowed_tools") or []
+            specs = tool_specs(allowed)
+            names = {s["function"]["name"] for s in specs}
+            assert names == set(allowed), f"{task} 工具缺失: {set(allowed) - names}"
+
+    def test_daily_brief_gets_tools_without_http(self):
+        """模拟调度器视角：未调用任何 HTTP 端点，简报任务仍能拿到 4 个工具。"""
+        from backend.ai.presets import PRESET_TASKS
+        from backend.ai_tools.registry import tool_specs
+
+        cfg = PRESET_TASKS["daily_brief"]
+        assert len(tool_specs(cfg["allowed_tools"])) == len(cfg["allowed_tools"])

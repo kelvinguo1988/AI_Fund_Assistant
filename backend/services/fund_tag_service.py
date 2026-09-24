@@ -401,12 +401,29 @@ _XQ_TYPE_NORMALIZE = {
     "股票型-普通": "股票型",
     "股票型-增强指数": "指数型-股票",
     "债券型-普通债": "债券型",
+    "债券型-普通债券": "债券型",  # 雪球粗桶，与 F10「债券型-混合二级」不构成冲突
     "混合型-平衡": "混合型-平衡",
 }
 
 
 # 无信息量修饰词（雪球粗分类后缀，与 F10 细分不构成冲突）
 _VAGUE_QUALIFIERS = {"普通", "标准指数", "普通股票型", ""}
+
+# 类型大类的两个正交维度：组织形式 vs 投资范围。同一支基金两源各报一个维度
+# 不是冲突（QDII 指数股票基金：F10「指数型-海外股票」/ 雪球「QDII-股票」；
+# 商品指数基金：F10「指数型-其他」/ 雪球「商品型-非QDII」）。
+# 2026-09-24 排查：此前按字面比大类，两模式共产生 16 条假"语义冲突"告警。
+_FORM_HEADS = {"指数型", "股票型", "混合型", "债券型", "FOF", "REITs"}
+_SCOPE_HEADS = {"QDII", "商品型", "海外", "互认基金"}
+
+
+def _type_dim(head: str) -> str:
+    """大类所属维度：组织形式 / 投资范围 / 未知（未知之间仍按冲突处理）"""
+    if head in _FORM_HEADS:
+        return "form"
+    if head in _SCOPE_HEADS:
+        return "scope"
+    return "unknown"
 
 
 def _type_parts(t: str) -> tuple[str, str]:
@@ -436,6 +453,9 @@ def _types_equivalent(a: str, b: str) -> bool:
     head_a, qual_a = _type_parts(a)
     head_b, qual_b = _type_parts(b)
     if head_a != head_b:
+        # 两源分别报了不同维度（组织形式 vs 投资范围）→ 同义，不是冲突
+        if _type_dim(head_a) != _type_dim(head_b):
+            return True
         return False
     # 大类相同：
     if not qual_a or not qual_b:

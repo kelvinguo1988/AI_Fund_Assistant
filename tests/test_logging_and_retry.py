@@ -448,3 +448,139 @@ class TestSchedulerRetry:
             await sched._run_task(1)
 
         assert attempts["n"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 深交所 ETF 份额数据（规模稳定性因子数据源）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestFillFundSizeSzse:
+    """fund_scale_daily_szse 只接受 YYYYMMDD，且宽区间直接返回 0 行"""
+
+    @staticmethod
+    def _fake_df():
+        import pandas as pd
+        from datetime import date, timedelta
+        d0 = date.today()
+        rows = [
+            {"日期": d0 - timedelta(days=i), "基金代码": "159915",
+             "基金简称": "创业板ETF", "基金份额": 1_000_000.0 * (i + 1)}
+            for i in range(6)
+        ]
+        rows.append({"日期": d0, "基金代码": "159916", "基金简称": "其他", "基金份额": 1.0})
+        return pd.DataFrame(rows)
+
+    @pytest.mark.asyncio
+    async def test_date_format_is_yyyymmdd_and_window_short(self):
+        from datetime import datetime
+
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        from backend.data_sources.base import FundData
+
+        captured = {}
+
+        async def fake_call(*args, **kwargs):
+            captured.update(kwargs)
+            return self._fake_df()
+
+        fd = FundData(code="159915")
+        with patch.object(AKShareAdapter, "_call", new=fake_call):
+            await AKShareAdapter()._fill_fund_size("159915", fd)
+
+        for key in ("start_date", "end_date"):
+            assert len(captured[key]) == 8 and captured[key].isdigit(), f"{key}={captured[key]} 非 YYYYMMDD"
+            datetime.strptime(captured[key], "%Y%m%d")  # 进一步验证可解析
+        # 宽区间会返回空表，窗口必须收紧到可命中数据的短区间
+        span = (datetime.strptime(captured["end_date"], "%Y%m%d")
+                - datetime.strptime(captured["start_date"], "%Y%m%d")).days
+        assert span <= 60
+
+        # 取按日期升序的最后 4 期
+        assert len(fd.fund_size_history) == 4
+        assert fd.fund_size_history == sorted(fd.fund_size_history, reverse=True)
+
+    @pytest.mark.asyncio
+    async def test_non_szse_code_skips_network(self):
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        from backend.data_sources.base import FundData
+
+        calls = {"n": 0}
+
+        async def fake_call(*args, **kwargs):
+            calls["n"] += 1
+            return self._fake_df()
+
+        fd = FundData(code="510300")
+        with patch.object(AKShareAdapter, "_call", new=fake_call):
+            await AKShareAdapter()._fill_fund_size("510300", fd)
+
+        assert calls["n"] == 0 and fd.fund_size_history == []
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 6. 告警分类三处真实样本回归（2026-09-24 系统错误告警复查）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestAlertCategoryRealSamples:
+    """按 error_logs 里的真实异常文本回归归类
+
+    - py_mini_racer 喂到风控 HTML 页 → JSParseException 的另一变体，此前既不被
+      识别为限连（于是退避重试 2 次，加重封禁），也被归到"其他"掩盖风控信号；
+    - 本机 Python 缺 CA 的 CERTIFICATE_VERIFY_FAILED 含 "verify"，被极验标记
+      误判成"限流"，使环境问题长期伪装成风控告警。
+    """
+
+    JSPARSE_HTML = (
+        "<anonymous>:2: SyntaxError: Unexpected token '<'\n"
+        "<!doctype html>\n<html><head><title>403</title></head></html>"
+    )
+    SSL_CERT = (
+        "<urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify "
+        "failed: unable to get local issuer certificate (_ssl.c:1129)>"
+    )
+
+    async def _attempts_and_category(self, message: str):
+        """以固定异常文本跑一次 _call → (实际尝试次数, 落库 category)"""
+        import backend.services.error_log_service as els
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        adapter = AKShareAdapter.__new__(AKShareAdapter)  # 跳过 __init__（避免网络）
+        state = {"n": 0, "category": None}
+
+        async def fake_run(func, *args, timeout=None, **kwargs):
+            state["n"] += 1
+            raise Exception(message)
+
+        def fake_log(module, message, category=None, severity=None, detail=None):
+            state["category"] = category
+
+        with patch("backend.utils.concurrency.run_with_timeout", new=fake_run), \
+                patch.object(els, "log_source_failure", new=fake_log):
+            with pytest.raises(Exception):
+                await adapter._call(lambda: None, _max_attempts=3)
+        return state
+
+    @pytest.mark.asyncio
+    async def test_jsparse_html_skips_retry_and_marks_rate_limit(self):
+        state = await self._attempts_and_category(self.JSPARSE_HTML)
+        assert state["n"] == 1          # 不重试（防加重封禁）
+        assert state["category"] == "rate_limit"
+
+    @pytest.mark.asyncio
+    async def test_cert_error_labelled_network_not_rate_limit(self):
+        state = await self._attempts_and_category(self.SSL_CERT)
+        # 证书失败是确定性本地故障，重试同样无益 → 仍跳过；但归类必须诚实
+        assert state["n"] == 1
+        assert state["category"] == "network"
+
+    def test_classify_helpers(self):
+        from backend.data_sources.akshare_adapter import _is_cert_error, _is_rate_limited
+        from backend.services.error_log_service import classify_source_error
+
+        js = Exception(self.JSPARSE_HTML)
+        assert _is_rate_limited(js) is True
+        ssl = Exception(self.SSL_CERT)
+        assert _is_cert_error(ssl) is True
+        assert classify_source_error(f"URLError: {self.SSL_CERT}") == "network"
+        # 真·极验页仍归限流
+        assert classify_source_error("RuntimeError: 请完成滑块验证 verify") == "rate_limit"

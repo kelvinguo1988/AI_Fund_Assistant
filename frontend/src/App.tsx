@@ -147,6 +147,15 @@ const SidebarNav: React.FC = () => {
 const AppLayout: React.FC = () => {
   const { sidebarOpen, aiEnabled, toggleSidebar, setAiEnabled } = useAppStore();
 
+  // 开关状态以后端为准：store 默认 true，不回填则刷新后恒显示"开"，
+  // 而后端 ai_enabled=false 时 AI 工作台/每日简报会报"未启用"
+  useEffect(() => {
+    import('./api/system')
+      .then(({ systemApi }) => systemApi.getConfig())
+      .then((res) => setAiEnabled(Boolean(res.data?.ai_enabled)))
+      .catch(() => { /* 读取失败保持现状 */ });
+  }, [setAiEnabled]);
+
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       {/* ── 顶栏 ── */}

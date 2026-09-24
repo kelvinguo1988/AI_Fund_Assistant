@@ -27,7 +27,19 @@ _RATE_LIMIT_MARKERS = (
     "forbidden",                # 403（部分接口以 HTML 返回）
     "verify",                    # 极验/滑块验证页文案
     "unknown javascript error",  # pingzhongdata/*.js 被风控返回非 JS → py_mini_racer JSParseException
+    "unexpected token '<'",      # 同上另一变体：HTML 风控页被当 JS 解析（2026-09-24 实测 _otc 走 3 次重试）
+    "<!doctype html",            # 同上，异常消息里带出风控页正文
 )
+
+# 本机证书链缺失（Python 框架无 CA / 代理改写）不是服务端封禁。str 里含
+# "CERTIFICATE_VERIFY_FAILED" 会被上面的 "verify" 标记误判成限流，
+# 使告警铃把环境问题报成风控（2026-09-24 排查 csindex 7 条假限流）。
+_CERT_ERROR_MARKERS = ("certificate_verify_failed", "unable to get local issuer")
+
+
+def _is_cert_error(e: BaseException) -> bool:
+    msg = str(e).lower()
+    return any(marker in msg for marker in _CERT_ERROR_MARKERS)
 
 
 def _is_rate_limited(e: BaseException) -> bool:
@@ -209,7 +221,9 @@ class AKShareAdapter(BaseDataSource):
                 module=f"akshare.{func_name}",
                 message=f"[{reason}] {msg}"[:300],
                 category=(
-                    "rate_limit" if _is_rate_limited(last_exc)
+                    # 限连判定仍用于上面的"跳过重试"（证书失败同样是确定性失败，重试纯浪费），
+                    # 但归类要把本机证书问题摘出去，否则告警里环境问题长期显示成"限流"
+                    "rate_limit" if (_is_rate_limited(last_exc) and not _is_cert_error(last_exc))
                     # 分类文本带上异常类名：TimeoutError 的 str 为空，
                     # 只传 msg 会被误归 other（2026-09-23 排查）
                     else classify_source_error(f"{reason}: {msg}")
@@ -740,13 +754,15 @@ class AKShareAdapter(BaseDataSource):
         # 仅尝试深交所 ETF 份额数据（159xxx）
         if code.startswith("159"):
             try:
-                end = date.today().isoformat()
-                start = (date.today() - timedelta(days=720)).isoformat()
+                # akshare 该接口只接受 YYYYMMDD（此前 isoformat 恒 ValueError，三次重试全废）；
+                # 且宽区间（如 720 天）直接返回 0 行，故取近 30 日快照的最后 4 期
+                end = date.today().strftime("%Y%m%d")
+                start = (date.today() - timedelta(days=30)).strftime("%Y%m%d")
                 df = await self._call(ak.fund_scale_daily_szse, start_date=start, end_date=end, symbol="ETF")
                 if df is not None and not df.empty:
-                    match = df[df["基金代码"] == code]
+                    match = df[df["基金代码"].astype(str) == code]
                     if not match.empty:
-                        fund_data.fund_size_history = match["基金份额"].astype(float).tail(4).tolist()
+                        fund_data.fund_size_history = match.sort_values("日期")["基金份额"].astype(float).tail(4).tolist()
                         logger.info(f"基金规模数据填充完成: {len(fund_data.fund_size_history)} 期 (daily_szse)")
                         return
             except Exception as e:
