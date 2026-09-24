@@ -10,7 +10,7 @@ class LLMFactory:
 
     # preset key -> 默认模型 ID
     _PRESET_MODELS = {
-        "deepseek": "deepseek-chat",
+        "deepseek": "deepseek-flash",
         "openai": "gpt-4o-mini",
         "tongyi": "qwen-plus",
         "glm": "glm-4-flash",

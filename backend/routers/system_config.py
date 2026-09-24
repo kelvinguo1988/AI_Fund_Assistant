@@ -40,7 +40,8 @@ router = APIRouter()
 
 # 预设模型配置
 _AI_MODEL_PRESETS: list[AIModelPreset] = [
-    AIModelPreset(key="deepseek", label="DeepSeek", base_url="https://api.deepseek.com/v1", model_name="deepseek-chat"),
+    # deepseek 侧 API 模型名 2026-09 起为 deepseek-flash（V4.1-Flash）/ deepseek-v4-pro
+    AIModelPreset(key="deepseek", label="DeepSeek", base_url="https://api.deepseek.com/v1", model_name="deepseek-flash"),
     AIModelPreset(key="glm", label="智谱 GLM", base_url="https://open.bigmodel.cn/api/paas/v4/", model_name="glm-4-flash"),
     AIModelPreset(key="tongyi", label="通义千问", base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", model_name="qwen-plus"),
     AIModelPreset(key="openai", label="OpenAI", base_url="https://api.openai.com/v1", model_name="gpt-4o-mini"),

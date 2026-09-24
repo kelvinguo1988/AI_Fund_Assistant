@@ -277,7 +277,7 @@ const SystemPage: React.FC = () => {
                 label="模型名称"
                 value={aiModel}
                 onChange={(e) => setAiModel(e.target.value)}
-                placeholder="如 deepseek-chat"
+                placeholder="预设名，如 deepseek / glm"
                 fullWidth
                 size="small"
               />
@@ -298,10 +298,10 @@ const SystemPage: React.FC = () => {
                 label="模型 ID 覆盖（可选）"
                 value={aiModelId}
                 onChange={(e) => setAiModelId(e.target.value)}
-                placeholder="如 glm-4-plus / qwen-max，空=用预设默认"
+                placeholder="如 deepseek-v4-pro / glm-4-plus，空=用预设默认"
                 fullWidth
                 size="small"
-                helperText="留空使用所选供应商的默认模型"
+                helperText="留空用供应商默认；须填端点接受的 API 名（DeepSeek 当前为 deepseek-flash / deepseek-v4-pro，官网宣传名会报 400）"
               />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>

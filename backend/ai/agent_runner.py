@@ -180,9 +180,17 @@ class AgentRunner:
                 yield {"type": "error", "message": f"LLM 响应超时（第 {round_no} 轮）"}
                 break
             except Exception as e:
-                msg = f"{type(e).__name__}: {str(e)[:150]}"
+                raw = str(e)
+                # 150 字会正好切掉端点报错里最有用的部分（可用模型名清单在句尾）
+                msg = f"{type(e).__name__}: {raw[:300]}"
+                low = raw.lower()
                 if "tool" in msg.lower():
                     msg += "（当前模型可能不支持函数调用，请换用支持 tools 的模型）"
+                if "model names are" in low or "but you passed" in low:
+                    msg += (
+                        "（模型名要与端点一致：在系统设置改「模型 ID 覆盖」。"
+                        "注意官网宣传名不是 API 参数名，如 DeepSeek-V4.1-Flash 对应 deepseek-flash）"
+                    )
                 logger.error(f"Agent LLM 调用失败 round={round_no}: {msg}")
                 errored = True
                 yield {"type": "error", "message": msg}

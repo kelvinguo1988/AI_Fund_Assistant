@@ -17,7 +17,9 @@ class DeepSeekProvider(BaseLLMProvider):
     DeepSeek API 完全兼容 OpenAI API 格式。
     """
 
-    def __init__(self, model_name: str = "deepseek-chat", api_key: str = "", base_url: str = "https://api.deepseek.com/v1") -> None:
+    # 2026-09 API 侧模型名已是 deepseek-flash（V4.1-Flash）/ deepseek-v4-pro，
+    # 旧的 deepseek-chat 已不被端点接受。
+    def __init__(self, model_name: str = "deepseek-flash", api_key: str = "", base_url: str = "https://api.deepseek.com/v1") -> None:
         super().__init__(model_name, api_key, base_url)
         self._client = AsyncOpenAI(
             api_key=api_key,

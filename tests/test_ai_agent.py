@@ -278,6 +278,44 @@ class TestAgentRunner:
         err = next(e for e in events if e["type"] == "error")
         assert "不支持函数调用" in err["message"]
 
+    @pytest.mark.asyncio
+    async def test_model_name_400_maps_to_actionable_hint(self, _seed_config):
+        """端点因模型名报 400 时要给出可操作提示，且不能把可用模型名清单截掉"""
+        db = _seed_config
+        boom = (
+            "Error code: 400 - {'error': {'message': 'The supported API model names are "
+            "deepseek-flash, deepseek-v4-pro, but you passed DeepSeek-V4.1-Flash. "
+            "(request id: 20260924215315123456789012345678)'"
+        )
+
+        class _BadModel(_ScriptedProvider):
+            async def astream_with_tools(self, messages, tools=None, max_tokens=4096, temperature=0.3):
+                raise RuntimeError(boom)
+                yield  # pragma: no cover
+
+        import backend.llm.factory as factory
+        from unittest.mock import patch
+        from backend.ai.agent_runner import AgentRunner
+        with patch.object(factory.LLMFactory, "create", return_value=_BadModel([])):
+            events = [ev async for ev in AgentRunner(db).run_stream("hi")]
+        err = next(e for e in events if e["type"] == "error")
+        assert "deepseek-v4-pro" in err["message"]   # 端点列出的可用名必须完整可见
+        # 旧 [:150] 正好把消息切在 "(reque" —— 与用户实报的残句一致
+        assert "(request id" in err["message"]
+        assert "模型 ID 覆盖" in err["message"]        # 指到该改的字段
+        # 提示语必须完整：曾写成 msg += "A" \n "B"，第二句成裸语句被静默丢弃
+        assert "对应 deepseek-flash）" in err["message"]
+
+    def test_deepseek_preset_model_id_is_current_api_name(self):
+        """DeepSeek 预设模型名必须是端点当前接受的 API 名（旧 deepseek-chat 已失效）"""
+        from backend.llm.factory import LLMFactory
+        p = LLMFactory.create("deepseek", "k", "https://api.deepseek.com/v1")
+        assert p.model_name == "deepseek-flash"
+        # 显式 model_id 覆盖优先
+        assert LLMFactory.create(
+            "deepseek", "k", "https://api.deepseek.com/v1", model_id="deepseek-v4-pro"
+        ).model_name == "deepseek-v4-pro"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 4. 路由：/tools 清单 与 /run SSE 封装
