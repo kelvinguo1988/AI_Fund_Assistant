@@ -67,6 +67,7 @@ _PAT_GRAND_TOTAL = re.compile(r'var\s+Data_grandTotal\s*=\s*(\[)')
 _PAT_FLUCTUATION_SCALE = re.compile(r'var\s+Data_fluctuationScale\s*=\s*(\{)')
 _PAT_HOLDER_STRUCTURE = re.compile(r'var\s+Data_holderStructure\s*=\s*(\{)')
 _PAT_ASSET_ALLOCATION = re.compile(r'var\s+Data_assetAllocation\s*=\s*(\{)')
+_PAT_NET_WORTH_TREND = re.compile(r'var\s+Data_netWorthTrend\s*=\s*(\[)')
 
 
 def _extract_js_array(text: str, start_pattern: re.Pattern) -> Optional[list]:
@@ -129,6 +130,11 @@ def _parse_holder_structure(js_text: str) -> Optional[dict]:
 def _parse_asset_allocation(js_text: str) -> Optional[dict]:
     """解析资产配置 Data_assetAllocation"""
     return _extract_js_object(js_text, _PAT_ASSET_ALLOCATION)
+
+
+def _parse_net_worth_trend(js_text: str) -> Optional[list]:
+    """解析单位净值走势 Data_netWorthTrend — [{x: 毫秒时间戳, y: 单位净值, equityReturn: 日增长率}]"""
+    return _extract_js_array(js_text, _PAT_NET_WORTH_TREND)
 
 
 def _parse_extended_data(js_text: str) -> dict:
@@ -214,6 +220,22 @@ async def fetch_fund_detail(code: str) -> dict[str, Any]:
         "fund_name": _parse_fund_name(js_text),
         "extended_data": _parse_extended_data(js_text),
     }
+
+
+async def fetch_net_worth_trend(code: str) -> Optional[list]:
+    """获取单位净值走势原始行（纯 Python 解析 pingzhongdata，不经 JS 引擎）
+
+    净值链路用它替代 akshare.fund_open_fund_info_em —— 后者下载的是同一个
+    pingzhongdata 文件，却要多过一道 py_mini_racer(V8)；风控返回非 JS 时
+    整只基金以 JSParseException 失败。拿不到文件或解析失败均返回 None，
+    由调用方降级，不抛异常。
+    """
+    js_text = await run_with_timeout(
+        _fetch_js, code, timeout=_JS_TIMEOUT, semaphore=_get_pingzhong_sem(),
+    )
+    if not js_text:
+        return None
+    return _parse_net_worth_trend(js_text)
 
 
 async def fetch_all_js_texts(codes: list[str]) -> dict[str, str]:

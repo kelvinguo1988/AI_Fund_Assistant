@@ -277,13 +277,18 @@ async def _fetch_nav_series(
             ]
         raw = await adapter._call(_etf, _max_attempts=2)
     else:
-        def _otc():
-            df = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")
-            return [
-                (str(d)[:10], float(v))
-                for d, v in zip(df["净值日期"], df["单位净值"])
-            ]
-        raw = await adapter._call(_otc, _max_attempts=2)
+        # 场外净值改走全量分析同一条链路：pingzhongdata 纯 Python 解析 → f10/lsjz 兜底。
+        # 原实现直连 akshare fund_open_fund_info_em（需 py_mini_racer 执行 JS），
+        # V8 报错时这里没有任何退路，整只基金复盘直接无数据（2026-09-24 该错误每次必报）。
+        df = await adapter._get_otc_nav_from_js(code)
+        if df is None or df.empty:
+            df = await adapter._get_otc_fund_nav_raw(code, period=max(int(days * 1.5), 60))
+        if df is None or df.empty:
+            return []
+        raw = [
+            (str(d)[:10], float(v))
+            for d, v in zip(df["净值日期"], df["单位净值"])
+        ]
 
     series = sorted(raw)
     if start_date:

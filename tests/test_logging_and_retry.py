@@ -316,6 +316,85 @@ class TestOtcNavRawPaging:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 2.8 场外净值策略 1 去 py_mini_racer（pingzhongdata 纯 Python 解析）
+# ═══════════════════════════════════════════════════════════════════
+
+class TestOtcNavFromPingzhong:
+    """2026-09-24 生产每次 AI 分析都报 [JSParseException] Unknown JavaScript
+    error during parse 并被归类成"限流/封禁"：策略 1 的 akshare
+    fund_open_fund_info_em 下载的就是 pingzhongdata，却要经 V8 执行，
+    文件被风控改写/容器内 V8 异常即整体失败。改为 requests 直取 + 正则解析。
+    """
+
+    _JS = (
+        'var fS_name = "测试基金";var Data_netWorthTrend = ['
+        '{"x":1790006400000,"y":1.5557,"equityReturn":-0.14,"unitMoney":""},'
+        '{"x":1790179200000,"y":"1.5543","equityReturn":"-0.09","unitMoney":""},'
+        '{"x":1790092800000,"y":"","equityReturn":"","unitMoney":""}'
+        '];'
+    )
+
+    @staticmethod
+    def _make_adapter():
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        return AKShareAdapter.__new__(AKShareAdapter)
+
+    @pytest.mark.asyncio
+    async def test_parses_js_into_akshare_shaped_frame(self, monkeypatch):
+        """列名/日期口径与 akshare 对齐；毫秒戳按北京时区换算，空净值行剔除"""
+        monkeypatch.setattr(
+            "backend.services.fund_detail_service._fetch_js", lambda code: self._JS
+        )
+        df = await self._make_adapter()._get_otc_nav_from_js("004011")
+
+        assert list(df["净值日期"]) == ["2026-09-22", "2026-09-24"]  # 乱序输入 → 升序
+        assert df["单位净值"].tolist() == [1.5557, 1.5543]           # 字符串净值转数值
+        assert df["日增长率"].tolist() == [-0.14, -0.09]
+
+    @pytest.mark.asyncio
+    async def test_risk_control_page_returns_none(self, monkeypatch):
+        """风控 HTML 页 → None 交调用方降级，不抛异常也不产生 JSParse 告警"""
+        monkeypatch.setattr(
+            "backend.services.fund_detail_service._fetch_js",
+            lambda code: "<!doctype html><html>风控验证</html>",
+        )
+        assert await self._make_adapter()._get_otc_nav_from_js("004011") is None
+
+    @pytest.mark.asyncio
+    async def test_js_engine_route_no_longer_called(self, monkeypatch):
+        """策略 1 取不到时降级 lsjz，且全程不触碰 akshare 的 JS 解析接口"""
+        import akshare as ak
+        import pandas as pd
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        js_calls = []
+
+        def _boom(*_a, **_k):
+            js_calls.append(1)
+            raise Exception("Unknown JavaScript error during parse")
+
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", _boom)
+        monkeypatch.setattr(
+            "backend.services.fund_detail_service._fetch_js", lambda code: None
+        )
+
+        adapter = self._make_adapter()
+        lsjz_df = pd.DataFrame(
+            {"净值日期": ["2026-09-23", "2026-09-24"], "单位净值": [1.5, 1.55]}
+        )
+        adapter._get_otc_fund_nav_raw = AsyncMock(return_value=lsjz_df)
+        adapter._get_cached_fund_name = AsyncMock(return_value="华泰柏瑞鼎利灵活配置混合C")
+
+        fund_data = await adapter._get_otc_fund_data("004011", period=60)
+
+        assert js_calls == []
+        adapter._get_otc_fund_nav_raw.assert_awaited_once()
+        assert fund_data.close == 1.55
+        assert fund_data.date == "2026-09-24"
+        assert fund_data.close_history == [1.5, 1.55]
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 3. 日志配置：7 天轮转
 # ═══════════════════════════════════════════════════════════════════
 

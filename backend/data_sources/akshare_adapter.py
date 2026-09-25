@@ -388,10 +388,10 @@ class AKShareAdapter(BaseDataSource):
     _LSJZ_MAX_PAGES: int = 8
 
     async def _get_otc_fund_nav_raw(self, code: str, period: int) -> Optional[pd.DataFrame]:
-        """直接调用天天基金原始 API 获取场外基金净值（备用）
+        """直接调用天天基金原始 API 获取场外基金净值（策略 2 兜底）
 
-        当 akshare 的 fund_open_fund_info_em 失败时使用此接口。
-        这是天天基金前端页面真实调用的 API，稳定性远高于 akshare 的页面解析。
+        pingzhongdata 直取失败时使用此接口。
+        这是天天基金前端页面真实调用的 API，稳定性远高于页面 JS 解析链路。
         接口按页返回（每页固定 20 行），此处循环翻页拼够 period 条净值为止。
         """
         import requests
@@ -466,24 +466,58 @@ class AKShareAdapter(BaseDataSource):
         logger.debug(f"天天基金原始 API 返回空数据 code={code}")
         return None
 
+    async def _get_otc_nav_from_js(self, code: str) -> Optional[pd.DataFrame]:
+        """策略 1 数据源：直取 pingzhongdata 的单位净值走势（纯 Python 解析）
+
+        列名与 akshare 对齐：净值日期(YYYY-MM-DD 字符串) / 单位净值 / 日增长率。
+        时间戳按 akshare 同口径换算（UTC 毫秒 → Asia/Shanghai 日期）。
+        """
+        from backend.services.fund_detail_service import fetch_net_worth_trend
+
+        rows = await fetch_net_worth_trend(code)
+        valid = [r for r in rows or [] if r.get("x") is not None]
+        if not valid:
+            return None
+
+        dates = (
+            pd.to_datetime([r["x"] for r in valid], unit="ms", utc=True)
+            .tz_convert("Asia/Shanghai")
+            .strftime("%Y-%m-%d")
+        )
+        df = pd.DataFrame(
+            {
+                "净值日期": dates,
+                "单位净值": [r.get("y") for r in valid],
+                "日增长率": [r.get("equityReturn") for r in valid],
+            }
+        )
+        df["单位净值"] = pd.to_numeric(df["单位净值"], errors="coerce")
+        df["日增长率"] = pd.to_numeric(df["日增长率"], errors="coerce")
+        df = df.dropna(subset=["单位净值"]).sort_values("净值日期")
+        return df if not df.empty else None
+
     async def _get_otc_fund_data(self, code: str, period: int) -> FundData:
         """获取场外基金净值数据
 
-        策略 1: akshare fund_open_fund_info_em
-        策略 2: 天天基金原始 API（akshare 对场外基金支持不好时降级）
+        策略 1: pingzhongdata 直取（纯 Python 解析单位净值走势）
+        策略 2: 天天基金 f10/lsjz 原始 API
+
+        策略 1 原为 akshare fund_open_fund_info_em，2026-09-24 换掉：它下载的就是
+        同一个 pingzhongdata 文件，但需经 py_mini_racer(V8) 执行，文件被风控改写或
+        容器内 V8 异常时整只基金报 "[JSParseException] Unknown JavaScript error
+        during parse"，每次全量分析都刷一条"限流/封禁"告警。实测两链路对
+        007491/018896/011452 的行数与最新净值完全一致。
         """
         fund_data = FundData(code=code)
         df = None
 
-        # 策略 1: akshare
+        # 策略 1: pingzhongdata 直取
         try:
-            df = await self._call(ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势", _max_attempts=1)
-            if df is not None and df.empty:
-                df = None
+            df = await self._get_otc_nav_from_js(code)
         except Exception as e:
-            logger.warning(f"场外基金净值获取失败 code={code} (akshare): {e}")
+            logger.warning(f"场外基金净值获取失败 code={code} (pingzhongdata): {e}")
 
-        # 策略 2: 天天基金原始 API（akshare 失败时降级）
+        # 策略 2: 天天基金 f10/lsjz 原始 API（pingzhongdata 取不到时降级）
         if df is None:
             logger.info(f"尝试天天基金原始 API 获取 code={code}")
             df = await self._get_otc_fund_nav_raw(code, period)
