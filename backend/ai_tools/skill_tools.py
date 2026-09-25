@@ -22,7 +22,33 @@ from backend.ai_tools.registry import ToolDef
 logger = logging.getLogger(__name__)
 
 
-def _make_handler(skill_id: int):
+# 原生数据型 skill：name → 数据引擎调用（返回真实结构化结果，非纯指导文本）
+_DATA_SKILLS = {
+    "组合X光透视": "_run_xray",
+    "调仓建议自进化": "_run_advice_stats",
+}
+
+
+async def _run_xray(db: AsyncSession, **kwargs) -> dict:
+    """组合 X 光数据引擎（fund_ids 逗号分隔可选）"""
+    from backend.services.portfolio_xray_service import PortfolioXrayService
+    fund_ids = kwargs.get("fund_ids")
+    ids = (
+        [int(x) for x in str(fund_ids).split(",") if x.strip().isdigit()]
+        if fund_ids else None
+    )
+    svc = PortfolioXrayService(db)
+    result = await svc.xray(ids)
+    result["summary_md"] = PortfolioXrayService.summary_md(result)
+    return {"xray": result}
+
+
+async def _run_advice_stats(db: AsyncSession, **kwargs) -> dict:
+    from backend.services.advice_learning_service import AdviceLearningStore
+    return {"advice_stats": AdviceLearningStore().stats()}
+
+
+def _make_handler(skill_id: int, skill_name: str = ""):
     async def _handler(db: AsyncSession, **kwargs) -> dict:
         from backend.models.ai_skill import AISkill
         from backend.services.ai_skill_service import render_skill_prompts
@@ -30,9 +56,34 @@ def _make_handler(skill_id: int):
         skill = await db.get(AISkill, skill_id)
         if skill is None or not skill.enabled:
             return {"skill": skill_id, "error": "Skill 不存在或已停用"}
+
+        # 2026-09-24 新增：数据型 skill → 调真实引擎返回结构化结果 +
+        # 技能解读框架（Agent 拿到数据与框架两层，分析无偏差）
+        engine_name = _DATA_SKILLS.get(skill.name)
+        if engine_name:
+            try:
+                engine_fn = globals().get(engine_name)
+                if engine_fn is None:
+                    engine_fn = await _lazy_engine(engine_name)
+                data = await engine_fn(db, **kwargs)
+                rendered = await render_skill_prompts([skill], db)
+                return {
+                    "skill": skill.name,
+                    "data": data,
+                    "guidance": rendered[0][1] if rendered else "",
+                }
+            except Exception as e:
+                return {"skill": skill.name, "error": f"数据引擎失败: {e}"}
+
         rendered = await render_skill_prompts([skill], db)
         return {"skill": skill.name, "guidance": rendered[0][1] if rendered else ""}
     return _handler
+
+
+async def _lazy_engine(name: str):
+    import importlib
+    mod = importlib.import_module("backend.ai_tools.skill_tools")
+    return getattr(mod, name)
 
 
 def parse_tool_spec(raw: Optional[str]) -> Optional[dict]:

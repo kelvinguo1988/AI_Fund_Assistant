@@ -599,3 +599,22 @@ async def clear_concept_map():
         n = (await session.execute(delete(ConceptBoardMap))).rowcount
         await session.commit()
     return ApiResponse(data=n)
+
+
+# ── 组合 X 光透视（2026-09-24，借鉴 fundadvisor portfolio_xray）──────
+
+@router.get("/xray")
+async def portfolio_xray(
+    fund_ids: Optional[str] = Query(None, description="逗号分隔基金 ID，空=全部活跃"),
+    db: AsyncSession = Depends(get_db),
+):
+    """组合 X 光：个股穿透 HHI / 两两 Jaccard 重叠 / 经理公司集中度 / 多样化评分"""
+    from backend.services.portfolio_xray_service import PortfolioXrayService
+    ids = [int(x) for x in fund_ids.split(",") if x.strip().isdigit()] if fund_ids else None
+    svc = PortfolioXrayService(db)
+    try:
+        result = await svc.xray(ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    result["summary_md"] = PortfolioXrayService.summary_md(result)
+    return ApiResponse(data=result)

@@ -425,6 +425,7 @@ async def init_db() -> None:
                     existing.updated_at = now
                     logger.info(f"已重新激活因子: {cfg['name']} ({cfg['code']})")
 
+
             if not _factor_reactivation_done:
                 session.add(SystemConfig(
                     config_key="factor_reactivation_v1",
@@ -433,7 +434,74 @@ async def init_db() -> None:
                     updated_at=now_beijing(),
                 ))
 
+
+
             await session.commit()
+
+    # ── 原生 Skill 补种（组合 X 光 / 调仓自进化，2026-09-24）──
+    # 无条件执行（空库/已有库都补；按 name 检查，不覆盖用户改动）
+    async with async_session_factory() as session:
+        from backend.models.ai_skill import AISkill
+        now = now_beijing()
+        # ── 原生 Skill 补种（组合 X 光 / 调仓自进化，2026-09-24）──
+        # 无条件执行（空库/已有库都补，按 name 检查不覆盖用户改动）
+        # ── 原生 Skill 补种（组合 X 光 / 调仓自进化，2026-09-24）──
+        _native_skills = [
+            {
+                "name": "组合X光透视",
+                "description": "持仓穿透与集中度分析：个股HHI/两两Jaccard重叠/经理公司单点依赖/多样化评分",
+                "system_prompt": (
+                    "你是组合结构诊断专家。用户会给出组合X光数据（HHI、两两重叠、经理/公司集中度、"
+                    "多样化评分），请按以下框架解读：\n"
+                    "1. 评分与等级总评（80+优/60+良/40+中/其余差）\n"
+                    "2. 穿透视角：HHI 与等效持股数说明真分散程度，指出组合层第一大重仓及其占比\n"
+                    "3. 伪分散识别：两两重叠 ≥5 只的基金对点名，说明'两只基金实为同一暴露'\n"
+                    "4. 单点依赖：同一经理 ≥35% 仓位、同一公司 ≥60% 基金的风险\n"
+                    "5. 给出 1~3 条具体调仓建议（引用数据）\n"
+                    "注意：评分是可解释扣分制，逐项引用扣分原因；所有建议仅供参考。"
+                ),
+                "enabled": True,
+                "tool_spec": json.dumps({
+                    "description": "对基金池或指定基金做组合X光透视（穿透HHI/重叠矩阵/集中度/评分）",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "fund_ids": {"type": "string", "description": "逗号分隔基金ID，空=全部活跃"}
+                        },
+                    },
+                }),
+            },
+            {
+                "name": "调仓建议自进化",
+                "description": "调仓建议命中率统计与阈值校准状态查询（建议落库→30天回填→自动校准）",
+                "system_prompt": (
+                    "你是建议质量复盘助手。用户会给出调仓建议的历史命中率统计"
+                    "（sell/buy 各自总数与命中数）与当前校准参数（止盈/止损线）。\n"
+                    "解读框架：\n"
+                    "1. 样本量说明（<5 条时明确'样本不足，暂不下结论'）\n"
+                    "2. sell 命中率低 = 卖出信号过于敏感，止损线应向保守收紧\n"
+                    "3. buy 命中率低 = 买入信号追高，止盈线应下调\n"
+                    "4. 引用具体数字，不做无数据支撑的断言；所有内容仅供参考。"
+                ),
+                "enabled": True,
+                "tool_spec": json.dumps({
+                    "description": "查询调仓建议的历史命中率与阈值校准状态",
+                    "parameters": {"type": "object", "properties": {}},
+                }),
+            },
+        ]
+        for sk in _native_skills:
+            exists = await session.execute(
+                select(AISkill).where(AISkill.name == sk["name"])
+            )
+            if exists.scalars().first() is None:
+                session.add(AISkill(
+                    name=sk["name"], description=sk["description"],
+                    system_prompt=sk["system_prompt"], enabled=sk["enabled"],
+                    tool_spec=sk["tool_spec"], created_at=now, updated_at=now,
+                ))
+                logger.info(f"已补种原生 Skill: {sk['name']}")
+        await session.commit()
 
     # ── 修复评分阈值配置中的重复 heavy_sell 档位（旧版 -100 catch-all）──
     async with async_session_factory() as session:

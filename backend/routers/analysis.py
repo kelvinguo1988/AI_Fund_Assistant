@@ -433,3 +433,43 @@ async def compare_funds(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return ApiResponse(data=report)
+
+
+# ── 调仓建议自进化（2026-09-24）──────────────────────────────────────
+
+@router.get("/advice-stats")
+async def advice_stats():
+    """调仓建议命中率统计与阈值校准状态"""
+    from backend.services.advice_learning_service import AdviceLearningStore
+    store = AdviceLearningStore()
+    return ApiResponse(data=store.stats())
+
+
+@router.post("/advice-eval")
+async def advice_evaluate():
+    """回填到期建议的实际表现并尝试校准（调度/手动触发）"""
+    from backend.services.advice_learning_service import AdviceLearningStore
+    from backend.data_sources.akshare_adapter import AKShareAdapter
+    from backend.services.review_service import _fetch_nav_series
+
+    store = AdviceLearningStore()
+    adapter = AKShareAdapter()
+    evaluated = 0
+    for item in store.pending_evaluations():
+        try:
+            series = await _fetch_nav_series(adapter, item["fund_code"], 90)
+            if not series or len(series) < 2:
+                continue
+            # 评估窗口：建议落库日 → +30 天内的实际涨跌
+            from datetime import datetime as dt
+            base = dt.strptime(item["ts"][:10], "%Y-%m-%d")
+            in_window = [(d, v) for d, v in series if d >= item["ts"][:10]]
+            if len(in_window) < 2:
+                continue
+            fund_chg = (in_window[-1][1] / in_window[0][1] - 1) * 100
+            store.record_outcome(item["advice_id"], item["action"], fund_chg, 0.0)
+            evaluated += 1
+        except Exception as e:
+            logger.warning(f"建议回填失败 {item['fund_code']}: {e}")
+    cal = store.calibrate()
+    return ApiResponse(data={"evaluated": evaluated, "calibration": cal})

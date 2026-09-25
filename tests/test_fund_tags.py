@@ -418,3 +418,106 @@ class TestTypeEquivalenceStructured:
         assert eq("指数型-其他", "商品型-非QDII")        # 4 条假告警
         assert eq("债券型-混合二级", "债券型-普通债券")  # 雪球粗桶，4 条假告警
         assert eq("QDII", "混合型-偏股")
+
+
+# ── 组合 X 光（借鉴 fundadvisor，2026-09-24）─────────────────────────
+
+class TestXrayScore:
+    def _fund(self, code, name, manager="", company="", holdings=None):
+        return {"code": code, "name": name, "manager": manager,
+                "company": company, "holdings": holdings or []}
+
+    def test_concentrated_portfolio_low_score(self):
+        """两只基金重仓完全相同 → 高重叠扣分 + 警告"""
+        from backend.services.portfolio_xray_service import xray_score
+        holds = [("600001", "甲", 8.0), ("600002", "乙", 7.0), ("600003", "丙", 6.0),
+                 ("600004", "丁", 5.0), ("600005", "戊", 5.0), ("600006", "己", 5.0)]
+        funds = [
+            self._fund("A", "基金A", "经理1", "公司1", holds),
+            self._fund("B", "基金B", "经理1", "公司1", holds),  # 同经理同持仓
+        ]
+        r = xray_score(funds)
+        assert r["score"] < 70, f"高度重叠应低分，实际 {r['score']}"
+        assert any("重叠" in w for w in r["warnings"])
+        assert any("同一经理" in w for w in r["warnings"])
+        assert r["overlaps"][0]["common"] == 6
+
+    def test_diversified_portfolio(self):
+        """持仓完全不同 → 无重叠警告；两基金各 50% 同为单一经理 →
+        触发 MINOR 经理集中警告（35% 阈值，设计内行为）"""
+        from backend.services.portfolio_xray_service import xray_score
+        funds = [
+            self._fund("A", "A", "m1", "c1",
+                       [(f"60000{i}", f"股{i}", 3.0) for i in range(10)]),
+            self._fund("B", "B", "m2", "c2",
+                       [(f"00010{i}", f"股{i}", 3.0) for i in range(10)]),
+        ]
+        r = xray_score(funds)
+        assert r["overlaps"] == [] or all(o["common"] == 0 for o in r["overlaps"])
+        assert r["deductions"]["overlap"] == 0.0
+        assert r["deductions"]["hhi"] == 0.0  # 20 只不同股，HHI 极低
+        assert any("同一经理" in w or "集中于经理" in w for w in r["warnings"])
+
+    def test_jaccard_math(self):
+        from backend.services.portfolio_xray_service import xray_score
+        funds = [
+            self._fund("A", "A", holdings=[("1", "a", 5.0), ("2", "b", 5.0),
+                                           ("3", "c", 5.0), ("4", "d", 5.0)]),
+            self._fund("B", "B", holdings=[("3", "c", 5.0), ("4", "d", 5.0),
+                                           ("5", "e", 5.0), ("6", "f", 5.0)]),
+        ]
+        r = xray_score(funds)
+        # 交集 2 / 并集 6 = 0.333
+        assert r["overlaps"][0]["jaccard"] == 0.333
+
+    def test_single_fund_penalty(self):
+        """单基金且单股 → HHI 满罚 35 + 单基金 20 = 45 分"""
+        from backend.services.portfolio_xray_service import xray_score
+        r = xray_score([self._fund("A", "A", holdings=[("1", "a", 5.0)])])
+        assert r["deductions"]["single_fund"] == 20.0
+        assert r["deductions"]["hhi"] == 35.0
+        assert r["score"] == 45.0
+
+
+# ── 建议自进化存储（2026-09-24）──────────────────────────────────────
+
+class TestAdviceLearning:
+    def test_log_and_stats(self, tmp_path, monkeypatch):
+        from backend.services import advice_learning_service as mod
+        dbfile = tmp_path / "al.db"
+        monkeypatch.setattr(mod, "AdviceLearningStore", mod.AdviceLearningStore)
+        import importlib
+        # 注入临时路径：直接构造实例并替换连接
+        store = mod.AdviceLearningStore.__new__(mod.AdviceLearningStore)
+        import sqlite3, threading
+        store._w = threading.Lock()
+        store._conn = sqlite3.connect(str(dbfile), check_same_thread=False)
+        store._conn.executescript(mod._SCHEMA)
+        store._conn.commit()
+
+        store.log_advice("016874", "sell", "测试卖出", 2.0)
+        store.record_outcome(1, "sell", -3.5, 0.5)  # sell 跌 → hit=1
+        st = store.stats()
+        assert st["sell_total"] == 1 and st["sell_hits"] == 1
+
+    def test_pending_evaluations(self, tmp_path):
+        from backend.services import advice_learning_service as mod
+        import sqlite3, threading
+        from datetime import datetime, timedelta
+        store = mod.AdviceLearningStore.__new__(mod.AdviceLearningStore)
+        store._w = threading.Lock()
+        store._conn = sqlite3.connect(str(tmp_path / "al2.db"), check_same_thread=False)
+        store._conn.executescript(mod._SCHEMA)
+        # 40 天前的建议（到评估期）
+        old_ts = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+        store._conn.execute(
+            "INSERT INTO advice_log (ts, fund_code, action) VALUES (?, 'x', 'sell')",
+            (old_ts,))
+        # 昨天的建议（未到期）
+        y_ts = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        store._conn.execute(
+            "INSERT INTO advice_log (ts, fund_code, action) VALUES (?, 'y', 'buy')",
+            (y_ts,))
+        store._conn.commit()
+        pend = store.pending_evaluations()
+        assert len(pend) == 1 and pend[0]["fund_code"] == "x"
