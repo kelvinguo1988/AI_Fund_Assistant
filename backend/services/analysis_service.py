@@ -30,6 +30,7 @@ from backend.schemas.analysis import (
     AnalysisResultOut, FactorScore,
     AnalysisExportItem, AnalysisExportPayload, AnalysisImportResult,
 )
+from backend.services.error_log_service import log_source_failure
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,29 @@ _STREAM_CHUNK_SIZE = 5
 
 # 第零层质量过滤的空数据告警只提示一次（避免每轮分析刷屏）
 _quarterly_empty_warned = False
+
+
+def _no_nav_reason(fd: FundData) -> Optional[str]:
+    """取数成功但没有任何净值/收盘价时的成因标记；返回 None 表示数据可用
+
+    数据源在两套策略都拿不到净值时不会抛异常，而是回一个空壳 FundData（如池中
+    已失效的代码）。若不拦截，所有因子都对空序列返回 0.0 并一起进入截面标准化：
+    既拉偏其他基金的标准化样本，又给自己留下一条永远不会变的"观望"记录。
+    """
+    if not fd.close_history and fd.close is None:
+        return "无净值序列"
+    return None
+
+
+def _log_missing_nav(fund: Fund, reason: str) -> None:
+    """无净值埋点（category=data；同代码 60s 内只记一次）"""
+    log_source_failure(
+        module="analysis.data_missing",
+        message=f"基金 {fund.code} {reason}，已跳过评分",
+        category="data",
+        severity="warning",
+        detail=f"name={fund.name}",
+    )
 
 
 def _inject_regime_params(params_json, snapshot) -> dict:
@@ -120,8 +144,10 @@ class AnalysisService:
         )
         records = result.scalars().all()
         if not records:
-            # fund_quarterly 目前全仓无写入链路（只有读取），空表意味着
-            # 清盘否决/规模冲击/仓位漂移/机构认可度全部静默失效 —— 显式告警而非假装有数据
+            # 写入链路：「刷新数据」→ extended_detail 同源落库
+            # （services/fund_quarterly_service.py）。空表 = 该库还没成功跑过一次
+            # 详情刷新，此时清盘否决/规模冲击/仓位漂移/机构认可度全部按中性处理
+            # —— 显式告警而非假装有数据
             global _quarterly_empty_warned
             if not _quarterly_empty_warned:
                 _quarterly_empty_warned = True
@@ -191,6 +217,10 @@ class AnalysisService:
                 fd = await self.data_source.get_fund_data(
                     fund.code, fund_type=getattr(fund, "fund_type", None)
                 )
+                reason = _no_nav_reason(fd)
+                if reason:
+                    _log_missing_nav(fund, reason)
+                    return fund, None
                 return fund, fd
             except Exception as e:
                 logger.error(
@@ -316,6 +346,10 @@ class AnalysisService:
                 fd = await self.data_source.get_fund_data(
                     fund.code, fund_type=getattr(fund, "fund_type", None)
                 )
+                reason = _no_nav_reason(fd)
+                if reason:
+                    _log_missing_nav(fund, reason)
+                    return fund, None, None, reason
                 fs = await asyncio.to_thread(factor_engine.calculate_all, fd, cfg.regime_factors)
                 return fund, fd, fs, None
             except Exception as e:

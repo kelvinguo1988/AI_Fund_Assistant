@@ -68,6 +68,7 @@ _PAT_FLUCTUATION_SCALE = re.compile(r'var\s+Data_fluctuationScale\s*=\s*(\{)')
 _PAT_HOLDER_STRUCTURE = re.compile(r'var\s+Data_holderStructure\s*=\s*(\{)')
 _PAT_ASSET_ALLOCATION = re.compile(r'var\s+Data_assetAllocation\s*=\s*(\{)')
 _PAT_NET_WORTH_TREND = re.compile(r'var\s+Data_netWorthTrend\s*=\s*(\[)')
+_PAT_BUY_SEDEMPTION = re.compile(r'var\s+Data_buySedemption\s*=\s*(\{)')
 
 
 def _extract_js_array(text: str, start_pattern: re.Pattern) -> Optional[list]:
@@ -137,13 +138,23 @@ def _parse_net_worth_trend(js_text: str) -> Optional[list]:
     return _extract_js_array(js_text, _PAT_NET_WORTH_TREND)
 
 
+def _parse_buy_sedemption(js_text: str) -> Optional[dict]:
+    """解析期间申购/赎回/总份额 Data_buySedemption
+
+    此前白扔的一组数据；总份额（亿份）是把"内部持有比例"换算成份额的乘数，
+    第零层质量过滤的内部人增持检查需要份额而非比例。
+    """
+    return _extract_js_object(js_text, _PAT_BUY_SEDEMPTION)
+
+
 def _parse_extended_data(js_text: str) -> dict:
-    """从 JS 文本中解析全部扩展数据（4类）"""
+    """从 JS 文本中解析全部扩展数据（5类）"""
     return {
         "grand_total": _parse_grand_total(js_text),
         "fluctuation_scale": _parse_fluctuation_scale(js_text),
         "holder_structure": _parse_holder_structure(js_text),
         "asset_allocation": _parse_asset_allocation(js_text),
+        "buy_sedemption": _parse_buy_sedemption(js_text),
     }
 
 

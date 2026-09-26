@@ -100,6 +100,67 @@ class TestComputeHoldingsGrowth:
         assert growth == pytest.approx(1.0)
 
 
+class TestPositionAwareGrowth:
+    """季度股票仓位可用时的单一模型：披露部分按权重、未披露股票部分跟指数
+
+    取代原先两个硬假设分支（高覆盖把整只基金当纯股票、低覆盖按 60% 拍仓位）。
+    """
+
+    def test_replaces_normalized_assumption_with_real_position(self):
+        holdings = [("600000", 50.0), ("600036", 30.0)]
+        pct = {"600000": 2.0, "600036": -1.0}
+        growth, cov, model = compute_holdings_growth(
+            holdings, pct, index_pct=1.0, stock_position_ratio=90.0
+        )
+        # 50*2/100 + 30*-1/100 + (0.9-0.8)*1 = 1.0 - 0.3 + 0.1 = 0.8
+        assert growth == pytest.approx(0.8)
+        assert cov == pytest.approx(0.8)
+        assert model == "position_aware"
+
+    def test_bond_cash_part_contributes_zero_not_index(self):
+        """六成仓位的混合基金不再被当成满仓股票放大指数涨跌"""
+        holdings = [("600000", 20.0)]
+        pct = {"600000": 2.0}
+        growth, _, model = compute_holdings_growth(
+            holdings, pct, index_pct=1.0, stock_position_ratio=60.0
+        )
+        # 0.4 + (0.6-0.2)*1 = 0.8；旧 normalized 会给出 2.0
+        assert growth == pytest.approx(0.8)
+        assert model == "position_aware"
+
+    def test_coverage_above_reported_position_clamps_residual(self):
+        """披露权重已超过季报股票仓位（仓位数据偏旧/持仓集中）时不外推"""
+        holdings = [("600000", 50.0)]
+        pct = {"600000": 2.0}
+        growth, _, model = compute_holdings_growth(
+            holdings, pct, index_pct=1.0, stock_position_ratio=50.0
+        )
+        assert growth == pytest.approx(1.0)  # 只有披露部分的贡献
+        assert model == "position_aware"
+
+    def test_missing_position_keeps_legacy_branches(self):
+        holdings = [("600000", 30.0)]
+        pct = {"600000": 2.0}
+        assert compute_holdings_growth(holdings, pct, 1.0, None)[2] == "index_blend"
+        assert compute_holdings_growth(holdings, pct, 1.0, 0.0)[2] == "index_blend"
+
+    def test_position_without_index_falls_back(self):
+        """有仓位但拿不到指数：无法补未披露部分，退回旧口径而不是少算一块"""
+        holdings = [("600000", 50.0)]
+        pct = {"600000": 2.0}
+        growth, _, model = compute_holdings_growth(
+            holdings, pct, index_pct=None, stock_position_ratio=90.0
+        )
+        assert model == "normalized"
+        assert growth == pytest.approx(2.0)
+
+    def test_ultra_low_coverage_still_returns_none(self):
+        growth, _, model = compute_holdings_growth(
+            [("600000", 0.1)], {"600000": 2.0}, 1.0, 94.0
+        )
+        assert growth is None and model == ""
+
+
 # ── 服务降级链 ────────────────────────────────────────────────────────
 
 class _FakeFund:
@@ -116,27 +177,7 @@ async def test_fundgz_failure_falls_back_to_holdings(monkeypatch):
     FundRealtimeService._fundgz_fail_until = float("inf")
     FundRealtimeService._estimate_cache.clear()
     try:
-        from backend.models.fund_holding import FundHolding
-
-        class _FakeDB:
-            async def execute(self, stmt):
-                class R:
-                    def all(self):
-                        return [(1, "2026年2季度股票投资明细")]
-
-                    def scalars(self):
-                        class S:
-                            def all(self_inner):
-                                h = FundHolding(
-                                    fund_id=1, stock_code="600000",
-                                    stock_name="浦发银行", ratio=60.0,
-                                    quarter_label="2026年2季度股票投资明细",
-                                )
-                                return [h]
-                        return S()
-                return R()
-
-        svc = FundRealtimeService(db=_FakeDB())
+        svc = FundRealtimeService(db=_HoldingsQueryDB([("600000", "浦发银行", 60.0)]))
 
         async def _fake_stock_spot(self, codes=None):
             return {"600000": 2.0}
@@ -282,29 +323,47 @@ class TestTop10ReportRendering:
 
 # ── 持仓自算：港股持仓覆盖（2026-09-01 修复）────────────────────────────
 
-def _fake_holdings_db(holdings):
-    """构造返回指定持仓的假 DB（_fill_from_holdings 只查 fund_holdings）"""
-    from backend.models.fund_holding import FundHolding
+class _Rows:
+    def __init__(self, rows):
+        self._rows = rows
 
-    class _FakeDB:
-        async def execute(self, stmt):
-            class R:
-                def all(self):
-                    return [(1, "2026年2季度股票投资明细")]
+    def all(self):
+        return list(self._rows)
 
-                def scalars(self):
-                    class S:
-                        def all(self_inner):
-                            return [
-                                FundHolding(
-                                    fund_id=1, stock_code=c, stock_name=n,
-                                    ratio=r, quarter_label="2026年2季度股票投资明细",
-                                )
-                                for c, n, r in holdings
-                            ]
-                    return S()
-            return R()
-    return _FakeDB()
+    def scalars(self):
+        return self
+
+
+class _HoldingsQueryDB:
+    """_fill_from_holdings 的假 DB：回应报告期/持仓/季度仓位三类查询
+
+    `fund_quarterly` 显式返回空行 = 该库还没跑过季度数据落库，仓位感知估值
+    自动退回旧的归一/混合法（若沿用通配桩，季度仓位查询会拿到持仓行并解包报错）。
+    """
+
+    def __init__(self, holdings, quarterly_rows=None):
+        self._holdings = holdings
+        self._quarterly_rows = quarterly_rows or []
+
+    async def execute(self, stmt):
+        from backend.models.fund_holding import FundHolding
+
+        if "fund_quarterly" in str(stmt):
+            return _Rows(self._quarterly_rows)
+        if "fund_holdings" in str(stmt) and "DISTINCT" not in str(stmt).upper():
+            return _Rows([
+                FundHolding(
+                    fund_id=1, stock_code=c, stock_name=n, ratio=r,
+                    quarter_label="2026年2季度股票投资明细",
+                )
+                for c, n, r in self._holdings
+            ])
+        return _Rows([(1, "2026年2季度股票投资明细")])
+
+
+def _fake_holdings_db(holdings, quarterly_rows=None):
+    """构造返回指定持仓的假 DB（持仓自算路径）"""
+    return _HoldingsQueryDB(holdings, quarterly_rows)
 
 
 @pytest.mark.asyncio
@@ -342,6 +401,36 @@ async def test_fill_from_holdings_merges_hk_quotes(monkeypatch):
         assert r["growth_pct"] == pytest.approx(3.0)
         assert r["coverage"] == pytest.approx(0.6)
         assert r["est_model"] == "normalized"
+    finally:
+        FundRealtimeService._fundgz_fail_until = 0.0
+        FundRealtimeService._estimate_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_fill_from_holdings_uses_quarterly_position(monkeypatch):
+    """fund_quarterly 有已生效仓位 → 仓位感知模型（取代归一法/60% 拍的混合法）"""
+    FundRealtimeService._fundgz_fail_until = float("inf")
+    FundRealtimeService._estimate_cache.clear()
+    try:
+        svc = FundRealtimeService(db=_fake_holdings_db(
+            [("600000", "浦发银行", 30.0)],
+            quarterly_rows=[(1, "2026-06-30", 60.0)],
+        ))
+
+        async def _fake_stock(self, codes=None):
+            return {"600000": 2.0}
+
+        async def _fake_index(self):
+            return 1.0
+
+        monkeypatch.setattr(FundRealtimeService, "_get_stock_spot", _fake_stock)
+        monkeypatch.setattr(FundRealtimeService, "_get_index_pct", _fake_index)
+
+        results = await svc.get_realtime([_FakeFund(1, "000001", "测试基金")])
+        r = results["000001"]
+        # 30*2/100 + (0.6 − 0.3)×1 = 0.6 + 0.3
+        assert r["est_model"] == "position_aware"
+        assert r["growth_pct"] == pytest.approx(0.9)
     finally:
         FundRealtimeService._fundgz_fail_until = 0.0
         FundRealtimeService._estimate_cache.clear()

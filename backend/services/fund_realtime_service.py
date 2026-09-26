@@ -182,18 +182,24 @@ def compute_holdings_growth(
     holdings: list[tuple[str, Optional[float]]],
     stock_pct: dict[str, float],
     index_pct: Optional[float] = None,
+    stock_position_ratio: Optional[float] = None,
 ) -> tuple[Optional[float], float, str]:
     """按持仓权重估算场外基金盘中涨跌幅
 
     Args:
         holdings: [(stock_code, 占净值百分比), ...] 最新季报持仓
         stock_pct: {stock_code: 今日涨跌幅%}
-        index_pct: 沪深300 今日实时涨跌幅%（低覆盖混合法用）
+        index_pct: 沪深300 今日实时涨跌幅%（未披露股票部分的跟随）
+        stock_position_ratio: 最新已生效季报的股票仓位（%），来自 fund_quarterly。
+            有值时走仓位感知模型，取代原先"高覆盖归一 / 低覆盖按 60% 拍股票仓位"
+            两个硬假设分支。
 
     Returns:
         (growth_pct, coverage, est_model)
-        - 归一法 "normalized"（coverage ≥ 0.5）
-        - 指数混合法 "index_blend"（coverage < 0.5 且 index_pct 可用）
+        - "position_aware"：Σ(已披露权重×涨跌) + max(0, 股票仓位 − 覆盖率)×指数涨跌
+          即未披露的股票部分跟随指数，债券/现金记零波动
+        - 归一法 "normalized"（无季度仓位数据且 coverage ≥ 0.5）
+        - 指数混合法 "index_blend"（无季度仓位数据且 coverage < 0.5 且指数可用）
         - 覆盖率 < MIN_VIABLE_COVERAGE → (None, coverage, "")  # 不产生假数字
         - 无可用持仓/行情 → (None, 0.0, "")
     """
@@ -215,6 +221,14 @@ def compute_holdings_growth(
     # 覆盖率过低时不估值：结果实质是沪深300涨跌，与基金本身无关（假数字）
     if coverage < MIN_VIABLE_COVERAGE:
         return None, coverage, ""
+
+    r_stock = (stock_position_ratio or 0.0) / 100.0
+    if r_stock > 0 and index_pct is not None:
+        # 覆盖率超过季报披露的股票仓位时残差取 0（该部分已全在 top10 里），
+        # 不再外推，避免把整只基金放大成纯股票组合
+        residual = max(0.0, r_stock - coverage)
+        return weighted_sum / 100.0 + residual * index_pct, coverage, "position_aware"
+
     if coverage >= LOW_COVERAGE_THRESHOLD:
         return weighted_sum / weight_total, coverage, "normalized"
 
@@ -1028,6 +1042,8 @@ class FundRealtimeService:
         if not by_fund:
             return
 
+        positions = await self._latest_stock_positions(list(by_fund.keys()))
+
         # 收集所需个股代码 → 快照降级链可用腾讯按需（只查所需，轻量）。
         # 5 位纯数字代码为港股（A 股 6 位），需走港股行情接口；
         # 与 get_top10_changes 的口径保持一致，否则含港股的基金覆盖率被拉低、
@@ -1060,7 +1076,8 @@ class FundRealtimeService:
             if not holdings:
                 continue
             growth, coverage, model = compute_holdings_growth(
-                holdings, pct_map, index_pct
+                holdings, pct_map, index_pct,
+                stock_position_ratio=positions.get(f.id),
             )
             if growth is None:
                 continue
@@ -1079,6 +1096,37 @@ class FundRealtimeService:
             self._cache_estimate(f.code, results[f.code])
         # 行情时点兜底填充（腾讯路径已在快照成功时记录可信时间）
         FundRealtimeService._update_quote_time()
+
+    async def _latest_stock_positions(self, fund_ids: list[int]) -> dict[int, float]:
+        """各基金最新「已生效」季报的股票仓位（%）—— 仓位感知估值的输入
+
+        生效判定与第零层质量过滤一致（effective_date <= 今天）：季报要等披露后
+        才能用，否则盘中估值会引用尚未公开的数据。取不到返回空 dict，
+        compute_holdings_growth 自动退回原归一/混合法。
+        """
+        from sqlalchemy import select
+        from backend.models.fund_quarterly import FundQuarterly
+
+        if not fund_ids:
+            return {}
+        today = now_beijing().date().isoformat()
+        rows = (await self.db.execute(
+            select(
+                FundQuarterly.fund_id,
+                FundQuarterly.report_date,
+                FundQuarterly.stock_position_ratio,
+            )
+            .where(
+                FundQuarterly.fund_id.in_(fund_ids),
+                FundQuarterly.stock_position_ratio.isnot(None),
+                FundQuarterly.effective_date <= today,
+            )
+            .order_by(FundQuarterly.fund_id, FundQuarterly.report_date)
+        )).all()
+        out: dict[int, float] = {}
+        for fid, _report_date, ratio in rows:  # 升序遍历，最后一条即最新
+            out[fid] = ratio
+        return out
 
     # ── 缓存 ────────────────────────────────────────────────────────────
 

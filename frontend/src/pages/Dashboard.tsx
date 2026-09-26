@@ -747,7 +747,7 @@ const Dashboard: React.FC = () => {
                               ? '天天基金官方盘中估值'
                               : rt.source === 'etf_spot'
                               ? '场内实时行情'
-                              : `持仓加权估算（覆盖率 ${Math.round((rt.coverage ?? 0) * 100)}%，${rt.est_model === 'index_blend' ? '含指数混合' : '归一法'}）`)
+                              : `持仓加权估算（覆盖率 ${Math.round((rt.coverage ?? 0) * 100)}%，${rt.est_model === 'position_aware' ? '未披露股票仓位部分按指数混合' : rt.est_model === 'index_blend' ? '含指数混合' : '归一法'}）`)
                             + (rt.quote_time ? `\n行情时间: ${rt.quote_time}` : '')
                             + (rt.hints?.length
                               ? '\n' + rt.hints.map((h) => `${h.level === 'warning' ? '⚠' : h.level === 'positive' ? '✓' : 'ℹ'} ${h.message}`).join('\n')

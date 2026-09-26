@@ -111,7 +111,7 @@ export interface FundRealtimeOut {
   growth_pct: number | null;
   quote_time: string | null;
   coverage: number | null;
-  est_model: 'official' | 'normalized' | 'index_blend' | 'market_price' | null;
+  est_model: 'official' | 'normalized' | 'index_blend' | 'position_aware' | 'market_price' | null;
   hints?: { type: string; level: string; message: string }[];
 }
 

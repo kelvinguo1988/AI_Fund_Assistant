@@ -33,7 +33,8 @@ class FundQuarterly(Base):
         String(10), nullable=False, comment="报告期日期 如 2025-03-31"
     )
     effective_date: Mapped[str] = mapped_column(
-        String(10), nullable=False, comment="生效日期（报告期次月第一个交易日）"
+        String(10), nullable=False,
+        comment="生效日期（季报报告期 +2 个月、半年报/年报 +3 个月后的首个工作日）"
     )
     # ── 规模数据 ──
     fund_size: Mapped[Optional[float]] = mapped_column(

@@ -116,8 +116,16 @@ async def run_refresh_all_details() -> None:
                 logger.warning("阶段涨幅刷新异常: %s", e)
             if js_texts:
                 try:
-                    await update_extended_detail_cache(db, js_texts, name_map)
+                    ext_data = await update_extended_detail_cache(db, js_texts, name_map)
                     logger.info("扩展数据缓存已更新 (%d 只)", len(js_texts))
+                    # 同源数据顺带落 fund_quarterly：第零层质量过滤（清盘否决/规模
+                    # 冲击/仓位漂移/机构认可度）只读这张表，不写就永远按中性处理
+                    from backend.services.fund_quarterly_service import (
+                        sync_quarterly_from_extended,
+                    )
+                    await sync_quarterly_from_extended(
+                        db, ext_data, {f.code: f.id for f in funds}
+                    )
                 except Exception as e:
                     logger.warning("扩展数据解析异常: %s", e)
 
