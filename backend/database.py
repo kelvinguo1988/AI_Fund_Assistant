@@ -311,6 +311,20 @@ async def init_db() -> None:
         except Exception as e:
             _migration_ok(e, "ai_skills.tool_spec")
 
+        # 基金经理在任快照列（2026-09-26）：旧口径把"同批写入的共同在任经理"
+        # 当成前任，11 只多经理基金挂假"经理变更"。存量行回填 created_at，
+        # 使历史数据按原批次分组（同批 = 共同在任），下次刷新起自动纠正。
+        try:
+            await conn.execute(text(
+                "ALTER TABLE fund_manager_records ADD COLUMN last_seen_at DATETIME"
+            ))
+            await conn.execute(text(
+                "UPDATE fund_manager_records SET last_seen_at = created_at "
+                "WHERE last_seen_at IS NULL"
+            ))
+        except Exception as e:
+            _migration_ok(e, "fund_manager_records.last_seen_at")
+
         # uq_fund_date 唯一约束回填（旧库 create_all 不会补约束；并发分析曾可插重复行）
         # 先清理历史重复（保留每组最新一条），再建唯一索引
         try:

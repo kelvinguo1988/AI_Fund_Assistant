@@ -293,7 +293,19 @@ const HoldingTab: React.FC<{ funds: { id: number; code: string; name: string }[]
 const ManagerTab: React.FC<{
   funds: { id: number; code: string; name: string }[];
   changesMap: Record<number, ManagerChanges | null>;
-}> = ({ funds, changesMap }) => (
+}> = ({ funds, changesMap }) => {
+  // 全池经理记录为空 = 该库从未成功抓取过经理数据（新部署/抓取失败），
+  // 逐行 '--' 与前端故障无法区分，故显式提示来源
+  const noManagerAtAll = funds.length > 0
+    && funds.every(f => !(changesMap[f.id]?.current?.length));
+
+  return (
+  <>
+  {noManagerAtAll && (
+    <Alert severity="info" sx={{ mb: 1.5 }}>
+      暂无基金经理数据：请点击页面顶部「刷新数据」重新抓取（数据源：东方财富基金经理大全，全量约 30 秒）
+    </Alert>
+  )}
   <TableContainer component={Paper} variant="outlined">
     <Table size="small">
       <TableHead>
@@ -344,7 +356,9 @@ const ManagerTab: React.FC<{
       </TableBody>
     </Table>
   </TableContainer>
-);
+  </>
+  );
+};
 
 /* ================================================================
    深度分析 — ECharts 图表组件
@@ -446,16 +460,39 @@ const AssetAllocationChart: React.FC<{ data: FundExtendedData['asset_allocation'
    深度分析 Tab
    ================================================================ */
 
-const ExtendedAnalysisTab: React.FC<{ funds: Record<string, FundExtendedData> }> = ({ funds }) => {
-  const codes = Object.keys(funds);
-  const [selected, setSelected] = useState<string>(codes[0] || '');
+/** 四项全空 = 该代码无扩展档案（池中已删除或代码失效），无可展示内容 */
+const hasExtendedData = (d?: FundExtendedData) => !!d && (
+  (d.grand_total?.length ?? 0) > 0 || !!d.fluctuation_scale || !!d.holder_structure || !!d.asset_allocation
+);
+
+const ExtendedAnalysisTab: React.FC<{
+  funds: Record<string, FundExtendedData>;
+  orderedCodes: string[];
+}> = ({ funds, orderedCodes }) => {
+  // Object.keys 会把纯数字键按数值升序排在最前，直接取 keys[0] 当默认选中项
+  // 会落到失效/已删除代码（四张图全空）上，表现为整个 Tab"没有数据"。
+  // 这里按基金池顺序排列，且只保留至少有一项图表数据的条目。
+  const codes = useMemo(() => {
+    const known = orderedCodes.filter((c) => hasExtendedData(funds[c]));
+    const extra = Object.keys(funds).filter(
+      (c) => !orderedCodes.includes(c) && hasExtendedData(funds[c])
+    );
+    return [...known, ...extra];
+  }, [funds, orderedCodes]);
+  const [selected, setSelected] = useState<string>('');
 
   useEffect(() => {
-    if (!selected && codes.length > 0) setSelected(codes[0]);
-  }, [codes]);
+    if (!codes.includes(selected)) setSelected(codes[0] || '');
+  }, [codes, selected]);
+
+  if (codes.length === 0) {
+    return <Typography variant="body2" color="text.secondary">
+      暂无扩展数据，请点击页面顶部「刷新数据」抓取
+    </Typography>;
+  }
 
   const d = funds[selected];
-  if (!d) return <Typography variant="body2" color="text.secondary">暂无扩展数据，请先刷新基金详情</Typography>;
+  if (!d) return null;
 
   return (
     <Box>
@@ -515,6 +552,8 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
   const [loading, setLoading] = useState(externalLoading ?? true);
   const [error, setError] = useState<string | null>(null);
   const [extendedData, setExtendedData] = useState<Record<string, FundExtendedData>>({});
+
+  const fundCodes = useMemo(() => funds.map(f => f.code), [funds]);
 
   const loadData = async () => {
     if (externalReturns && externalReturns.length > 0) {
@@ -616,7 +655,7 @@ const FundDetailPanel: React.FC<Props> = ({ returns: externalReturns, loading: e
           Object.entries(changesMap).map(([k, v]: [string, any]) => [Number(k), v.manager_changes])
         )} />
       )}
-      {tabIdx === 3 && <ExtendedAnalysisTab funds={extendedData} />}
+      {tabIdx === 3 && <ExtendedAnalysisTab funds={extendedData} orderedCodes={fundCodes} />}
     </Box>
   );
 };

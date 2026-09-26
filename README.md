@@ -284,7 +284,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/funds/{id}/refresh-themes` | POST | 重新抓取天天基金主题标签 |
 | `/api/funds/realtime` | GET | 实时净值预估（场外 fundgz/持仓自算，场内 ETF 行情；force 跳过缓存） |
 | `/api/funds/export` | GET | 基金池导出 JSON（与 import 配套迁移/备份） |
-| `/api/funds/extended-detail` | GET | 基金扩展详情（阶段涨幅 + 持仓 + 经理聚合） |
+| `/api/funds/extended-detail` | GET | 基金扩展详情（累计收益走势 / 规模变动 / 持有人结构 / 资产配置，仅活跃基金） |
 | `/api/funds/etf-scan` | GET | 全市场 ETF 扫描三榜单（量价齐升/资金流入/换手异动，交叉标注已持有） |
 | `/api/funds/holding-overlap` | GET | 重仓股重叠度排行（基金 PK 页抱团识别） |
 | `/api/funds/concept-map/*` | GET/POST/DELETE | 概念板块成分映射：progress 进度 / import 起步数据 / fetch 手动抓取 / export 导出 / 清空 |

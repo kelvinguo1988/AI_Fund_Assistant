@@ -7,6 +7,7 @@
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 import akshare as ak
@@ -30,6 +31,10 @@ _MANAGER_TIMEOUT: float = 120.0
 # 避免 40-60 只基金 × 5 并发 = 200+ 次全量重试风暴。
 _FAIL_COOLDOWN: float = 60.0
 _last_fail_time: float = 0.0
+
+# 判定"同一轮刷新写入"的时间窗口：一基金的多位共同在任经理在同一次 commit
+# 内落库（行间毫秒级），取 1 分钟既容得下批内漂移，也不会把两轮刷新并成一批。
+_SEEN_BATCH_WINDOW: timedelta = timedelta(minutes=1)
 
 
 async def _get_all_managers() -> list[dict]:
@@ -67,7 +72,11 @@ async def _get_all_managers() -> list[dict]:
 
 
 async def refresh_managers(db: AsyncSession, fund_id: int, fund_code: str) -> list[FundManagerRecord]:
-    """刷新指定基金的经理信息（从全量缓存中匹配）"""
+    """刷新指定基金的经理信息（从全量缓存中匹配）
+
+    命中即视为"在任"：新名字插行，已存在的名字刷新统计值并把 last_seen_at
+    推到本次（否则共同在任的经理会被 later 批次挤成"前任"）。
+    """
     all_managers = await _get_all_managers()
     if not all_managers:
         return []
@@ -79,6 +88,7 @@ async def refresh_managers(db: AsyncSession, fund_id: int, fund_code: str) -> li
         if fund_code in codes:
             matched.append(m)
 
+    now = datetime.now()
     for m in matched:
         name = str(m.get("姓名", "")).strip()
         if not name:
@@ -90,9 +100,15 @@ async def refresh_managers(db: AsyncSession, fund_id: int, fund_code: str) -> li
         )
         existing = (await db.execute(stmt)).scalars().first()
         if existing:
+            # 在任经理的从业天数/规模/最佳回报随季度变化，逐次刷新
+            existing.company = str(m.get("所属公司", "")) or existing.company
+            existing.tenure_days = _to_int(m.get("累计从业时间")) or existing.tenure_days
+            existing.asset_scale = _to_float(m.get("现任基金资产总规模")) or existing.asset_scale
+            existing.best_return = _to_float(m.get("现任基金最佳回报")) or existing.best_return
+            existing.last_seen_at = now
             continue
 
-        record = FundManagerRecord(
+        db.add(FundManagerRecord(
             fund_id=fund_id,
             manager_name=name,
             company=str(m.get("所属公司", "")) or None,
@@ -100,8 +116,8 @@ async def refresh_managers(db: AsyncSession, fund_id: int, fund_code: str) -> li
             asset_scale=_to_float(m.get("现任基金资产总规模")),
             best_return=_to_float(m.get("现任基金最佳回报")),
             managed_codes=str(m.get("现任基金代码", "")),
-        )
-        db.add(record)
+            last_seen_at=now,
+        ))
 
     await db.commit()
 
@@ -122,6 +138,11 @@ async def compute_manager_changes(
 ) -> Optional[dict]:
     """计算基金经理变更情况
 
+    现任 = 最近一轮刷新确认在任的全部经理（共同管理时有多位）；
+    前任 = last_seen_at 停在更早轮次的记录。
+    旧口径按插入顺序只把最后一个名字当现任，于是同批写入的共同在任经理
+    全被误报成"经理变更"。
+
     Returns:
         {
             "current": [{"manager_name": "...", ...}],
@@ -138,12 +159,14 @@ async def compute_manager_changes(
     if not all_records:
         return None
 
-    unique_names = list(dict.fromkeys(r.manager_name for r in all_records))
-    current_names = unique_names[-1:]
-    prev_names = unique_names[:-1]
+    def _seen(r: FundManagerRecord) -> datetime:
+        return r.last_seen_at or r.created_at
 
-    current = [r for r in all_records if r.manager_name in current_names]
-    history = [r for r in all_records if r.manager_name not in current_names]
+    # 同一轮刷新内逐行时间相差毫秒级；两轮刷新至少间隔一个任务周期
+    latest = max(_seen(r) for r in all_records)
+    cutoff = latest - _SEEN_BATCH_WINDOW
+    current = [r for r in all_records if _seen(r) >= cutoff]
+    history = [r for r in all_records if _seen(r) < cutoff]
 
     return {
         "current": [{
@@ -159,7 +182,7 @@ async def compute_manager_changes(
             "tenure_days": r.tenure_days,
             "asset_scale": r.asset_scale,
         } for r in history],
-        "changed": len(prev_names) > 0,
+        "changed": len(history) > 0,
     }
 
 

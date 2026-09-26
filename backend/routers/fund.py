@@ -388,7 +388,12 @@ async def get_funds_extended_detail(
     data, updated_at = await get_cached_json(db, CACHE_KEY_EXTENDED_DETAIL)
     if data is None:
         return ApiResponse(data={})
-    return ApiResponse(data={"funds": data, "updated_at": updated_at})
+    # 缓存整批覆盖写入，但被删除代码的旧条目会残留到下一次刷新为止
+    # （历史测试代码 123456 即以此法混进深度分析选择器），按活跃基金过滤
+    svc = FundService(db)
+    active_codes = {f.code for f in await svc.list_funds(status="active")}
+    funds = {c: v for c, v in data.items() if c in active_codes}
+    return ApiResponse(data={"funds": funds, "updated_at": updated_at})
 
 
 @router.patch("/batch", response_model=ApiResponse[None])
