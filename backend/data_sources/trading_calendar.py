@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ def is_trading_day(target_date: date | None = None) -> bool:
         True 表示交易日
     """
     if target_date is None:
-        target_date = date.today()
+        target_date = beijing_today()
 
     try:
         import chinese_calendar  # type: ignore
@@ -49,7 +50,7 @@ async def is_a_share_trading_day_async(session, target_date: date | None = None)
     （多为周末），周末已在第一步排除，故不会误判为开市。
     """
     if target_date is None:
-        target_date = date.today()
+        target_date = beijing_today()
     # 周末一律休市（含调休补班周六/周日，股市实际不开市）
     if target_date.weekday() >= 5:
         return False
@@ -84,7 +85,7 @@ def get_latest_trading_day(target_date: date | None = None) -> date:
         最近的交易日
     """
     if target_date is None:
-        target_date = date.today()
+        target_date = beijing_today()
 
     current = target_date
     for _ in range(10):
@@ -95,6 +96,27 @@ def get_latest_trading_day(target_date: date | None = None) -> date:
     # 回退 10 天仍未找到，返回当天
     logger.warning(f"回溯 10 天未找到交易日，返回 {target_date}")
     return target_date
+
+
+def get_previous_trading_days(target_date: date | None = None, count: int = 5) -> list[date]:
+    """target_date 之前（不含当天）的 count 个交易日，按由近到远排列。
+
+    交易所日报有发布延迟，调用方通常要的是"最近一个真正有数据的交易日"，
+    所以给候选列表而不是单个日期，避免像原成交额逻辑那样盲试 10 个自然日。
+    最多回溯 30 天（春节连休 + 数据缺失也不会超出这个范围）。
+    """
+    if target_date is None:
+        target_date = beijing_today()
+
+    days: list[date] = []
+    current = target_date - timedelta(days=1)
+    for _ in range(30):
+        if is_trading_day(current):
+            days.append(current)
+            if len(days) >= count:
+                break
+        current -= timedelta(days=1)
+    return days
 
 
 def get_trading_days_between(start_date: date, end_date: date) -> list[date]:

@@ -72,6 +72,10 @@ export const backtestBatchApi = {
   updateConfig: (data: Partial<AutoBacktestConfig>) =>
     apiClient.put<ApiResponse<AutoBacktestConfig>>(`${BASE}/batch/config`, data).then((r) => r.data),
 
+  /** 服务端是否在跑全量回测（前端"运行中"状态的唯一真相源） */
+  status: () =>
+    apiClient.get<ApiResponse<{ running: boolean }>>(`${BASE}/batch/status`).then((r) => r.data),
+
   /** 手动触发一轮全量回测（后台执行，逐只落库） */
   trigger: () =>
     apiClient.post<ApiResponse<{ accepted: boolean }>>(`${BASE}/batch/run`).then((r) => r.data),

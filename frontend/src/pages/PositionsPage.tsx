@@ -42,6 +42,7 @@ import {
   PositionItem, ImportResult, RebalanceData, RebalanceRow,
 } from '../api/position';
 import { aiApi } from '../api/ai';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 interface Snack { open: boolean; message: string; severity: 'success' | 'error' | 'info' }
 
@@ -73,6 +74,7 @@ const PositionsPage: React.FC = () => {
   const [items, setItems] = useState<PositionItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [snack, setSnack] = useState<Snack>({ open: false, message: '', severity: 'info' });
+  const [delTarget, setDelTarget] = useState<PositionItem | null>(null);
 
   // 建仓/编辑对话框
   const [dlgOpen, setDlgOpen] = useState(false);
@@ -139,8 +141,10 @@ const PositionsPage: React.FC = () => {
     }
   };
 
-  const removeItem = async (p: PositionItem) => {
-    if (!window.confirm(`删除持仓：${p.fund_name}(${p.fund_code})？`)) return;
+  const removeItem = async () => {
+    const p = delTarget;
+    setDelTarget(null);
+    if (!p) return;
     try {
       await positionApi.remove(p.id);
       notify('已删除', 'success');
@@ -167,8 +171,8 @@ const PositionsPage: React.FC = () => {
     setRbLoading(true);
     try {
       const res = await rebalanceApi.run(win);
-      setRb(res.data.data as RebalanceData);
-      setRbMd((res.data as any).summary_md || '');
+      setRb(res.data.data);
+      setRbMd(res.data.summary_md || '');
     } catch (e: any) {
       notify(e?.message || '调仓引擎运行失败', 'error');
     } finally {
@@ -183,7 +187,7 @@ const PositionsPage: React.FC = () => {
       await aiApi.chat({
         content: `请解读以下调仓工单（卖出/买入/换仓/观望与组合约束），给出执行顺序、换仓代价（费率/赎回到账）与风险提示：\n\n${rbMd}`,
         context_type: 'pool',
-      } as any);
+      });
       notify('AI 解读已生成，请到 AI 对话窗口查看', 'success');
     } catch (e: any) {
       notify(e?.message || 'AI 解读失败', 'error');
@@ -245,8 +249,8 @@ const PositionsPage: React.FC = () => {
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{p.source === 'import' ? '导入' : '手动'}</TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{p.updated_at?.slice(0, 16).replace('T', ' ') ?? '—'}</TableCell>
                         <TableCell>
-                          <IconButton size="small" onClick={() => openEdit(p)}><EditOutlinedIcon fontSize="small" /></IconButton>
-                          <IconButton size="small" color="error" onClick={() => removeItem(p)}><DeleteOutlineIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" aria-label={`编辑 ${p.fund_name}`} onClick={() => openEdit(p)}><EditOutlinedIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" color="error" aria-label={`删除 ${p.fund_name}`} onClick={() => setDelTarget(p)}><DeleteOutlineIcon fontSize="small" /></IconButton>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -413,6 +417,16 @@ const PositionsPage: React.FC = () => {
           <Button variant="contained" onClick={submitCsv}>导入</Button>
         </DialogActions>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!delTarget}
+        title="删除持仓"
+        message={`删除持仓：${delTarget?.fund_name}(${delTarget?.fund_code})？`}
+        confirmLabel="删除"
+        confirmColor="error"
+        onConfirm={removeItem}
+        onCancel={() => setDelTarget(null)}
+      />
 
       <Snackbar open={snack.open} autoHideDuration={4000} onClose={() => setSnack((s) => ({ ...s, open: false }))}>
         <Alert

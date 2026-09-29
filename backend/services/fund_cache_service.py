@@ -102,11 +102,20 @@ async def update_period_returns_cache(
         for code in codes
     ]
 
-    now = _now_beijing()
-    await _upsert_cache_row(db, CACHE_KEY_PERIOD_RETURNS, json.dumps(data, ensure_ascii=False), now)
-    # Update refresh timestamp
-    await _upsert_cache_row(db, CACHE_KEY_REFRESH_TIME, '"ok"', now)
-    await db.commit()
+    # 全部代码都没取到 JS 文本时不能把刷新时间推进：否则"刷新失败"在页面上
+    # 显示成"刚刚刷新过"，脏数据会被当成新鲜缓存一直展示（2026-09-29 审查 P1）
+    hit_codes = [c for c in codes if js_texts.get(c)]
+    if hit_codes:
+        now = _now_beijing()
+        await _upsert_cache_row(
+            db, CACHE_KEY_PERIOD_RETURNS, json.dumps(data, ensure_ascii=False), now
+        )
+        await _upsert_cache_row(db, CACHE_KEY_REFRESH_TIME, '"ok"', now)
+        await db.commit()
+    else:
+        logger.warning(
+            "阶段涨幅全部拉取失败（%d 只），保留旧缓存且不更新刷新时间", len(codes)
+        )
     return data, js_texts
 
 

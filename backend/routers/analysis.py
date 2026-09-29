@@ -22,6 +22,7 @@ from backend.schemas.analysis import (
     CompareReport,
 )
 from backend.schemas.market import MarketSummaryOut, SignalSummary, MarketCapitalFlow, SectorFlowRanking, HSGTFlow, MarketAdvDecline, MarketTurnover, MarketRegimeOut
+from backend.utils.timezone import beijing_today
 
 CACHE_KEY_MARKET = "market_summary"
 
@@ -184,7 +185,7 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(func.max(AnalysisResult.analysis_date)))
     latest_date = result.scalar()
 
-    today_str = date.today().isoformat()
+    today_str = beijing_today().isoformat()
     summary_date = latest_date.isoformat() if latest_date else today_str
 
     # 2. 获取当日分析结果（始终实时查询，DB 查询很快）

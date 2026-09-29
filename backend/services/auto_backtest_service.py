@@ -109,6 +109,9 @@ class AutoBacktestService:
                 except asyncio.TimeoutError:
                     failed += 1
                     logger.error(f"自动回测 {fund.code} 超时(10 分钟)，记为失败")
+                    # 超时/异常可能留下已 flush 未提交的部分写入：不回滚则 session 卡在
+                    # PendingRollbackError，_upsert_error 与后续每只基金都会连锁失败
+                    await self._reset_session()
                     try:
                         await self._upsert_error(fund, "回测超时(10 分钟)")
                     except Exception as ue:
@@ -116,6 +119,7 @@ class AutoBacktestService:
                 except Exception as e:
                     failed += 1
                     logger.error(f"自动回测 {fund.code} 失败: {e}")
+                    await self._reset_session()
                     try:
                         await self._upsert_error(fund, str(e)[:180])
                     except Exception as ue:
@@ -132,6 +136,13 @@ class AutoBacktestService:
             return {"total": total, "ok": ok, "failed": failed, "skipped": 0}
         finally:
             AutoBacktestService._running = False
+
+    async def _reset_session(self) -> None:
+        """回滚到干净事务边界；单只基金失败不能污染后续所有基金"""
+        try:
+            await self.db.rollback()
+        except Exception as rb_err:
+            logger.error(f"回测会话回滚失败: {rb_err}")
 
     async def _upsert_result(self, fund: Fund, summary) -> None:
         """逐基金覆盖落库（fund_id 唯一）"""

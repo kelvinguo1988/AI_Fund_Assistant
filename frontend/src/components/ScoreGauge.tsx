@@ -5,6 +5,7 @@
 
 import React, { useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
+import { GROWTH_UP, GROWTH_DOWN, GROWTH_FLAT } from '../utils/format';
 
 interface ScoreGaugeProps {
   score: number;
@@ -16,14 +17,14 @@ const ScoreGauge: React.FC<ScoreGaugeProps> = ({ score, height = 200 }) => {
     // 总分钳位 ±8.5（与 active 因子总权重对齐，见后端 scoring_engine）
     const clampedScore = Math.max(-8.5, Math.min(8.5, score));
 
-    // 根据评分确定颜色
+    // 根据评分确定颜色（±1.5 以内视为中性）
     let color: string;
     if (clampedScore >= 1.5) {
-      color = '#E74C3C'; // 红（偏多）
+      color = GROWTH_UP; // 红（偏多）
     } else if (clampedScore <= -1.5) {
-      color = '#27AE60'; // 绿（偏空）
+      color = GROWTH_DOWN; // 绿（偏空）
     } else {
-      color = '#95A5A6'; // 灰（中性）
+      color = GROWTH_FLAT; // 灰（中性）
     }
 
     // 表盘刻度 -9~+9（略宽于钳位范围，刻度间距 3 更整洁）映射为 0~1

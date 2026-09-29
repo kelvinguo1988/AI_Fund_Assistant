@@ -16,22 +16,13 @@ import threading
 import time
 import uuid
 from typing import Optional
+from urllib.parse import urlsplit
 
 import requests
 
-logger = logging.getLogger(__name__)
+from backend.utils.concurrency import random_ua
 
-# 预置 User-Agent 池（无需 fake_useragent 依赖）
-_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
-]
+logger = logging.getLogger(__name__)
 
 _TARGET_DOMAINS = [
     "fund.eastmoney.com",
@@ -42,6 +33,30 @@ _TARGET_DOMAINS = [
     "datacenter-web.eastmoney.com",
     "datacenter.eastmoney.com",
 ]
+
+# 需要注入 Referer 的主机（与 _TARGET_DOMAINS 同源，精确主机名）
+_REFERER_HOST = "fundf10.eastmoney.com"
+
+
+def _target_host(url: str) -> Optional[str]:
+    """命中东财目标域则返回小写主机名，否则 None
+
+    必须按主机名判定：原实现是 `domain in url` 子串匹配，
+    `https://eastmoney.com.attacker.net/fund.eastmoney.com` 这类仿冒主机
+    同样命中 → 把刚取的 NID 令牌和 Referer 一并发给第三方（凭据外泄），
+    反过来还漏判带端口/大写的主机名。
+    """
+    try:
+        host = urlsplit(url or "").hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    host = host.lower().rstrip(".")
+    for domain in _TARGET_DOMAINS:
+        if host == domain or host.endswith("." + domain):
+            return host
+    return None
 
 original_request = requests.Session.request
 
@@ -151,18 +166,18 @@ def apply_patch():
         # 进而使所有 asyncio.to_thread 调用排队触发 asyncio.wait_for 超时。
         kwargs.setdefault("timeout", DEFAULT_REQUEST_TIMEOUT)
 
-        is_target = any(d in (url or "") for d in _TARGET_DOMAINS)
-        if not is_target:
+        host = _target_host(url)
+        if host is None:
             return original_request(self, method, url, **kwargs)
 
-        user_agent = random.choice(_USER_AGENTS)
+        user_agent = random_ua()
         headers = kwargs.get("headers", {}) or {}
         headers["User-Agent"] = user_agent
 
         # fundf10.eastmoney.com 的 FundArchivesDatas.aspx 接口要求 Referer 头，
         # 否则返回 404 HTML 页面 → akshare demjson 解析失败（"Can not decode ';'"）
         # → fund_portfolio_hold_em 对所有年份都报 JSONDecodeError → 持仓数据全空
-        if "fundf10.eastmoney.com" in (url or ""):
+        if host == _REFERER_HOST:
             headers.setdefault("Referer", "https://fundf10.eastmoney.com/")
 
         nid = _get_nid(user_agent)

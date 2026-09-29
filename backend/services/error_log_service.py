@@ -20,8 +20,11 @@ import logging
 import sqlite3
 import threading
 import time
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
+
+from backend.utils.timezone import now_beijing
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,9 @@ DB_PATH = _resolve_db_path()
 MAX_ROWS = 2000
 RETENTION_DAYS = 30   # 保留期：超过 30 天的日志在下次写入时清理
 THROTTLE_WINDOW = 60.0
+# 节流指纹表上限：key 含 message 前 80 字，异常消息带变量（代码/时间戳）时
+# 指纹近乎唯一，长跑进程会让这个 dict 只增不减
+THROTTLE_MAX_KEYS = 2000
 
 _CATEGORY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS error_logs (
@@ -72,8 +78,10 @@ class ErrorLogStore:
         self._write_lock = threading.Lock()
         self._throttle: dict[tuple, float] = {}
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # busy_timeout 与 async engine 的 connect_args={"timeout": 30} 对齐：
+        # 直连取更短的 15s 时，分析/刷新写库期间错误日志写入总是先一步放弃
         self._conn = sqlite3.connect(
-            str(DB_PATH), check_same_thread=False, timeout=15
+            str(DB_PATH), check_same_thread=False, timeout=30
         )
         self._conn.executescript(_CATEGORY_SCHEMA)
         self._conn.commit()
@@ -97,9 +105,16 @@ class ErrorLogStore:
             last = self._throttle.get(fp, 0.0)
             if now - last < THROTTLE_WINDOW:
                 return False
+            # 先清掉已过窗口的指纹再判上限：只在满表时 prune，正常量级零开销
+            if len(self._throttle) >= THROTTLE_MAX_KEYS:
+                self._throttle = {
+                    k: v for k, v in self._throttle.items() if now - v < THROTTLE_WINDOW
+                }
             self._throttle[fp] = now
             try:
-                ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                # ts 与裁剪 cutoff 统一北京时：原用 time.localtime，UTC 容器里
+                # 写入的是 UTC 串而界面其他日志是北京时，同一张表两套口径
+                ts = now_beijing().strftime("%Y-%m-%d %H:%M:%S")
                 self._conn.execute(
                     "INSERT INTO error_logs (ts, module, category, severity, message, detail) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
@@ -111,9 +126,8 @@ class ErrorLogStore:
                     "(SELECT id FROM error_logs ORDER BY id DESC LIMIT ?)",
                     (MAX_ROWS,),
                 )
-                cutoff = time.strftime(
-                    "%Y-%m-%d %H:%M:%S",
-                    time.localtime(now - RETENTION_DAYS * 86400),
+                cutoff = (now_beijing() - timedelta(days=RETENTION_DAYS)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
                 )
                 self._conn.execute("DELETE FROM error_logs WHERE ts < ?", (cutoff,))
                 self._conn.commit()
@@ -184,9 +198,12 @@ class ErrorLogStore:
 _BG_LOG_TASKS: set = set()
 
 
-def log_source_failure(module: str, message: str, category: str = "rate_limit",
+def log_source_failure(module: str, message: str, category: str = "other",
                        detail: str = "", severity: str = "error") -> None:
     """数据源失败埋点便捷函数（自动节流；自身异常绝不抛出）
+
+    category 默认 "other" 而非 "rate_limit"：与 ErrorLogStore.log 保持一致，
+    否则新增调用方漏传参时，告警铃里会把任意失败报成风控（2026-09-29 审查 P2）。
 
     async 上下文中把同步 sqlite3 写入派发到线程池，避免阻塞事件循环；
     任务持强引用防被 GC 提前回收取消。

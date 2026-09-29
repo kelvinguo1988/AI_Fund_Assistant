@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from backend.data_sources.base import BaseDataSource, FundData, MarketIndices
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -61,17 +62,32 @@ class JoinQuantAdapter(BaseDataSource):
 
     @property
     def available(self) -> bool:
-        if self._available and self._jq:
-            # is_auth() 是同步网络调用且可能在事件循环内被触发（manager
-            # 降级链探测）：节流 60s 一次，避免频繁卡 loop。
-            now = time.monotonic()
-            if now - self._auth_checked_at < 60:
-                return self._available
-            self._auth_checked_at = now
-            try:
-                self._available = bool(self._jq.is_auth())
-            except Exception:
-                self._available = False
+        # 纯内存判断：is_auth() 是同步网络调用，绝不能放在 property 里
+        # —— manager 的降级链在 async 路径上高频读取本属性，曾因此阻塞事件
+        # 循环数秒（2026-09-29 审查 P0）。真实校验移到 async probe()。
+        return self._available
+
+    async def probe(self) -> bool:
+        """恢复探测：在线程池里跑一次 is_auth()，不阻塞事件循环
+
+        60s 节流：manager 每次取数前都会跑一遍恢复探测，未节流时
+        60 只基金 × 每轮分析都会打一次 is_auth。
+        """
+        if not self._jq:
+            return False
+        import asyncio
+
+        now = time.monotonic()
+        if now - self._auth_checked_at < 60:
+            return self._available
+        self._auth_checked_at = now
+        try:
+            self._available = bool(
+                await asyncio.to_thread(self._jq.is_auth)
+            )
+        except Exception as e:
+            logger.warning(f"JoinQuant 探活失败: {e}")
+            self._available = False
         return self._available
 
     async def get_fund_data(
@@ -84,7 +100,7 @@ class JoinQuantAdapter(BaseDataSource):
         fund_data = FundData(code=code)
         jq_code = _to_jq_code(code)
 
-        end_date = date.today()
+        end_date = beijing_today()
         start_date = end_date - timedelta(days=period * 2)
 
         try:
@@ -138,7 +154,7 @@ class JoinQuantAdapter(BaseDataSource):
             "000300.XSHG": "hs300",         # 沪深300
         }
 
-        today_str = date.today().strftime("%Y-%m-%d")
+        today_str = beijing_today().strftime("%Y-%m-%d")
         for jq_code, attr in index_map.items():
             try:
                 df = jq.get_price(
@@ -155,7 +171,7 @@ class JoinQuantAdapter(BaseDataSource):
             except Exception:
                 continue
 
-        indices.date = date.today().isoformat()
+        indices.date = beijing_today().isoformat()
         return indices
 
     async def get_bond_yield(self) -> Optional[float]:
@@ -167,7 +183,7 @@ class JoinQuantAdapter(BaseDataSource):
         try:
             # 聚宽债券收益率接口
             df = jq.get_bond_yield(
-                date=date.today(),
+                date=beijing_today(),
                 tenor="10",
             )
             if df is not None and not df.empty:

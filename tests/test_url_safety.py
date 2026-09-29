@@ -44,3 +44,35 @@ def test_accepts_public_https_host():
     except ValueError as e:
         # 离线环境下 DNS 不可解析属预期（同样应拒绝发起请求），不得放行内网目标
         assert "无法解析" in str(e), f"意外拒绝原因: {e}"
+
+
+class TestEastmoneyHostMatch:
+    """补丁的目标域判定（审查 P2：原为 `domain in url` 子串匹配）
+
+    子串匹配会把 NID 令牌 + Referer 注入仿冒主机（凭据外泄），
+    故判定必须落在 URL 的主机名上。
+    """
+
+    def test_real_hosts_match(self):
+        from backend.patch.eastmoney_patch import _target_host
+        assert _target_host("https://fund.eastmoney.com/pingzhongdata/004011.js") == "fund.eastmoney.com"
+        assert _target_host("https://api.fund.eastmoney.com/f10/lsjz") == "api.fund.eastmoney.com"
+
+    def test_case_and_port_normalized(self):
+        from backend.patch.eastmoney_patch import _target_host
+        assert _target_host("https://FUNDf10.EastMoney.com:443/x") == "fundf10.eastmoney.com"
+
+    def test_spoofed_hosts_rejected(self):
+        from backend.patch.eastmoney_patch import _target_host
+        for url in (
+            "https://fund.eastmoney.com.attacker.net/x",
+            "https://attacker.net/?next=https%3A//fund.eastmoney.com/",
+            "https://notfund.eastmoney.com/x",
+            "https://attacker.net/fund.eastmoney.com/js/x.js",
+        ):
+            assert _target_host(url) is None, url
+
+    def test_non_eastmoney_host_rejected(self):
+        from backend.patch.eastmoney_patch import _target_host
+        assert _target_host("https://localhost/fund.eastmoney.com") is None
+        assert _target_host("") is None

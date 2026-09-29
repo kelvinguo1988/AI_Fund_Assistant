@@ -526,6 +526,32 @@ export interface ConnectivityResult {
   summary: { total: number; reachable: number; unreachable: number };
 }
 
+/* ── 数据源运行时健康（进程内状态快照，零网络请求） ─────────────────── */
+export interface DataSourceCooldown {
+  name: string;
+  remaining_seconds: number;
+  note: string;
+}
+
+export interface DataSourceCache {
+  name: string;
+  age_seconds: number | null;
+  ttl_seconds: number;
+  entries: number;
+  stale: boolean;
+}
+
+export interface DataSourceHealth {
+  generated_at: string;
+  cooldowns: DataSourceCooldown[];
+  caches: DataSourceCache[];
+  scheduler: {
+    daily_fail_limit: number;
+    tripped_today: { schedule_id: number; consecutive_failures: number }[];
+  };
+  summary: { cooldown_count: number; stale_cache_count: number };
+}
+
 /* ── 基金扩展详情 ──────────────────────────────────────────── */
 export interface GrandTotalSeries {
   name: string;

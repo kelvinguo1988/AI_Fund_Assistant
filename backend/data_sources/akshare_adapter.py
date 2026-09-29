@@ -13,6 +13,7 @@ import pandas as pd
 
 from backend.config import settings
 from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, guess_fund_type
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -60,17 +61,8 @@ def _err_brief(e: BaseException, timeout: float) -> tuple[str, str]:
     return reason, msg
 
 
-# User-Agent 池用于反爬虫
-_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
-]
+# User-Agent 统一走 backend.utils.concurrency.random_ua（与各数据源共用一个池，
+# 避免多处副本漂移导致同一浏览器指纹在不同接口上不一致）
 
 
 class AKShareAdapter(BaseDataSource):
@@ -155,6 +147,29 @@ class AKShareAdapter(BaseDataSource):
                 lock = asyncio.Lock()
                 setattr(cls, lock_attr, lock)
             return lock
+
+    # 恢复探测：manager 冷却期到点后调 probe() 判断源是否真的通。
+    # 旧实现只读 available（本类未覆写 → 恒 True），5 分钟冷却形同虚设，
+    # 降级源立即复原、下一次请求原路撞封禁（2026-09-29 审查 P0）。
+    _probe_fail_ts: float = 0.0
+    _PROBE_COOLDOWN: float = 120.0  # 探测自身失败后的静默期，防探测变成二次风暴
+
+    @classmethod
+    async def probe(cls) -> bool:
+        """轻量探活：单页 ETF 快照（最轻的全量接口），失败再冷却 120s"""
+        import time as _time
+        now = _time.time()
+        if now - cls._probe_fail_ts < cls._PROBE_COOLDOWN:
+            return False
+        try:
+            df = await cls()._call(
+                ak.fund_etf_spot_em, _max_attempts=1, _timeout=10.0
+            )
+            return df is not None and not df.empty
+        except Exception as e:
+            cls._probe_fail_ts = _time.time()
+            logger.warning(f"AKShare 探活失败，延长冷却 {cls._PROBE_COOLDOWN:.0f}s: {e}")
+            return False
 
     async def _call(self, func, *args, **kwargs):
         """带超时 + UA 轮换 + 指数退避重试的异步 API 调用
@@ -393,17 +408,24 @@ class AKShareAdapter(BaseDataSource):
         pingzhongdata 直取失败时使用此接口。
         这是天天基金前端页面真实调用的 API，稳定性远高于页面 JS 解析链路。
         接口按页返回（每页固定 20 行），此处循环翻页拼够 period 条净值为止。
+
+        返回三态（2026-09-29 审查 P0 起）：
+        - 非空 DataFrame：正常净值序列
+        - 空 DataFrame：请求成功但该代码零行（如池内无效代码 968049），
+          属"代码无记录"，交由 analysis_service 记 data_missing 并跳过评分
+        - None：请求级失败（网络/风控/非 JSON），属真实断供信号，
+          上层会据此触发降级链与告警
         """
         import requests
-        from backend.utils.concurrency import run_with_timeout
+        from backend.utils.concurrency import run_with_timeout, random_ua
 
-        end_date = date.today().isoformat()
-        start_date = (date.today() - timedelta(days=period * 2)).isoformat()
+        end_date = beijing_today().isoformat()
+        start_date = (beijing_today() - timedelta(days=period * 2)).isoformat()
 
         url = "https://api.fund.eastmoney.com/f10/lsjz"
         headers = {
             "Referer": f"https://fund.eastmoney.com/f10/jjjz_{code}.html",
-            "User-Agent": random.choice(_USER_AGENTS),
+            "User-Agent": random_ua(),
         }
 
         rows: list = []
@@ -444,6 +466,12 @@ class AKShareAdapter(BaseDataSource):
                 await asyncio.sleep(random.uniform(0.4, 0.6))
 
         if failed and not rows:
+            # 请求级失败（网络/风控/非 JSON）与"代码无记录"必须区分：
+            # 旧实现两者都返回 None，_get_otc_fund_data 于是静默给出空
+            # FundData → manager 降级链（JoinQuant 备源）永不触发、无告警，
+            # 断供只表现为"基金被质量过滤"（2026-09-29 审查 P0）。
+            # 返回空 DataFrame = 成功响应但零行（不存在的代码走此路，仍交下游
+            # analysis_service._no_nav_reason 记 data_missing 并跳过评分）。
             return None
 
         if rows:
@@ -532,6 +560,13 @@ class AKShareAdapter(BaseDataSource):
             last_row = df.iloc[-1]
             fund_data.close = float(last_row["单位净值"])
             fund_data.date = str(last_row["净值日期"])
+        elif df is None:
+            # 两策略都没拿到、且策略 2 是请求级失败 → 真实断供，必须上抛：
+            # 旧实现返回空 FundData 被 manager 当成功（"AKShare 可用"），
+            # JoinQuant 备源永不触发、error_logs 一条不记，故障只在下游表现为
+            # "基金被质量过滤"。代码确无记录（空 DataFrame，如 968049）不进
+            # 本分支，仍返回空 FundData 交 _no_nav_reason 记 data_missing 跳过。
+            raise RuntimeError(f"场外净值双策略失败 code={code}")
 
         # 尝试获取基金名称（多策略，带缓存）
         name = await self._get_cached_fund_name(code)
@@ -790,8 +825,8 @@ class AKShareAdapter(BaseDataSource):
             try:
                 # akshare 该接口只接受 YYYYMMDD（此前 isoformat 恒 ValueError，三次重试全废）；
                 # 且宽区间（如 720 天）直接返回 0 行，故取近 30 日快照的最后 4 期
-                end = date.today().strftime("%Y%m%d")
-                start = (date.today() - timedelta(days=30)).strftime("%Y%m%d")
+                end = beijing_today().strftime("%Y%m%d")
+                start = (beijing_today() - timedelta(days=30)).strftime("%Y%m%d")
                 df = await self._call(ak.fund_scale_daily_szse, start_date=start, end_date=end, symbol="ETF")
                 if df is not None and not df.empty:
                     match = df[df["基金代码"].astype(str) == code]
@@ -810,7 +845,7 @@ class AKShareAdapter(BaseDataSource):
         try:
             df = await self._call(ak.stock_zh_index_spot_em)
             if df is not None and not df.empty:
-                today = date.today().strftime("%Y-%m-%d")
+                today = beijing_today().strftime("%Y-%m-%d")
                 indices.date = today
 
                 index_map = {

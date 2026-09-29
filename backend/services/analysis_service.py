@@ -1,5 +1,5 @@
 """分析编排服务 — 数据获取→因子计算→评分→信号→存储→推送"""
-from backend.utils.timezone import now_beijing
+from backend.utils.timezone import beijing_today, now_beijing
 
 import asyncio
 import json
@@ -37,8 +37,9 @@ logger = logging.getLogger(__name__)
 # 流式处理块大小：每批处理 5 只基金后推送一次结果
 _STREAM_CHUNK_SIZE = 5
 
-# 第零层质量过滤的空数据告警只提示一次（避免每轮分析刷屏）
-_quarterly_empty_warned = False
+# 第零层质量过滤的空数据告警按北京日节流：一次性布尔位会让进程常驻
+# （NAS 数周不重启）时只在第一天说话，之后彻底静默（2026-09-29 审查 P2）
+_quarterly_empty_warned_on: str = ""
 
 
 def _no_nav_reason(fd: FundData) -> Optional[str]:
@@ -148,9 +149,10 @@ class AnalysisService:
             # （services/fund_quarterly_service.py）。空表 = 该库还没成功跑过一次
             # 详情刷新，此时清盘否决/规模冲击/仓位漂移/机构认可度全部按中性处理
             # —— 显式告警而非假装有数据
-            global _quarterly_empty_warned
-            if not _quarterly_empty_warned:
-                _quarterly_empty_warned = True
+            global _quarterly_empty_warned_on
+            today = beijing_today().isoformat()
+            if _quarterly_empty_warned_on != today:
+                _quarterly_empty_warned_on = today
                 logger.warning(
                     "第零层质量过滤未生效：fund_quarterly 表为空（无季报同步任务写入），"
                     "清盘风险/规模冲击/仓位漂移/机构认可度检查均按中性处理"
@@ -289,7 +291,14 @@ class AnalysisService:
                 continue
 
         # 统一提交所有分析结果（替代原来逐条 commit，60 只基金=1 次提交）
-        await self.db.commit()
+        # commit 失败必须显式回滚：否则 session 带着已 flush 的脏语句返回，
+        # 调用方（含复用同一 session 的实时预热）后续操作全部 PendingRollbackError
+        try:
+            await self.db.commit()
+        except Exception:
+            await self.db.rollback()
+            logger.exception("分析结果提交失败，已回滚本轮写入")
+            raise
         return results
 
     async def run_analysis_streaming(
@@ -409,8 +418,24 @@ class AnalysisService:
                     continue
 
             # 批量提交本 chunk 的结果（替代原来逐条 commit）
+            # commit 失败时回滚并抛 error 事件，而不是让生成器带着脏 session 继续跑：
+            # 本 chunk 未落库（从 results 尾部摘掉，complete.succeeded 才诚实），
+            # 之前 chunk 已提交，剩余基金照常分析。
             if chunk_results:
-                await self.db.commit()
+                try:
+                    await self.db.commit()
+                except Exception:
+                    await self.db.rollback()
+                    logger.exception("流式分析结果提交失败，已回滚本 chunk")
+                    del results[len(results) - len(chunk_results):]
+                    yield "data: " + json.dumps(
+                        {
+                            "type": "error",
+                            "message": f"本批 {len(chunk_results)} 只基金结果写入失败（已回滚），其余批次继续",
+                        },
+                        ensure_ascii=False,
+                    ) + "\n\n"
+                    chunk_results = []
 
             if chunk_results:
                 chunk_data = {
@@ -560,7 +585,7 @@ class AnalysisService:
         existing_result = await self.db.execute(
             select(AnalysisResult).where(
                 AnalysisResult.fund_id == fund.id,
-                AnalysisResult.analysis_date == date.today(),
+                AnalysisResult.analysis_date == beijing_today(),
             )
         )
         existing = existing_result.scalars().first()
@@ -578,7 +603,7 @@ class AnalysisService:
         else:
             new_result = AnalysisResult(
                 fund_id=fund.id,
-                analysis_date=date.today(),
+                analysis_date=beijing_today(),
                 weighted_score=signal.weighted_score,
                 signal_direction=signal.signal_direction,
                 signal_strength=signal.signal_strength,
@@ -598,7 +623,7 @@ class AnalysisService:
             fund_id=fund.id,
             fund_code=fund.code,
             fund_name=fund.name,
-            analysis_date=date.today(),
+            analysis_date=beijing_today(),
             weighted_score=signal.weighted_score,
             signal_direction=signal.signal_direction,
             signal_strength=signal.signal_strength,

@@ -26,6 +26,7 @@ from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.models.fund_holding import FundHolding
 from backend.models.user_position import UserPosition
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,7 @@ class RebalanceService:
         fund_by_id = {f.id: f for f in funds}
 
         # ── 每只基金最新一期信号 + 窗口内序列（恶化/翻转）──
-        since = date.today() - timedelta(days=window_days)
+        since = beijing_today() - timedelta(days=window_days)
         rows = (await db.execute(
             select(AnalysisResult, Fund.id.label("fid"))
             .join(Fund, AnalysisResult.fund_id == Fund.id)
@@ -182,7 +183,7 @@ class RebalanceService:
             code = fund_by_id.get(fid)
             if code:
                 series.setdefault(code.code, []).append((str(r.analysis_date), r.signal_direction))
-        report.as_of = str(max((r.analysis_date for r in latest.values()), default=date.today()))
+        report.as_of = str(max((r.analysis_date for r in latest.values()), default=beijing_today()))
         if not latest:
             report.caveats.append(f"窗口 {window_days} 天内无分析记录，请先执行分析")
             return report

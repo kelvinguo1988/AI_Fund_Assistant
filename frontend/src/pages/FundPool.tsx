@@ -358,6 +358,7 @@ const FundPool: React.FC = () => {
       </TableCell>
       <TableCell>
         <IconButton size="small" title={fund.starred ? '取消星标' : '设为星标'}
+          aria-label={fund.starred ? `取消星标 ${fund.name}` : `设为星标 ${fund.name}`}
           onClick={async () => {
             try {
               await fundApi.update(fund.id, { starred: !fund.starred });
@@ -373,7 +374,7 @@ const FundPool: React.FC = () => {
         </IconButton>
       </TableCell>
       <TableCell>
-        <IconButton size="small" title="刷新主题" disabled={refreshingId === fund.id}
+        <IconButton size="small" title="刷新主题" aria-label={`刷新主题 ${fund.name}`} disabled={refreshingId === fund.id}
           onClick={async () => {
             setRefreshingId(fund.id);
             try {
@@ -385,8 +386,8 @@ const FundPool: React.FC = () => {
           }}>
           <RefreshIcon fontSize="small" />
         </IconButton>
-        <IconButton size="small" onClick={() => handleOpenEdit(fund)}><EditIcon fontSize="small" /></IconButton>
-        <IconButton size="small" color="error" onClick={() => setDeleteTarget(fund)}><DeleteIcon fontSize="small" /></IconButton>
+        <IconButton size="small" onClick={() => handleOpenEdit(fund)} aria-label={`编辑基金 ${fund.name}`}><EditIcon fontSize="small" /></IconButton>
+        <IconButton size="small" color="error" onClick={() => setDeleteTarget(fund)} aria-label={`删除基金 ${fund.name}`}><DeleteIcon fontSize="small" /></IconButton>
       </TableCell>
     </TableRow>
   );

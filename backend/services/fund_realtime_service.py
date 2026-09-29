@@ -255,13 +255,27 @@ class FundRealtimeService:
     _etf_ts: float = 0.0
     _hk_ts: float = 0.0
     _index_ts: float = 0.0
-    # 兼容别名（渐进迁移；新代码用分字段）
-    _spot_lock: Optional[asyncio.Lock] = None
+    # 补锁：四类快照原来共用一把 _spot_lock，东财全市场刷新（60s+）期间
+    # ETF/港股/指数全部排在同一把锁上；按快照类型分锁后互不阻塞
+    # （每个方法只取自己的一把，无嵌套，不存在锁序问题）
+    _spot_locks: dict[str, asyncio.Lock] = {}
+
+    @classmethod
+    def _spot_lock_for(cls, name: str) -> asyncio.Lock:
+        """惰性建锁：类属性求值时事件循环尚未创建，不能在 class body 里 new"""
+        lock = cls._spot_locks.get(name)
+        if lock is None:
+            lock = cls._spot_locks[name] = asyncio.Lock()
+        return lock
 
     # 单基金估值缓存 {code: (ts, result_dict)}
     _estimate_cache: dict[str, tuple[float, dict]] = {}
     # fundgz 连续失败冷却时间戳
     _fundgz_fail_until: float = 0.0
+    # 补缺代码的独立新鲜度时间戳 {"etf"/"stock"/"hk": {code: ts}}
+    # 2026-09-29 审查 P0：腾讯按需补缺原样把全量快照的 _*_ts 续期，
+    # 全市场其余 ~980 只被视作"刚刷新"，快路径能拿到 120s+ 老数据
+    _spot_entry_ts: dict[str, dict[str, float]] = {}
     # 数据源熔断冷却 {source: fail_until_ts}
     _source_fail_until: dict[str, float] = {}
     # 最近一次快照的行情时点（"哪一天的涨跌"），随快照成功更新
@@ -339,8 +353,6 @@ class FundRealtimeService:
 
     def __init__(self, db) -> None:
         self.db = db
-        if FundRealtimeService._spot_lock is None:
-            FundRealtimeService._spot_lock = asyncio.Lock()
 
     # ── 主入口 ──────────────────────────────────────────────────────────
 
@@ -362,7 +374,9 @@ class FundRealtimeService:
         for f in funds:
             hit = FundRealtimeService._estimate_cache.get(f.code)
             if not force and hit and now - hit[0] < ESTIMATE_CACHE_TTL:
-                results[f.code] = dict(hit[1])
+                # 副本返回：hints 会在缓存之后被 OTC 分支重写，共享同一
+                # dict/list 会让上一轮的提示漏进这一轮（审查 P1）
+                results[f.code] = FundRealtimeService._copy_estimate(hit[1])
             else:
                 pending.append(f)
 
@@ -421,7 +435,11 @@ class FundRealtimeService:
                     r = results.get(f.code)
                     if r is None:
                         continue
-                    hints = r.setdefault("hints", [])
+                    # 每轮重算并整体替换：旧实现 setdefault + extend 是在
+                    # （可能命中缓存的）同一列表上追加 → 申购提示/择时提示
+                    # 逐轮累积、且带着上一轮的交易时点（2026-09-29 审查 P1）
+                    hints: list = []
+                    r["hints"] = hints
                     # A': 申购/赎回可执行性 + 手续费
                     hints.extend(OtcTradeStatusService.trade_hints(f.code, status_map.get(f.code)))
                     # C': 高低估区间（直接映射 / 主动基金基准近似；固收+ 排除）
@@ -480,17 +498,27 @@ class FundRealtimeService:
     # ── 数据源实现 ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _merge_etf_cache(spot: dict[str, dict]) -> dict[str, dict]:
-        """按需腾讯结果并入现有缓存（仍新鲜时），避免小 dict 整体覆盖全市场快照"""
-        existing = FundRealtimeService._etf_spot_cache
-        if existing and time.time() - FundRealtimeService._etf_ts < SPOT_CACHE_TTL:
-            existing.update(spot)
-            merged = existing
-        else:
-            merged = spot
-        FundRealtimeService._etf_spot_cache = merged
-        FundRealtimeService._etf_ts = time.time()
-        return merged
+    def _mark_spot_entries(ns: str, codes, ts: float) -> None:
+        """记录腾讯按需补缺代码的独立新鲜度时间戳（分快照命名空间）"""
+        bucket = FundRealtimeService._spot_entry_ts.setdefault(ns, {})
+        for c in codes:
+            bucket[c] = ts
+
+    @staticmethod
+    def _codes_fresh(ns: str, cache, ts_attr: str, codes, now: float) -> bool:
+        """快路径判定：全局快照新鲜，或所需代码是被单独续期过的补缺项
+
+        全量快照时间戳（_etf_ts/_stock_ts/_hk_ts）只描述整张快照，按需补缺
+        不得替它续期；否则全市场旧数据会被当成"刚刷新"（审查 P0）。
+        """
+        if cache is None:
+            return False
+        if now - getattr(FundRealtimeService, ts_attr) < SPOT_CACHE_TTL:
+            return True
+        bucket = FundRealtimeService._spot_entry_ts.get(ns) or {}
+        return bool(codes) and all(
+            c in cache and now - bucket.get(c, 0.0) < SPOT_CACHE_TTL for c in codes
+        )
 
     async def _get_etf_spot(
         self, codes: Optional[list[str]] = None
@@ -499,29 +527,34 @@ class FundRealtimeService:
 
         降级链: 东财 fund_etf_spot_em（全市场）→ 腾讯按需批量（场内基金
         行情与股票同接口，实测 sh510300 可用）。
+
+        缓存口径（2026-09-29 审查 P0）：`_etf_ts` 只代表**全市场快照**的
+        刷新时刻，腾讯按需补缺只给自己写入的代码记分代码时间戳；否则
+        按需补 20 只就把其余 ~980 只的老数据标成"刚刷新"。
         """
         now = time.time()
-        # 快路径：缓存新鲜且覆盖全部所需代码；codes=None 表示需要全市场快照
-        # （/etf-scan），腾讯按需写入的部分缓存不得冒充（与锁内路径同一口径）
         _cache = FundRealtimeService._etf_spot_cache
-        if (
-            _cache is not None
-            and now - FundRealtimeService._etf_ts < SPOT_CACHE_TTL
-            and (codes is not None and all(c in _cache for c in codes)
-                 or codes is None and len(_cache) >= 1000)
+        # 快路径：全量快照新鲜且覆盖所需代码（codes=None 需全市场，
+        # 腾讯按需写入的部分缓存不得冒充）；或所需代码全是未过期的补缺项
+        if _cache is not None and (
+            (
+                now - FundRealtimeService._etf_ts < SPOT_CACHE_TTL
+                and (codes is None and len(_cache) >= 1000
+                     or codes is not None and all(c in _cache for c in codes))
+            )
+            or self._codes_fresh("etf", _cache, "_etf_ts", codes, now)
         ):
             return _cache
 
-        async with FundRealtimeService._spot_lock:
+        async with FundRealtimeService._spot_lock_for("etf"):
             now = time.time()
             _cache = FundRealtimeService._etf_spot_cache
-            if (
-                _cache is not None
-                and now - FundRealtimeService._etf_ts < SPOT_CACHE_TTL
-                and (codes is not None or len(_cache) >= 1000)  # None=需全市场；>=1000 视为全市场快照
-            ):
-                # 部分缓存 → 腾讯补缺（镜像 _get_stock_spot 路径）
-                missing = [c for c in (codes or []) if c not in _cache] if codes else []
+            if _cache is not None:
+                missing = [c for c in (codes or []) if c not in _cache]
+                # codes=None 要的是全市场快照：部分缓存无法靠按需补缺凑齐，
+                # 直接落到下面的东财全量刷新分支
+                if codes is None and len(_cache) < 1000:
+                    missing = []
                 if missing and self._source_available(TENCENT_SOURCE):
                     quotes = await self._get_tencent_quotes(missing)
                     if quotes:
@@ -534,12 +567,17 @@ class FundRealtimeService:
                                 "turnover_rate": None, "volume_ratio": None,
                                 "main_inflow_pct": None, "amount": None,
                             }
-                        FundRealtimeService._etf_ts = now
+                        # 只续期补缺项，不动全量快照时间戳
+                        self._mark_spot_entries("etf", quotes.keys(), now)
                         logger.info(f"ETF 行情(腾讯补缺): +{len(quotes)} 只")
-                return _cache
+                    if all(c in _cache for c in (codes or [])):
+                        return _cache
+                elif not missing and (codes is not None or len(_cache) >= 1000):
+                    return _cache
 
             if not self._source_available(EM_SOURCE):
-                # 东财熔断 → 腾讯按需构造兼容结构
+                # 东财熔断 → 腾讯按需：只缓存这部分代码，**不**续期全量快照
+                # 时间戳（codes=None 需要全市场时不降级，宁可不给）
                 if codes and self._source_available(TENCENT_SOURCE):
                     quotes = await self._get_tencent_quotes(codes)
                     if quotes:
@@ -553,7 +591,10 @@ class FundRealtimeService:
                             }
                             for c, q in quotes.items()
                         }
-                        spot = FundRealtimeService._merge_etf_cache(spot)
+                        base = FundRealtimeService._etf_spot_cache or {}
+                        base.update(spot)
+                        FundRealtimeService._etf_spot_cache = base
+                        self._mark_spot_entries("etf", spot.keys(), now)
                         logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
                         return spot
                 return None
@@ -591,23 +632,28 @@ class FundRealtimeService:
                 return spot
             except Exception as e:
                 self._mark_source_fail(EM_SOURCE, str(e)[:80])
-                if codes and self._source_available(TENCENT_SOURCE):
-                    quotes = await self._get_tencent_quotes(codes)
-                    if quotes:
-                        spot = {
-                            c: {
-                                "name": q.get("name", ""),
-                                "price": q.get("price"),
-                                "pct": q.get("pct"),
-                                "time": q.get("time", ""),
-                                "date": "",
-                            }
-                            for c, q in quotes.items()
+
+            # 东财刷新失败 → 腾讯按需（与熔断分支同口径：不续期全量时间戳）
+            if codes and self._source_available(TENCENT_SOURCE):
+                quotes = await self._get_tencent_quotes(codes)
+                if quotes:
+                    spot = {
+                        c: {
+                            "name": q.get("name", ""),
+                            "price": q.get("price"),
+                            "pct": q.get("pct"),
+                            "time": q.get("time", ""),
+                            "date": "",
                         }
-                        spot = FundRealtimeService._merge_etf_cache(spot)
-                        logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
-                        return spot
-                return None
+                        for c, q in quotes.items()
+                    }
+                    base = FundRealtimeService._etf_spot_cache or {}
+                    base.update(spot)
+                    FundRealtimeService._etf_spot_cache = base
+                    self._mark_spot_entries("etf", spot.keys(), now)
+                    logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
+                    return spot
+            return None
 
     async def _get_stock_spot(
         self, codes: Optional[list[str]] = None
@@ -622,22 +668,23 @@ class FundRealtimeService:
         """
         now = time.time()
         # 快路径：缓存新鲜且覆盖全部所需代码（腾讯按需缓存是部分市场，
-        # 必须做覆盖检查，否则 60s 内第二只基金会拿到不完整的 map）
+        # 必须做覆盖检查，否则 60s 内第二只基金会拿到不完整的 map）；
+        # 全量快照过期时，仅当所需代码都是未过期的补缺项才直接命中
         cache = FundRealtimeService._stock_spot_cache
         if (
             cache is not None
-            and now - FundRealtimeService._stock_ts < SPOT_CACHE_TTL
             and all(c in cache for c in (codes or []))
+            and (
+                now - FundRealtimeService._stock_ts < SPOT_CACHE_TTL
+                or self._codes_fresh("stock", cache, "_stock_ts", codes, now)
+            )
         ):
             return cache
 
-        async with FundRealtimeService._spot_lock:
+        async with FundRealtimeService._spot_lock_for("stock"):
             now = time.time()
             cache = FundRealtimeService._stock_spot_cache
-            if (
-                cache is not None
-                and now - FundRealtimeService._stock_ts < SPOT_CACHE_TTL
-            ):
+            if cache is not None:
                 missing = [c for c in (codes or []) if c not in cache]
                 if not missing:
                     return cache
@@ -646,9 +693,13 @@ class FundRealtimeService:
                     tmap = await self._get_tencent_pct(missing)
                     if tmap:
                         cache.update(tmap)
-                        FundRealtimeService._stock_ts = now
+                        # 只续期补缺项：全量快照时间戳 _stock_ts 不动
+                        # （2026-09-29 审查 P0，与 ETF 路径同口径）
+                        self._mark_spot_entries("stock", tmap.keys(), now)
                         logger.info(f"A 股行情(腾讯补缺): +{len(tmap)} 只")
-                return cache
+                if not missing or now - FundRealtimeService._stock_ts < SPOT_CACHE_TTL:
+                    return cache
+                # 补缺后仍有缺口且全量快照已过期 → 继续走东财全量刷新
 
             import akshare as ak
             from backend.data_sources.akshare_adapter import AKShareAdapter
@@ -699,30 +750,37 @@ class FundRealtimeService:
         东财限连时腾讯按需只查所需港股（top10 场景 1~2 只一次请求）。
         """
         now = time.time()
-        # 快路径：缓存新鲜且覆盖全部所需代码（腾讯按需缓存是部分市场）
+        # 快路径：缓存新鲜且覆盖全部所需代码（腾讯按需缓存是部分市场）；
+        # 全量快照过期时仅当所需代码都是未过期补缺项才命中
         cache = FundRealtimeService._hk_spot_cache
         if (
             cache is not None
-            and now - FundRealtimeService._hk_ts < SPOT_CACHE_TTL
             and all(c in cache for c in (codes or []))
+            and (
+                now - FundRealtimeService._hk_ts < SPOT_CACHE_TTL
+                or self._codes_fresh("hk", cache, "_hk_ts", codes, now)
+            )
         ):
             return cache
 
-        async with FundRealtimeService._spot_lock:
+        async with FundRealtimeService._spot_lock_for("hk"):
             now = time.time()
             cache = FundRealtimeService._hk_spot_cache
-            if (
-                cache is not None
-                and now - FundRealtimeService._hk_ts < SPOT_CACHE_TTL
-            ):
+            if cache is not None:
                 missing = [c for c in (codes or []) if c not in cache]
+                fresh = now - FundRealtimeService._hk_ts < SPOT_CACHE_TTL
+                if fresh and not missing:
+                    return cache
                 if missing and self._source_available(TENCENT_SOURCE):
                     tmap = await self._get_tencent_pct(missing)
                     if tmap:
                         cache.update(tmap)
-                        FundRealtimeService._hk_ts = now
+                        # 只续期补缺项，不替全量快照续期（审查 P0）
+                        self._mark_spot_entries("hk", tmap.keys(), now)
                         logger.info(f"港股行情(腾讯补缺): +{len(tmap)} 只")
-                return cache
+                still_missing = [c for c in (codes or []) if c not in cache]
+                if not still_missing and (fresh or codes is not None):
+                    return cache
 
             if not self._source_available(EM_SOURCE):
                 # 东财熔断 → 腾讯按需
@@ -774,7 +832,7 @@ class FundRealtimeService:
         ):
             return FundRealtimeService._index_pct_cache
 
-        async with FundRealtimeService._spot_lock:
+        async with FundRealtimeService._spot_lock_for("index"):
             now = time.time()
             if (
                 FundRealtimeService._index_pct_cache is not None
@@ -804,7 +862,11 @@ class FundRealtimeService:
                 df = await adapter._call(ak.stock_zh_index_spot_em, symbol="沪深重要指数", _max_attempts=2)
                 if df is None or df.empty:
                     return None
-                row = df[df["名称"].astype(str).str.contains("沪深300", na=False)]
+                # 按代码精确取沪深300（000300）：名称模糊匹配会命中"沪深300指数ETF"
+                # 等一堆同名前缀条目，iloc[0] 取到谁是运气
+                row = df[df["代码"].astype(str).str.strip() == "000300"]
+                if row.empty:
+                    row = df[df["名称"].astype(str).str.strip() == "沪深300"]
                 if row.empty:
                     return None
                 pct = _to_float(row.iloc[0].get("涨跌幅"))
@@ -1131,8 +1193,30 @@ class FundRealtimeService:
     # ── 缓存 ────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _snapshot_estimate(data: dict) -> dict:
+        """估值结果入缓存前的独立快照
+
+        入缓存的是 results[code] 本身，而 OTC 提示分支随后仍会在同一个 dict
+        上挂 hints —— 共享引用会让缓存与本轮输出互相改写（审查 P1）。
+        """
+        snap = dict(data)
+        if isinstance(snap.get("hints"), list):
+            snap["hints"] = list(snap["hints"])
+        return snap
+
+    @staticmethod
+    def _copy_estimate(data: dict) -> dict:
+        out = dict(data)
+        if isinstance(out.get("hints"), list):
+            out["hints"] = list(out["hints"])
+        return out
+
+    @staticmethod
     def _cache_estimate(code: str, data: dict) -> None:
-        FundRealtimeService._estimate_cache[code] = (time.time(), data)
+        FundRealtimeService._estimate_cache[code] = (
+            time.time(),
+            FundRealtimeService._snapshot_estimate(data),
+        )
 
     # ── 报告项：前十大持仓涨跌 ──────────────────────────────────────────
 

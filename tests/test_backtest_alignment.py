@@ -38,18 +38,29 @@ class TestAlignSignals:
         assert aligned == {"2026-05-26": signal_map["2026-05-26"]}
 
     def test_stale_signal_before_series_dropped(self):
-        # 远早于净值窗口起点（>4 天）的陈旧信号丢弃，避免首日无来由调仓并计费
+        # 远早于净值窗口起点（> _MAX_PRE_WINDOW_SIGNAL_DAYS）的陈旧信号丢弃，
+        # 避免首日无来由调仓并计费
         aligned = BacktestService._align_signals_to_trading_days(
             TRADING_DAYS, {"2026-05-01": {"direction": "buy", "strength": "hold", "score": 0.5}}
         )
         assert aligned == {}
 
     def test_short_gap_before_first_day_aligns_to_first_day(self):
-        # 节假日/周末顺延（≤4 天）仍对齐到首交易日
+        # 周末/短节假日顺延仍对齐到首交易日
         aligned = BacktestService._align_signals_to_trading_days(
             TRADING_DAYS, {"2026-05-20": {"direction": "buy", "strength": "hold", "score": 0.5}}  # 上周三
         )
         assert aligned == {"2026-05-22": {"direction": "buy", "strength": "hold", "score": 0.5}}
+
+    def test_long_holiday_signal_before_first_day_kept(self):
+        """国庆/春节 8 天长假：起点前 8 天的信号是顺延而来，不是陈旧信号
+
+        旧口径只看 ≤4 自然日，长假期间跑出的信号会在回测里凭空消失。
+        """
+        days = ["2026-10-08", "2026-10-09", "2026-10-12"]
+        sig = {"direction": "buy", "strength": "moderate_buy", "score": 2.0}
+        aligned = BacktestService._align_signals_to_trading_days(days, {"2026-09-30": sig})
+        assert aligned == {"2026-10-08": sig}
 
     def test_signal_after_series_dropped(self):
         aligned = BacktestService._align_signals_to_trading_days(

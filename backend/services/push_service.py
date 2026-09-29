@@ -14,6 +14,7 @@ from backend.models.push_channel import PushChannel
 from backend.models.report_config import ReportConfig
 from backend.push.feishu import FeishuPush
 from backend.schemas.analysis import AnalysisResultOut
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ class PushService:
                 svc = MarketService()
                 from backend.schemas.market import MarketSummaryOut, SignalSummary
 
-                today_str = date.today().isoformat()
+                today_str = beijing_today().isoformat()
                 market_flow = await svc.get_market_capital_flow()
                 sector_flow_raw = await svc.get_sector_flow_rankings()
                 hsgt_flow = await svc.get_hsgt_flow()

@@ -78,7 +78,7 @@ const ErrorBell: React.FC = () => {
 
   return (
     <>
-      <IconButton color="inherit" onClick={handleOpen} title="系统错误告警">
+      <IconButton color="inherit" onClick={handleOpen} title="系统错误告警" aria-label="系统错误告警">
         <Badge badgeContent={unread} color="error" max={99}>
           <NotificationsIcon />
         </Badge>

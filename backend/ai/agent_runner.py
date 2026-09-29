@@ -171,7 +171,8 @@ class AgentRunner:
                 async for ev in self._iter_round(agen):
                     if ev["type"] == "final":
                         resp = ev["response"]
-                    elif ev["type"] == "delta" and not forced_summary:
+                    elif ev["type"] == "delta":
+                        # 工具轮的零星文本由随后的 delta_reset 作废
                         yield ev
                     elif ev["type"] == "tool_call":
                         yield ev
@@ -223,10 +224,15 @@ class AgentRunner:
                 yield {"type": "tool_result", **trace}
                 messages.append(_tool_msg(tc.id or "", payload))
             if token_spent > self.token_budget:
-                # 预算耗尽：末轮强制无工具总结
+                # 预算耗尽：立刻退出主循环，交给下面的收尾轮出总结。
+                # 原实现只是 specs=[] 继续下一轮，而 forced_summary=True 会把后续
+                # 轮次的 delta 全部抑制（那是给"工具轮零星文本"用的），最终
+                # final_text 有内容 → 收尾轮被跳过 → 用户界面上一个字都不出。
                 forced_summary = True
                 messages.append({"role": "user", "content": "工具调用预算已用完，请基于已获得的信息直接给出最终结论，不要再请求工具。"})
-                specs = []
+                yield {"type": "budget_exhausted", "round": round_no,
+                       "token_spent": token_spent, "budget": self.token_budget}
+                break
 
         else:
             forced_summary = True

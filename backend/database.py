@@ -326,12 +326,17 @@ async def init_db() -> None:
             _migration_ok(e, "fund_manager_records.last_seen_at")
 
         # uq_fund_date 唯一约束回填（旧库 create_all 不会补约束；并发分析曾可插重复行）
-        # 先清理历史重复（保留每组最新一条），再建唯一索引
+        # 索引已存在即视为回填完成：原实现在每次启动都跑一遍全表 DELETE 去重，
+        # 结果只可能来自那一次脏数据窗口，重复扫描既拖慢启动又长时间持写锁
         try:
-            await conn.execute(text(
-                "DELETE FROM analysis_results WHERE id NOT IN "
-                "(SELECT MAX(id) FROM analysis_results GROUP BY fund_id, analysis_date)"
-            ))
+            has_uq = (await conn.execute(text(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name='uq_fund_date'"
+            ))).first()
+            if not has_uq:
+                await conn.execute(text(
+                    "DELETE FROM analysis_results WHERE id NOT IN "
+                    "(SELECT MAX(id) FROM analysis_results GROUP BY fund_id, analysis_date)"
+                ))
             await conn.execute(text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_fund_date ON analysis_results (fund_id, analysis_date)"
             ))

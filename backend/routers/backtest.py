@@ -157,6 +157,18 @@ async def update_auto_config(
     return ApiResponse(data=await get_auto_config(db))
 
 
+@router.get("/batch/status", response_model=ApiResponse[dict])
+async def batch_status():
+    """全量回测是否仍在后台运行
+
+    前端"运行中…"按钮状态需要以服务端为准：此前 triggerBatch 成功后
+    本地 flag 永不复位，按钮永久 disabled、60s 轮询无终止条件
+    （2026-09-29 审查 P0）。
+    """
+    from backend.services.auto_backtest_service import AutoBacktestService
+    return ApiResponse(data={"running": bool(AutoBacktestService._running)})
+
+
 @router.post("/batch/run")
 async def trigger_batch_backtest(db: AsyncSession = Depends(get_db)):
     """手动触发一次全量回测（后台执行，逐只落库）"""

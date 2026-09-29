@@ -239,14 +239,18 @@ class PortfolioXrayService:
         holdings_map = await _latest_quarter_holdings(
             self.db, [f.id for f in funds]
         )
-        # 经理（最新一条记录）
-        mgr_map: dict[int, str] = {}
+        # 经理（该基金最新在任的全部经理 + 公司），共同在任时保多行
+        mgr_map: dict[int, list[str]] = {}
+        comp_map: dict[int, str] = {}
         mgr_rows = (await self.db.execute(
             select(FundManagerRecord)
             .where(FundManagerRecord.fund_id.in_([f.id for f in funds]))
         )).scalars().all()
         for m in mgr_rows:
-            mgr_map.setdefault(m.fund_id, m.manager_name or "")
+            if m.manager_name:
+                mgr_map.setdefault(m.fund_id, []).append(m.manager_name)
+            if m.company and m.fund_id not in comp_map:
+                comp_map[m.fund_id] = m.company
 
         payloads = []
         for f in funds:
@@ -254,8 +258,8 @@ class PortfolioXrayService:
             payloads.append({
                 "code": f.code,
                 "name": f.name or f.code,
-                "manager": mgr_map.get(f.id, ""),
-                "company": "",
+                "manager": "、".join(dict.fromkeys(mgr_map.get(f.id, []))),
+                "company": comp_map.get(f.id, ""),
                 "holdings": [
                     (h.stock_code, h.stock_name, float(h.ratio)) for h in holds
                 ],

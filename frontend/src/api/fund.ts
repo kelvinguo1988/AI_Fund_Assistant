@@ -56,8 +56,8 @@ export const fundApi = {
   detailStatus: () =>
     apiClient.get<ApiResponse<FundDetailStatus>>(`${BASE}/detail/status`).then((r) => r.data),
 
-  getHoldings: (id: number) =>
-    apiClient.get<ApiResponse<FundHoldingOut[]>>(`${BASE}/${id}/holdings`).then((r) => r.data),
+  getHoldings: (id: number, config?: { signal?: AbortSignal }) =>
+    apiClient.get<ApiResponse<FundHoldingOut[]>>(`${BASE}/${id}/holdings`, config).then((r) => r.data),
 
   getManager: (id: number) =>
     apiClient.get<ApiResponse<FundManagerOut[]>>(`${BASE}/${id}/manager`).then((r) => r.data),

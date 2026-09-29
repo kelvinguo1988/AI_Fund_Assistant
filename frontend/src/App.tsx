@@ -167,6 +167,7 @@ const AppLayout: React.FC = () => {
           <IconButton
             color="inherit"
             edge="start"
+            aria-label="切换侧边栏"
             onClick={toggleSidebar}
             sx={{ mr: 2 }}
           >

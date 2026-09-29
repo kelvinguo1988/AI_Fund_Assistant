@@ -119,6 +119,12 @@ async def update_holiday_config(
         else:
             db.add(SystemConfig(config_key=key, config_value=val, updated_at=now_beijing()))
     await db.commit()
+
+    # 时间/开关改了要立刻重载任务：否则新时间点要到下次进程启动才生效
+    if CFG_TIME in updates or CFG_ENABLED in updates:
+        from backend.scheduler.task_scheduler import task_scheduler
+        await task_scheduler.register_holiday_sync_now()
+
     return await get_holiday_config(db)
 
 

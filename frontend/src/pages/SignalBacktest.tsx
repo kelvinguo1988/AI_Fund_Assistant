@@ -39,7 +39,8 @@ import type { EChartsOption } from 'echarts';
 import { fundApi } from '../api/fund';
 import { backtestApi, backtestBatchApi, type BacktestBatchItem, type AutoBacktestConfig } from '../api/backtest';
 import type { FundOut, BacktestSummary } from '../types';
-import { STRENGTH_LABELS } from '../utils/format';
+import { STRENGTH_LABELS, GROWTH_UP, GROWTH_DOWN } from '../utils/format';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 
 const SignalBacktest: React.FC = () => {
@@ -49,7 +50,7 @@ const SignalBacktest: React.FC = () => {
   const [effectivenessWindow, setEffectivenessWindow] = useState(5);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<BacktestSummary | null>(null);
-  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+  const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' | 'info' });
 
   // ── 回测调仓费率（后端 system_config 持久化，0 = 不计成本）──
   const [feePct, setFeePct] = useState<number>(0.6);
@@ -74,6 +75,17 @@ const SignalBacktest: React.FC = () => {
   const [batchRows, setBatchRows] = useState<BacktestBatchItem[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
+
+  const clearBatchResults = async () => {
+    setClearOpen(false);
+    try {
+      await backtestBatchApi.clearResults();
+      loadBatch();
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err?.message || '清空失败', severity: 'error' });
+    }
+  };
 
   const loadBatch = async () => {
     setBatchLoading(true);
@@ -95,9 +107,25 @@ const SignalBacktest: React.FC = () => {
       .then((r) => setFeePct(r.data?.fee_pct ?? feePct))
       .catch(() => { /* 读不到配置则沿用默认展示值 */ });
     loadBatch();
-    // 批量结果 60s 轮询：手动触发一轮全量回测后逐只落库，可实时看到进度
-    const t = setInterval(() => {
-      if (batchRunning) loadBatch();
+    // 批量结果轮询：手动触发一轮全量回测后逐只落库，可实时看到进度。
+    // 终止条件以**服务端** running 为准（2026-09-29 审查 P0：旧实现只在
+    // triggerBatch 成功时把 batchRunning 置 true 且永不复位 → 按钮永久
+    // disabled、60s 轮询无终止条件，后端早已跑完前端也不知道）；
+    // 连续 3 次状态请求失败才兜底复位，避免后端不可达时空转。
+    let statusFailStreak = 0;
+    const t = setInterval(async () => {
+      loadBatch();
+      if (!batchRunning) return;
+      try {
+        const s = await backtestBatchApi.status();
+        statusFailStreak = 0;
+        // 端点是 ApiResponse 信封，running 在 data 里（读 s.running 恒 undefined，
+        // 复位只剩"连续 3 次失败"兜底 → 按钮永远禁用）
+        if (s?.data?.running === false) setBatchRunning(false);
+      } catch {
+        statusFailStreak += 1;
+        if (statusFailStreak >= 3) setBatchRunning(false);
+      }
     }, 60_000);
     return () => clearInterval(t);
   }, [batchRunning]);
@@ -257,8 +285,14 @@ const SignalBacktest: React.FC = () => {
       setSnackbar({ open: true, message: '全量回测已启动（后台逐只执行，结果实时落库）', severity: 'success' });
       loadBatch();
     } catch (err: any) {
+      const msg = err?.displayMessage || err?.message || '触发失败';
+      // 409 = 服务端已有一轮在跑（调度或他人触发），保持"运行中"并继续轮询
+      if (err?.response?.status === 409) {
+        setSnackbar({ open: true, message: msg, severity: 'info' });
+        return;
+      }
       setBatchRunning(false);
-      setSnackbar({ open: true, message: err?.message || '触发失败', severity: 'error' });
+      setSnackbar({ open: true, message: msg, severity: 'error' });
     }
   };
 
@@ -284,15 +318,7 @@ const SignalBacktest: React.FC = () => {
               >
                 {batchRunning ? '运行中…' : '立即全量回测'}
               </Button>
-              <Button size="small" startIcon={<DeleteIcon />} onClick={async () => {
-                if (!window.confirm('清空全部批量回测结果？')) return;
-                try {
-                  await backtestBatchApi.clearResults();
-                  loadBatch();
-                } catch (err: any) {
-                  setSnackbar({ open: true, message: err?.message || '清空失败', severity: 'error' });
-                }
-              }}>
+              <Button size="small" startIcon={<DeleteIcon />} onClick={() => setClearOpen(true)}>
                 清空
               </Button>
             </Box>
@@ -350,7 +376,7 @@ const SignalBacktest: React.FC = () => {
                       {r.fund_name}
                       <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{r.fund_code}</Typography>
                     </TableCell>
-                    <TableCell align="right" sx={{ color: (r.total_strategy_return ?? 0) >= 0 ? '#f44336' : '#4caf50' }}>
+                    <TableCell align="right" sx={{ color: (r.total_strategy_return ?? 0) >= 0 ? GROWTH_UP : GROWTH_DOWN }}>
                       {r.total_strategy_return != null ? `${r.total_strategy_return.toFixed(2)}%` : '—'}
                     </TableCell>
                     <TableCell align="right">
@@ -548,6 +574,16 @@ const SignalBacktest: React.FC = () => {
           </Typography>
         </Paper>
       )}
+
+      <ConfirmDialog
+        open={clearOpen}
+        title="清空批量回测结果"
+        message="清空全部批量回测结果？已生成的单基金回测不受影响。"
+        confirmLabel="清空"
+        confirmColor="error"
+        onConfirm={clearBatchResults}
+        onCancel={() => setClearOpen(false)}
+      />
 
       <Snackbar
         open={snackbar.open}

@@ -27,6 +27,8 @@ class TaskScheduler:
 
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
+        # 单日失败计数 {(北京日, schedule_id): 连续失败次数}，跨日自动清
+        self._daily_fail: dict[tuple[str, int], int] = {}
 
     def start(self) -> None:
         """启动调度器"""
@@ -125,12 +127,36 @@ class TaskScheduler:
 
         return None
 
+    # 单日连续失败熔断阈值（按 schedule_id 计）
+    DAILY_FAIL_LIMIT = 3
+
+    def _fail_key(self, schedule_id: int) -> tuple[str, int]:
+        from backend.utils.timezone import beijing_today
+        return (beijing_today().isoformat(), schedule_id)
+
     async def _run_task(self, schedule_id: int) -> None:
         """执行调度任务
 
         失败重试：网络抖动类瞬时故障重试 1 次（间隔 60s），
         重试仍失败记 ERROR（含堆栈），不再无限重试（防雪崩）。
+
+        单日熔断（2026-09-29 审查 P1）：小时级 cron 调度在数据源被风控时，
+        每次触发都完整重跑"全量分析 + 1 次重试"= 一天十几轮连打行情源，
+        正是封禁的成因。同一调度当天累计失败到阈值后当天不再执行，只埋点一次。
         """
+        key = self._fail_key(schedule_id)
+        # 顺带清掉往日的计数（dict 只增会随运行时间无限增长）
+        today = key[0]
+        for stale in [k for k in self._daily_fail if k[0] != today]:
+            self._daily_fail.pop(stale, None)
+        fails = self._daily_fail.get(key, 0)
+        if fails >= self.DAILY_FAIL_LIMIT:
+            logger.warning(
+                f"调度任务 {schedule_id} 当日已连续失败 {fails} 次，"
+                f"触发单日熔断，本次触发跳过（次日自动恢复）"
+            )
+            return
+
         logger.info(f"调度任务开始执行: schedule_id={schedule_id}")
 
         try:
@@ -145,30 +171,145 @@ class TaskScheduler:
             try:
                 await self._execute_task_once(schedule_id)
                 logger.info(f"调度任务重试成功: schedule_id={schedule_id}")
+                self._daily_fail[key] = 0
             except Exception as retry_e:
+                self._daily_fail[key] = fails + 1
                 logger.error(
                     f"调度任务重试仍失败 schedule_id={schedule_id}（已重试 1 次，放弃）: "
                     f"{type(retry_e).__name__}: {retry_e}",
                     exc_info=True,
                 )
+                from backend.services.error_log_service import log_source_failure
+                log_source_failure(
+                    module=f"scheduler.schedule_{schedule_id}",
+                    message=(
+                        f"调度任务当日累计失败 {self._daily_fail[key]} 次"
+                        f"（阈值 {self.DAILY_FAIL_LIMIT}，达到后当日不再重跑）: "
+                        f"{type(retry_e).__name__}: {str(retry_e)[:160]}"
+                    ),
+                    category="other",
+                )
+        else:
+            self._daily_fail[key] = 0
+
+    # 调度取分析锁的最长等待：手动流式分析（前端 SSE）可跑 10~30 分钟，
+    # 原实现把 AnalysisService._run_lock 整段持有视为"调度自然 misfire 跳过"，
+    # 当日推送在日志里只剩一条 misfire 信息就静默丢失（2026-09-29 审查 P0）。
+    _LOCK_WAIT_SECONDS = 900
+
+    async def _acquire_run_lock(self, schedule_id: int):
+        """带超时地获取分析进程锁；返回 lock 或 None（None=本轮放弃）"""
+        import asyncio
+
+        from backend.services.analysis_service import AnalysisService
+
+        if AnalysisService._run_lock is None:
+            AnalysisService._run_lock = asyncio.Lock()
+        lock = AnalysisService._run_lock
+        if lock.locked():
+            logger.warning(
+                f"调度 schedule_id={schedule_id} 等待分析进程锁"
+                f"（手动分析或其他调度正在跑），最长 {self._LOCK_WAIT_SECONDS}s"
+            )
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=self._LOCK_WAIT_SECONDS)
+        except asyncio.TimeoutError:
+            return None
+        return lock
+
+    @staticmethod
+    def _release_run_lock(lock) -> None:
+        if lock is not None and lock.locked():
+            lock.release()
+
+    async def _push_with_retry(self, schedule_id: int, results, sched) -> None:
+        """推送（独立会话 + 1 次重试）。
+
+        分析已成功、仅推送失败时只埋点不上抛：上抛会触发 _run_task 整任务
+        重跑 → 全量分析 + 连打行情源（防封禁，2026-09-01 既定口径）。
+        """
+        from backend.services.analysis_service import AnalysisService
+        from backend.services.push_service import PushService
+        from backend.services.error_log_service import log_source_failure
+
+        lock = await self._acquire_run_lock(schedule_id)
+        if lock is None:
+            logger.error(f"推送跳过 schedule_id={schedule_id}：分析进程锁等待超时")
+            log_source_failure(
+                module=f"scheduler.push.schedule_{schedule_id}",
+                message=(
+                    f"推送前等待分析进程锁超过 {self._LOCK_WAIT_SECONDS}s，"
+                    f"本轮不推送（results={len(results)} 只已落库）"
+                ),
+                category="timeout",
+            )
+            return
+        try:
+            async with async_session_factory() as session:
+                push_svc = PushService(session)
+                push_err: Optional[Exception] = None
+                for attempt in (1, 2):
+                    try:
+                        push_err = None
+                        push_results = await push_svc.push_analysis_results(
+                            results, sched.channel_id
+                        )
+                        failed = [k for k, ok in push_results.items() if not ok]
+                        if failed:
+                            logger.error(
+                                f"推送部分失败 schedule_id={schedule_id} "
+                                f"channel_id={sched.channel_id} "
+                                f"失败项: {failed}（共 {len(failed)}/{len(push_results)}）"
+                            )
+                        break
+                    except Exception as e:
+                        push_err = e
+                        logger.error(
+                            f"推送整体失败 schedule_id={schedule_id} "
+                            f"channel_id={sched.channel_id} 第 {attempt} 次: "
+                            f"{type(e).__name__}: {e}",
+                            exc_info=True,
+                        )
+                        if attempt == 1:
+                            await asyncio.sleep(60)
+                if push_err is not None:
+                    log_source_failure(
+                        module=f"scheduler.push.schedule_{schedule_id}",
+                        message=(
+                            f"推送重试后仍失败 channel_id={sched.channel_id} "
+                            f"results={len(results)} 只: "
+                            f"{type(push_err).__name__}: {push_err}"
+                        ),
+                        category="push",
+                    )
+        finally:
+            self._release_run_lock(lock)
 
     async def _execute_task_once(self, schedule_id: int) -> None:
-        """调度任务单次执行（分析 + 推送），供 _run_task 重试调用"""
+        """调度任务单次执行（分析 + 推送），供 _run_task 重试调用
+
+        会话边界（2026-09-29 审查 P0）：交易日闸门 / 分析 / 推送各自独立
+        session。原实现单个 `async with async_session_factory()` 从交易日
+        判定一路包住分析、预热、推送重试与两处 `await asyncio.sleep(60)`
+        —— 会话在睡眠期间持续占用，且内部任一次 rollback 会把前面已 flush
+        未 commit 的写入一并废掉。
+        """
         try:
             from backend.services.analysis_service import AnalysisService
             from backend.data_sources.trading_calendar import (
                 is_a_share_trading_day_async,
             )
-            from datetime import date as date_type
+            from backend.utils.timezone import beijing_today
 
             # 严格 A 股交易日闸门：周末 + 法定休市日（含调休休息日）一律不推送。
             # 数据源优先级：holiday_calendar 表（已同步国务院放假安排，含调休）
             #   → 缺失时回退 chinese_calendar。
+            # 闸门用北京日：UTC 容器里 date.today() 与北京日在晚间会差一天。
+            today = beijing_today()
             async with async_session_factory() as session:
-                if not await is_a_share_trading_day_async(session, date_type.today()):
+                if not await is_a_share_trading_day_async(session, today):
                     logger.info(
-                        f"今天({date_type.today()})非 A 股交易日，跳过调度 "
-                        f"schedule_id={schedule_id}"
+                        f"今天({today})非 A 股交易日，跳过调度 schedule_id={schedule_id}"
                     )
                     return
 
@@ -182,91 +323,77 @@ class TaskScheduler:
 
                 await session.commit()
 
-                # AI 每日简报：独立任务类型，不跑全量分析（防连打行情源），
-                # 失败静默（仅埋点），不影响其他调度任务
-                if sched and sched.task_type == "ai_daily_brief":
+            # AI 每日简报：独立任务类型，不跑全量分析（防连打行情源），
+            # 失败静默（仅埋点），不影响其他调度任务
+            if sched and sched.task_type == "ai_daily_brief":
+                async with async_session_factory() as session:
                     await self._run_ai_daily_brief(session, sched)
-                    logger.info(f"调度任务完成: schedule_id={schedule_id}")
-                    return
+                logger.info(f"调度任务完成: schedule_id={schedule_id}")
+                return
 
-                # 执行分析
-                from backend.config import settings
-                # 市场环境快照含盘中实时指标（涨跌家数）：调度分析前清缓存，
-                # 避免复用盘中旧快照污染收盘后的分析（与 MarketService 清缓存模式一致）
-                from backend.services.market_regime_service import MarketRegimeService
-                MarketRegimeService.clear_cache()
-                svc = AnalysisService(
-                    session,
-                    joinquant_user=settings.JOINQUANT_USER,
-                    joinquant_password=settings.JOINQUANT_PASSWORD,
+            # ── 分析段（独立会话，显式持锁而非依赖 run_analysis 内部加锁）──
+            lock = await self._acquire_run_lock(schedule_id)
+            if lock is None:
+                logger.error(
+                    f"调度 schedule_id={schedule_id} 放弃本轮：分析进程锁等待超时"
+                    f"（>{self._LOCK_WAIT_SECONDS}s，手动/其他分析长期占用）"
                 )
-                results = await svc.run_analysis()
-
-                # 预热实时估值缓存：推送后用户打开仪表盘即可见当日实时涨跌，
-                # 无需前端轮询（页面加载/刷新时也会触发，此处保证推送后数据新鲜）。
-                # 契约：本轮是调度内【唯一】的 force=True 强刷轮。PushService 取数时
-                # 走缓存优先（覆盖率不足才强刷），直接消费这里写入的 _estimate_cache。
-                # 若把推送改回 force=True，一次调度会连打三轮行情源 → 东财反爬
-                # 熔断 600s → 推送反而拿不到数据（2026-09-01 修复）。
-                try:
-                    from backend.services.fund_realtime_service import FundRealtimeService
-                    from backend.models.fund import Fund as _Fund
-                    rt_stmt = await session.execute(
-                        select(_Fund).where(_Fund.status == "active")
+                from backend.services.error_log_service import log_source_failure
+                log_source_failure(
+                    module=f"scheduler.analysis.schedule_{schedule_id}",
+                    message=(
+                        f"等待分析进程锁超过 {self._LOCK_WAIT_SECONDS}s，"
+                        f"本轮调度分析与推送一并跳过"
+                    ),
+                    category="timeout",
+                    severity="warning",
+                )
+                return
+            try:
+                async with async_session_factory() as session:
+                    # 执行分析
+                    from backend.config import settings
+                    # 市场环境快照含盘中实时指标（涨跌家数）：调度分析前清缓存，
+                    # 避免复用盘中旧快照污染收盘后的分析（与 MarketService 清缓存模式一致）
+                    from backend.services.market_regime_service import MarketRegimeService
+                    MarketRegimeService.clear_cache()
+                    svc = AnalysisService(
+                        session,
+                        joinquant_user=settings.JOINQUANT_USER,
+                        joinquant_password=settings.JOINQUANT_PASSWORD,
                     )
-                    rt_funds = list(rt_stmt.scalars().all())
-                    if rt_funds:
-                        rt_svc = FundRealtimeService(session)
-                        await rt_svc.get_realtime(rt_funds, force=True)
-                except Exception as rt_err:
-                    logger.warning(
-                        f"实时估值预热失败（不影响推送）: "
-                        f"{type(rt_err).__name__}: {rt_err}",
-                        exc_info=True,
-                    )
+                    results = await svc._run_analysis_locked()
 
-                # 推送
-                if sched and sched.channel_id:
-                    from backend.services.push_service import PushService
-                    from backend.services.error_log_service import log_source_failure
-                    push_svc = PushService(session)
-                    push_err: Optional[Exception] = None
-                    for attempt in (1, 2):
-                        try:
-                            push_err = None
-                            push_results = await push_svc.push_analysis_results(
-                                results, sched.channel_id
-                            )
-                            failed = [k for k, ok in push_results.items() if not ok]
-                            if failed:
-                                logger.error(
-                                    f"推送部分失败 schedule_id={schedule_id} "
-                                    f"channel_id={sched.channel_id} "
-                                    f"失败项: {failed}（共 {len(failed)}/{len(push_results)}）"
-                                )
-                            break
-                        except Exception as e:
-                            push_err = e
-                            logger.error(
-                                f"推送整体失败 schedule_id={schedule_id} "
-                                f"channel_id={sched.channel_id} 第 {attempt} 次: "
-                                f"{type(e).__name__}: {e}",
-                                exc_info=True,
-                            )
-                            if attempt == 1:
-                                await asyncio.sleep(60)
-                    if push_err is not None:
-                        # 分析已成功，仅推送失败：埋点后不上抛。
-                        # 上抛会触发 _run_task 整任务重跑 → 全量分析 + 连打行情源（防封禁）。
-                        log_source_failure(
-                            module=f"scheduler.push.schedule_{schedule_id}",
-                            message=(
-                                f"推送重试后仍失败 channel_id={sched.channel_id} "
-                                f"results={len(results)} 只: "
-                                f"{type(push_err).__name__}: {push_err}"
-                            ),
-                            category="push",
+                    # 预热实时估值缓存：推送后用户打开仪表盘即可见当日实时涨跌，
+                    # 无需前端轮询（页面加载/刷新时也会触发，此处保证推送后数据新鲜）。
+                    # 契约：本轮是调度内【唯一】的 force=True 强刷轮。PushService 取数时
+                    # 走缓存优先（覆盖率不足才强刷），直接消费这里写入的 _estimate_cache。
+                    # 若把推送改回 force=True，一次调度会连打三轮行情源 → 东财反爬
+                    # 熔断 600s → 推送反而拿不到数据（2026-09-01 修复）。
+                    rt_funds: list = []
+                    try:
+                        from backend.services.fund_realtime_service import FundRealtimeService
+                        from backend.models.fund import Fund as _Fund
+                        rt_stmt = await session.execute(
+                            select(_Fund).where(_Fund.status == "active")
                         )
+                        rt_funds = list(rt_stmt.scalars().all())
+                        if rt_funds:
+                            rt_svc = FundRealtimeService(session)
+                            await rt_svc.get_realtime(rt_funds, force=True)
+                    except Exception as rt_err:
+                        logger.warning(
+                            f"实时估值预热失败（不影响推送）: "
+                            f"{type(rt_err).__name__}: {rt_err}",
+                            exc_info=True,
+                        )
+            finally:
+                # 会话随块结束关闭；结果已是 DTO，脱离会话可安全读取
+                self._release_run_lock(lock)
+
+            # ── 推送段（独立会话；其内部重试与 60s sleep 不再占用分析会话）──
+            if sched and sched.channel_id:
+                await self._push_with_retry(schedule_id, results, sched)
 
             logger.info(f"调度任务完成: schedule_id={schedule_id}")
         except Exception as e:
@@ -383,6 +510,17 @@ class TaskScheduler:
                 message=f"自动全量回测失败: {type(e).__name__}: {e}",
                 category="other",
             )
+
+    async def register_holiday_sync_now(self) -> None:
+        """供配置保存后立即重载调休同步任务
+
+        否则改了 holiday_auto_sync_time 要到下次进程重启才生效（注册本身
+        replace_existing，幂等；异常只记日志不外抛，配置已落库不该因此报错）。
+        """
+        try:
+            await self._register_holiday_sync()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"重载调休同步任务失败: {e}")
 
     async def _register_holiday_sync(self) -> None:
         """注册调休自动同步任务（每日在 holiday_auto_sync_time 触发一次）"""

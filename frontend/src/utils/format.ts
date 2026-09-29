@@ -6,9 +6,23 @@
 export const pct = (v?: number | null, digits = 2): string =>
   v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(digits)}%`;
 
-/** 红涨绿跌（中国市场惯例） */
+/** 红涨绿跌色号（中国市场惯例）— 全仓唯一定义点
+ *
+ *  原来 Dashboard / FundDetailPanel / ScoreGauge / SignalBacktest 各写一套
+ *  （#f44336/#E74C3C 两种红、#4caf50/#27AE60 两种绿），同一页面相邻区块
+ *  的"涨"颜色并不一致。改动配色只需改这三行。
+ */
+export const GROWTH_UP = '#f44336';
+export const GROWTH_DOWN = '#4caf50';
+export const GROWTH_FLAT = '#999999';
+
+/** 红涨绿跌（中国市场惯例）；null / 0 → inherit */
 export const growthColor = (v?: number | null): string =>
-  v == null ? 'inherit' : v > 0 ? '#f44336' : v < 0 ? '#4caf50' : 'inherit';
+  v == null ? 'inherit' : v > 0 ? GROWTH_UP : v < 0 ? GROWTH_DOWN : 'inherit';
+
+/** 同上，但 0 / 空值给中性灰（资金流为 0 时不想跟正文同色的场合） */
+export const growthColorOrFlat = (v?: number | null): string =>
+  v == null || v === 0 ? GROWTH_FLAT : v > 0 ? GROWTH_UP : GROWTH_DOWN;
 
 /** 更新时间统一北京时间展示（无时区标记=北京墙钟直接展示；带标记=换算） */
 export const formatBeijingTime = (iso: string | null): string => {

@@ -6,6 +6,7 @@
 
 import json
 import logging
+from dataclasses import asdict
 from datetime import date, timedelta
 
 from sqlalchemy import func, select
@@ -17,6 +18,7 @@ from backend.models.factor import Factor
 from backend.models.fund import Fund
 from backend.models.fund_holding import FundHolding
 from backend.models.system_config import SystemConfig
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +104,7 @@ async def t_get_signal_history(db, code: str, days: int = 30) -> list[dict]:
     fund = await _fund_by_code(db, code)
     if not fund:
         raise ValueError(f"基金不存在: {code}")
-    since = date.today() - timedelta(days=min(int(days), 250))
+    since = beijing_today() - timedelta(days=min(int(days), 250))
     rows = (await db.execute(
         select(AnalysisResult)
         .where(AnalysisResult.fund_id == fund.id, AnalysisResult.analysis_date >= since)
@@ -157,7 +159,7 @@ async def t_get_factor_history(db, code: str, factor: str, days: int = 60) -> li
     fund = await _fund_by_code(db, code)
     if not fund:
         raise ValueError(f"基金不存在: {code}")
-    since = date.today() - timedelta(days=min(int(days), 250))
+    since = beijing_today() - timedelta(days=min(int(days), 250))
     rows = (await db.execute(
         select(AnalysisResult)
         .where(AnalysisResult.fund_id == fund.id, AnalysisResult.analysis_date >= since)
@@ -182,7 +184,7 @@ async def t_get_factor_history(db, code: str, factor: str, days: int = 60) -> li
     _props(days={"type": "integer", "description": "统计窗口天数，默认 30"}),
 )
 async def t_get_analysis_stats(db, days: int = 30) -> dict:
-    since = date.today() - timedelta(days=int(days))
+    since = beijing_today() - timedelta(days=int(days))
     rows = (await db.execute(
         select(AnalysisResult, Fund.code)
         .join(Fund, AnalysisResult.fund_id == Fund.id)
@@ -262,7 +264,10 @@ async def t_get_market_snapshot(db) -> dict:
     try:
         from backend.services.market_regime_service import MarketRegimeService
         snap = await MarketRegimeService().get_snapshot()
-        out["regime"] = snap.model_dump()
+        # MarketRegimeSnapshot 是 dataclass 非 pydantic 模型（2026-09-29 审查 P0：
+        # 旧写法 snap.model_dump() 抛 AttributeError 被下方 except 吞掉，
+        # regime 从未真正进入 Agent 上下文）
+        out["regime"] = asdict(snap)
     except Exception as e:
         out["regime_error"] = str(e)[:100]
     return out
@@ -378,7 +383,7 @@ async def t_get_scoring_config(db) -> dict:
 async def t_get_review_report(db, start_date: str, end_date: str = "") -> dict:
     from backend.services.review_service import ReviewService
     report = await ReviewService(db).review(
-        start_date, end_date or date.today().isoformat(),
+        start_date, end_date or beijing_today().isoformat(),
     )
     d = report.model_dump()
     d.pop("items", None)  # 明细过大，保留聚合与 summary_md
@@ -411,7 +416,7 @@ async def t_get_positions(db) -> list[dict]:
 async def t_get_error_stats(db, days: int = 7) -> dict:
     from backend.services import error_log_service
     logs = error_log_service.ErrorLogStore().query(
-        limit=1000, since_ts=(date.today() - timedelta(days=int(days))).isoformat(),
+        limit=1000, since_ts=(beijing_today() - timedelta(days=int(days))).isoformat(),
     )
     stat: dict[str, dict[str, int]] = {}
     for item in logs or []:

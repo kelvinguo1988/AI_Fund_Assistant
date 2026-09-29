@@ -27,14 +27,30 @@ export interface ImportResult {
   errors: string[];
 }
 
+/**
+ * 调仓引擎的行：后端按清单类型附加不同字段（见 backend/ai/rebalance.py），
+ * 原来靠 `[k: string]: any` 兜住全部，前端读什么都不报错 —— 字段改名即静默失效。
+ */
 export interface RebalanceRow {
   code: string;
   name: string;
-  score: number;
-  direction: string;
+  /** 持仓总览行可能无当期评分 → null */
+  score: number | null;
+  direction: string | null;
   theme: string;
   weight_pct: number;
-  [k: string]: any;
+  // 卖出清单
+  sell_threshold?: number;
+  reasons?: string[];
+  // 观望 / 买入受阻清单
+  reason?: string;
+  confirm_days?: number;
+  // 买入清单
+  buy_threshold?: number;
+  otc_status?: string;
+  overlap_note?: string;
+  // 持仓总览行
+  qdii?: boolean;
 }
 
 export interface RebalanceData {
@@ -69,8 +85,14 @@ export const positionApi = {
     apiClient.post<ApiResponse<ImportResult>>('/api/positions/import-csv', { text, mode }),
 };
 
+/** GET /api/ai/agent/rebalance 原样返回 {ok, data, summary_md}（无 ApiResponse 信封） */
+export interface RebalanceResponse {
+  ok: boolean;
+  data: RebalanceData;
+  summary_md: string;
+}
+
 export const rebalanceApi = {
   run: (window_days: number) =>
-    apiClient.get<ApiResponse<boolean> & { ok: boolean; data: RebalanceData; summary_md: string }>(
-      '/api/ai/agent/rebalance', { params: { window_days } }),
+    apiClient.get<RebalanceResponse>('/api/ai/agent/rebalance', { params: { window_days } }),
 };

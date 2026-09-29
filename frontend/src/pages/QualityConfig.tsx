@@ -228,7 +228,7 @@ const QualityConfig: React.FC = () => {
                             endAdornment: !isDefault ? (
                               <InputAdornment position="end">
                                 <Tooltip title="恢复默认值">
-                                  <IconButton size="small" onClick={() => handleResetOne(p)}>
+                                  <IconButton size="small" aria-label={`恢复默认值：${p.description}`} onClick={() => handleResetOne(p)}>
                                     <ResetIcon fontSize="small" />
                                   </IconButton>
                                 </Tooltip>

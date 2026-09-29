@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +288,7 @@ class FactorAuditService:
         horizons: tuple[int, ...] = (5, 20),
         fund_codes: Optional[list[str]] = None,
     ) -> FactorAuditReport:
-        start = date.today() - timedelta(days=int(days))
+        start = beijing_today() - timedelta(days=int(days))
         stmt = (
             select(AnalysisResult, Fund.code)
             .join(Fund, AnalysisResult.fund_id == Fund.id)
@@ -299,7 +300,7 @@ class FactorAuditService:
         rows = (await self.db.execute(stmt)).all()
 
         report = FactorAuditReport(
-            window_start=str(start), window_end=str(date.today()),
+            window_start=str(start), window_end=str(beijing_today()),
             horizons=list(horizons), rows_total=len(rows),
             funds_total=len({code for _, code in rows}),
         )

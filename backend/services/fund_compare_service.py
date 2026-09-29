@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models.fund import Fund
 from backend.models.fund_quarterly import FundQuarterly
 from backend.schemas.analysis import CompareReport, FundCompareItem, FundCompareMetrics
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -193,8 +194,8 @@ class FundCompareService:
         scale_inst = await self._scale_inst_map([f.id for f in funds])
 
         items: list[FundCompareItem] = []
-        today_s = date.today().isoformat()
-        start_years = (date.today() - timedelta(days=365 * years)).isoformat()
+        today_s = beijing_today().isoformat()
+        start_years = (beijing_today() - timedelta(days=365 * years)).isoformat()
 
         for fund, series, err in fetched:
             item = FundCompareItem(

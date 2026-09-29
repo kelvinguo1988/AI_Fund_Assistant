@@ -12,6 +12,7 @@ daily_brief 上下文为纯 Python 组装（最新信号分布/调仓四清单/�
 import json
 import logging
 from typing import Optional
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ async def build_brief_payload(db) -> dict:
     from backend.models.analysis_result import AnalysisResult
     from backend.models.fund import Fund
 
-    payload: dict = {"as_of": str(date.today()), "sections": {}}
+    payload: dict = {"as_of": str(beijing_today()), "sections": {}}
     caveats: list[str] = []
 
     # ① 最新一轮信号分布与买卖前列

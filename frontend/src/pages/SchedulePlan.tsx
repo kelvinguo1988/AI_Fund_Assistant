@@ -167,8 +167,8 @@ const SchedulePlan: React.FC = () => {
                 <TableCell>{s.last_run_at || '-'}</TableCell>
                 <TableCell><Switch checked={s.enabled} onChange={() => handleToggle(s)} size="small" /></TableCell>
                 <TableCell>
-                  <IconButton size="small" onClick={() => handleOpenEdit(s)}><EditIcon fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error" onClick={() => setDeleteTarget(s)}><DeleteIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => handleOpenEdit(s)} aria-label={`编辑计划 ${s.name}`}><EditIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" color="error" onClick={() => setDeleteTarget(s)} aria-label={`删除计划 ${s.name}`}><DeleteIcon fontSize="small" /></IconButton>
                 </TableCell>
               </TableRow>
             ))}

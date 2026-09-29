@@ -18,10 +18,18 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from backend.utils.timezone import now_beijing
 
 logger = logging.getLogger(__name__)
 
 EVAL_HORIZON_DAYS = 30
+# 校准只看近窗口样本：全量累计下旧样本永不退出，命中率一旦好转阈值也回不去
+CALIBRATION_WINDOW_DAYS = 90
+# 5 条样本的命中率标准差约 0.22，不足以判断阈值好坏
+CALIBRATION_MIN_SAMPLES = 30
+CALIBRATION_STEP = 5.0
+LOW_HIT_RATE = 0.5
+HIGH_HIT_RATE = 0.6
 PARAM_BOUNDS = {
     "profit_take_pct": (15.0, 50.0),
     "stop_loss_pct": (-30.0, -10.0),
@@ -74,7 +82,10 @@ class AdviceLearningStore:
         except Exception:
             db_path = Path("data") / "fund_quant.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=15)
+        # busy_timeout 与 async engine 的 connect_args={"timeout": 30} 对齐：
+        # 直连只有 15s 时，全量分析写库期间本服务的回填写入会先一步放弃并报
+        # database is locked（先超时的总是短的那方）
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30)
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -84,7 +95,7 @@ class AdviceLearningStore:
             cur = self._conn.execute(
                 "INSERT INTO advice_log (ts, fund_code, action, reasons, score) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                (now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
                  fund_code, action, reasons[:500], score),
             )
             self._conn.commit()
@@ -92,7 +103,7 @@ class AdviceLearningStore:
 
     def pending_evaluations(self, horizon_days: int = EVAL_HORIZON_DAYS) -> list[dict]:
         """到评估期但尚未回填的建议"""
-        cutoff = (datetime.now() - timedelta(days=horizon_days)
+        cutoff = (now_beijing() - timedelta(days=horizon_days)
                   ).strftime("%Y-%m-%d %H:%M:%S")
         with self._w:
             rows = self._conn.execute(
@@ -120,24 +131,37 @@ class AdviceLearningStore:
                 "INSERT OR REPLACE INTO advice_outcomes "
                 "(advice_id, eval_date, fund_change_pct, benchmark_change_pct, hit) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (advice_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                (advice_id, now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
                  round(fund_change, 3), round(bench_change, 3), hit),
             )
             self._conn.commit()
 
-    def stats(self) -> dict:
+    def stats(self, window_days: Optional[int] = None) -> dict:
+        """命中率统计
+
+        Args:
+            window_days: 只统计该天数内发出的建议；None = 全量累计（UI 口径）
+        """
+        cutoff = (now_beijing() - timedelta(days=window_days)
+                  ).strftime("%Y-%m-%d %H:%M:%S") if window_days else None
         with self._w:
-            total = self._conn.execute(
-                "SELECT COUNT(*) FROM advice_outcomes").fetchone()[0]
-            rows = self._conn.execute(
-                "SELECT a.action, o.hit, o.fund_change_pct FROM advice_outcomes o "
-                "JOIN advice_log a ON a.id = o.advice_id").fetchall()
+            if cutoff:
+                rows = self._conn.execute(
+                    "SELECT a.action, o.hit, o.fund_change_pct FROM advice_outcomes o "
+                    "JOIN advice_log a ON a.id = o.advice_id WHERE a.ts >= ?",
+                    (cutoff,)).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT a.action, o.hit, o.fund_change_pct FROM advice_outcomes o "
+                    "JOIN advice_log a ON a.id = o.advice_id").fetchall()
+            total = len(rows)
             cal = {r[0]: r[1] for r in self._conn.execute(
                 "SELECT key, value FROM advice_calibration")}
         sell = [r for r in rows if r[0] in SELL_ACTIONS]
         buy = [r for r in rows if r[0] in BUY_ACTIONS]
         return {
             "evaluated": total,
+            "window_days": window_days,
             "sell_total": len(sell),
             "sell_hits": sum(1 for r in sell if r[1] == 1),
             "buy_total": len(buy),
@@ -146,9 +170,16 @@ class AdviceLearningStore:
         }
 
     def calibrate(self) -> dict:
-        """命中率低于 50% → 收紧阈值（保守上下限内）"""
-        st = self.stats()
-        out = {"adjusted": False, "changes": []}
+        """近窗口命中率低于 50% → 收紧阈值；高于 60% → 向默认值回退一档
+
+        2026-09-29 审查 P1：原实现用全量累计样本且门槛只有 5 条 —— 5 条样本的
+        命中率标准差约 0.22，等于对着噪声调参；而累计口径下旧样本永不退出，
+        阈值只会单向漂到上下限（棘轮效应）。改为近 CALIBRATION_WINDOW_DAYS 天、
+        至少 CALIBRATION_MIN_SAMPLES 条，并允许命中率好转时回退。
+        """
+        st = self.stats(window_days=CALIBRATION_WINDOW_DAYS)
+        out = {"adjusted": False, "changes": [], "window_days": CALIBRATION_WINDOW_DAYS,
+               "sample_basis": st["evaluated"]}
         with self._w:
             for key, bound in PARAM_BOUNDS.items():
                 cur = self._conn.execute(
@@ -157,20 +188,25 @@ class AdviceLearningStore:
                 cur_val = cur[0] if cur else DEFAULT_PARAMS[key]
                 # sell 命中差 → 止损线向 -10 收紧；buy 命中差 → 止盈线向 15 收紧
                 new_val = cur_val
-                if key == "stop_loss_pct" and st["sell_total"] >= 5:
+                if key == "stop_loss_pct" and st["sell_total"] >= CALIBRATION_MIN_SAMPLES:
                     hit = st["sell_hits"] / st["sell_total"]
-                    if hit < 0.5:
-                        new_val = min(cur_val + 5.0, bound[1])  # 向 -10 靠近
-                if key == "profit_take_pct" and st["buy_total"] >= 5:
+                    if hit < LOW_HIT_RATE:
+                        new_val = min(cur_val + CALIBRATION_STEP, bound[1])
+                    elif hit > HIGH_HIT_RATE:
+                        new_val = min(cur_val + CALIBRATION_STEP * 0.5, DEFAULT_PARAMS[key])
+                if key == "profit_take_pct" and st["buy_total"] >= CALIBRATION_MIN_SAMPLES:
                     hit = st["buy_hits"] / st["buy_total"]
-                    if hit < 0.5:
-                        new_val = max(cur_val - 5.0, bound[0])
+                    if hit < LOW_HIT_RATE:
+                        new_val = max(cur_val - CALIBRATION_STEP, bound[0])
+                    elif hit > HIGH_HIT_RATE:
+                        new_val = max(cur_val - CALIBRATION_STEP * 0.5, DEFAULT_PARAMS[key])
                 if new_val != cur_val:
                     self._conn.execute(
                         "INSERT OR REPLACE INTO advice_calibration "
                         "(key, value, updated_at) VALUES (?, ?, ?)",
-                        (key, new_val, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                    out["changes"].append({"key": key, "from": cur_val, "to": new_val})
+                        (key, round(new_val, 2),
+                         now_beijing().strftime("%Y-%m-%d %H:%M:%S")))
+                    out["changes"].append({"key": key, "from": cur_val, "to": round(new_val, 2)})
                     out["adjusted"] = True
             self._conn.commit()
         return out

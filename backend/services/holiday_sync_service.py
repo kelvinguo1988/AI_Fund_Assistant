@@ -1,5 +1,5 @@
 from __future__ import annotations
-from backend.utils.timezone import now_beijing
+from backend.utils.timezone import beijing_today, now_beijing
 """调休/节假日日历同步服务
 
 数据源(可配置, 默认 NateScarlet/holiday-cn):
@@ -124,7 +124,7 @@ async def sync_holiday_calendar(
     if url_template is None:
         url_template = await _get_cfg(session, CFG_URL, DEFAULT_HOLIDAY_SYNC_URL)
 
-    years = [year] if year else [date.today().year, date.today().year + 1]
+    years = [year] if year else [beijing_today().year, beijing_today().year + 1]
     upserted = 0
     synced_years: list[int] = []
     errors: list[str] = []

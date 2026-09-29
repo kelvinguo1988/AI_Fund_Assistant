@@ -149,9 +149,9 @@ const PushConfig: React.FC = () => {
                 <TableCell sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>{ch.webhook_url || '-'}</TableCell>
                 <TableCell><Switch checked={ch.enabled} onChange={() => handleToggle(ch)} size="small" /></TableCell>
                 <TableCell>
-                  <IconButton size="small" onClick={() => handleTest(ch)} title="测试推送"><TestIcon fontSize="small" /></IconButton>
-                  <IconButton size="small" onClick={() => handleOpenEdit(ch)}><EditIcon fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error" onClick={() => setDeleteTarget(ch)}><DeleteIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => handleTest(ch)} title="测试推送" aria-label={`测试推送渠道 ${ch.name}`}><TestIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => handleOpenEdit(ch)} aria-label={`编辑推送渠道 ${ch.name}`}><EditIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" color="error" onClick={() => setDeleteTarget(ch)} aria-label={`删除推送渠道 ${ch.name}`}><DeleteIcon fontSize="small" /></IconButton>
                 </TableCell>
               </TableRow>
             ))}

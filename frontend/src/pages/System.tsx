@@ -25,6 +25,7 @@ import {
   FormControlLabel,
   Grid,
   IconButton,
+  Tooltip,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -43,14 +44,121 @@ import { systemApi } from '../api/system';
 import { errorLogApi, CATEGORY_META, type ErrorLogItem } from '../api/errorLog';
 import { conceptMapApi, type ConceptMapProgress } from '../api/fund';
 import { aiSkillApi, SKILL_EXAMPLE, type AISkillPayload } from '../api/aiSkill';
+import ConfirmDialog from '../components/ConfirmDialog';
 import type { AISkill } from '../types';
-import type { ConnectivityResult, AIConfigOut } from '../types';
+import type { ConnectivityResult, AIConfigOut, DataSourceHealth, DataSourceCache } from '../types';
+
+/** 秒 → 人话时长 */
+const fmtSpan = (s: number): string =>
+  s < 90 ? `${Math.round(s)} 秒` : s < 5400 ? `${Math.round(s / 60)} 分钟` : `${(s / 3600).toFixed(1)} 小时`;
+
+/**
+ * 数据源运行时健康 —— 只读后端进程内的冷却/降级/缓存状态（2026-09-29 审查 P3）
+ *
+ * 与下方「连通性测试」的分工：连通性测试会真的去请求各个源（有触发风控的代价），
+ * 这里零请求。"仪表盘一片空 / 数据不更新"时应先看这里，确认是不是某源正在冷却，
+ * 而不是立刻点连通性测试去捅它。
+ */
+const DataSourceHealthPanel: React.FC = () => {
+  const [health, setHealth] = useState<DataSourceHealth | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await systemApi.getDataSourceHealth();
+      if (res.data) setHealth(res.data);
+      else setErr('后端返回空快照');
+    } catch (e: any) {
+      setErr(e?.message || '健康快照读取失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const cacheLabel = (c: DataSourceCache) =>
+    `${c.name}：${c.age_seconds == null ? '从未加载' : `${fmtSpan(c.age_seconds)}前`} / 有效 ${fmtSpan(c.ttl_seconds)}`;
+
+  return (
+    <Card sx={{ mb: 3 }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1, mb: 1.5 }}>
+          <Box>
+            <Typography variant="h6">数据源运行时健康</Typography>
+            <Typography variant="caption" color="text.secondary">
+              后端进程内的冷却 / 熔断 / 缓存新鲜度快照，不发起任何外部请求
+              {health ? ` · 生成于 ${health.generated_at}` : ''}
+            </Typography>
+          </Box>
+          <Button size="small" startIcon={<RefreshIcon />} onClick={load} disabled={loading}>
+            {loading ? '读取中…' : '刷新'}
+          </Button>
+        </Box>
+        {loading && !health && <LinearProgress sx={{ mb: 1.5 }} />}
+        {err && <Alert severity="error" sx={{ mb: 1.5 }}>{err}</Alert>}
+        {health && (
+          <>
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>冷却 / 熔断</Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
+              {health.cooldowns.length === 0 && (
+                <Chip size="small" color="success" label="无数据源处于冷却" />
+              )}
+              {health.cooldowns.map((c) => (
+                <Tooltip key={c.name} title={c.note}>
+                  <Chip size="small" color="error" label={`${c.name} 剩 ${Math.round(c.remaining_seconds)} 秒`} />
+                </Tooltip>
+              ))}
+            </Box>
+
+            {health.scheduler.tripped_today.length > 0 && (
+              <>
+                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>调度器当日熔断</Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
+                  {health.scheduler.tripped_today.map((t) => (
+                    <Chip
+                      key={t.schedule_id} size="small" color="warning"
+                      label={`计划 #${t.schedule_id} 当日已连续失败 ${t.consecutive_failures} 次（达 ${health.scheduler.daily_fail_limit} 次当日不再重跑）`}
+                    />
+                  ))}
+                </Box>
+              </>
+            )}
+
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>缓存新鲜度</Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+              {health.caches.map((c) => (
+                <Chip
+                  key={c.name} size="small" variant="outlined"
+                  color={c.stale ? 'default' : 'success'}
+                  label={cacheLabel(c)}
+                />
+              ))}
+            </Box>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+/** 待确认的破坏性操作（清空/删除）：项目内其余页面（基金池/排程/因子/推送）
+ *  统一用 ConfirmDialog，这几处仍是 window.confirm —— 原生阻塞弹窗、与整体 UI 不一致。 */
+interface PendingConfirm {
+  title: string;
+  message: string;
+  run: () => Promise<void>;
+}
 
 const SystemPage: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<ConnectivityResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingConfirm | null>(null);
 
   // AI 配置状态
   const [aiConfig, setAiConfig] = useState<AIConfigOut | null>(null);
@@ -382,15 +490,18 @@ const SystemPage: React.FC = () => {
             }}>
               导出映射
             </Button>
-            <Button size="small" color="error" onClick={async () => {
-              if (!window.confirm('清空全部概念映射？（建议先导出备份）')) return;
-              try {
-                await conceptMapApi.clear();
-                await loadCmProgress();
-              } catch (err: any) {
-                setError(err?.message || '清空失败');
-              }
-            }}>
+            <Button size="small" color="error" onClick={() => setPending({
+              title: '清空概念板块映射',
+              message: '清空全部概念映射？（建议先导出备份）',
+              run: async () => {
+                try {
+                  await conceptMapApi.clear();
+                  await loadCmProgress();
+                } catch (err: any) {
+                  setError(err?.message || '清空失败');
+                }
+              },
+            })}>
               清空
             </Button>
           </Box>
@@ -438,15 +549,18 @@ const SystemPage: React.FC = () => {
               }}>
                 下载日志
               </Button>
-              <Button size="small" color="error" onClick={async () => {
-                if (!window.confirm('清空全部错误日志？')) return;
-                try {
-                  await errorLogApi.clear();
-                  loadErrLogs();
-                } catch (err: any) {
-                  setError(err?.message || '清空失败');
-                }
-              }}>
+              <Button size="small" color="error" onClick={() => setPending({
+                title: '清空错误日志',
+                message: '清空全部错误日志？',
+                run: async () => {
+                  try {
+                    await errorLogApi.clear();
+                    loadErrLogs();
+                  } catch (err: any) {
+                    setError(err?.message || '清空失败');
+                  }
+                },
+              })}>
                 清空
               </Button>
             </Box>
@@ -566,15 +680,19 @@ const SystemPage: React.FC = () => {
                     <TableCell align="right">
                       <IconButton
                         size="small"
-                        onClick={async () => {
-                          if (!window.confirm(`确认删除 Skill「${sk.name}」？`)) return;
-                          try {
-                            await aiSkillApi.remove(sk.id);
-                            setSkills((prev) => prev.filter((x) => x.id !== sk.id));
-                          } catch (err: any) {
-                            setError(err?.message || '删除失败');
-                          }
-                        }}
+                        aria-label={`删除 Skill ${sk.name}`}
+                        onClick={() => setPending({
+                          title: '删除 Skill',
+                          message: `确认删除 Skill「${sk.name}」？`,
+                          run: async () => {
+                            try {
+                              await aiSkillApi.remove(sk.id);
+                              setSkills((prev) => prev.filter((x) => x.id !== sk.id));
+                            } catch (err: any) {
+                              setError(err?.message || '删除失败');
+                            }
+                          },
+                        })}
                       >
                         <DeleteIcon fontSize="small" />
                       </IconButton>
@@ -640,6 +758,8 @@ const SystemPage: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <DataSourceHealthPanel />
 
       {/* ── 连通性测试 ── */}
       <Card sx={{ mb: 3 }}>
@@ -716,6 +836,20 @@ const SystemPage: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={!!pending}
+        title={pending?.title ?? ''}
+        message={pending?.message ?? ''}
+        confirmLabel="确认"
+        confirmColor="error"
+        onConfirm={() => {
+          const run = pending?.run;
+          setPending(null);
+          run?.();
+        }}
+        onCancel={() => setPending(null)}
+      />
 
       <Snackbar open={!!notice} autoHideDuration={5000} onClose={() => setNotice(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         <Alert severity="success" onClose={() => setNotice(null)}>{notice}</Alert>

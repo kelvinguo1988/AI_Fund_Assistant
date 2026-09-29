@@ -184,6 +184,32 @@ class TestStreamingPath:
         assert engine.calculated == ["004011"]
         assert complete["failed"] == ["968049"]
 
+    @pytest.mark.asyncio
+    async def test_no_nav_code_emits_data_missing(self, db_session, monkeypatch, tmp_path):
+        """流式路径也要埋 data_missing（与批量路径同口径）
+
+        跳过评分在前端只体现为 complete.failed 里的一个代码；服务端告警
+        若只挂在批量路径，走仪表盘流式分析时就完全无痕，断供无法被发现。
+        """
+        await _mk_funds(db_session, ["968049"])
+        _stub_cfg(monkeypatch)
+        monkeypatch.setattr(asis, "factor_engine", _FakeEngine())
+
+        svc = asis.AnalysisService(db_session)
+        svc.data_source = _StubSource({"968049": _empty_fund_data("968049")})
+
+        async def _fake_score(self, fund, cfg, **kwargs):
+            return None
+        monkeypatch.setattr(asis.AnalysisService, "_score_and_store", _fake_score)
+
+        await _collect(svc.run_analysis_streaming())
+        await _drain_log_tasks()
+
+        rows = [r for r in _read_error_logs(tmp_path) if r[0] == "analysis.data_missing"]
+        assert len(rows) == 1
+        assert rows[0][1] == "data"
+        assert "968049" in rows[0][3]
+
 
 async def _collect(agen) -> list[str]:
     out = []

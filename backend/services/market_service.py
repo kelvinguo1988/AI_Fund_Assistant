@@ -9,6 +9,7 @@ from typing import Optional
 
 import akshare as ak  # type: ignore
 
+from backend.data_sources.trading_calendar import get_previous_trading_days
 from backend.schemas.market import (
     CapitalFlow,
     HSGTFlow,
@@ -18,7 +19,8 @@ from backend.schemas.market import (
     SectorFlowItem,
     SectorFlowRanking,
 )
-from backend.utils.concurrency import run_with_timeout, random_ua, USER_AGENTS
+from backend.utils.concurrency import run_with_timeout, random_ua
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +231,21 @@ class MarketService:
             )
 
             trade_date = (sh_data.get("TRADE_DATE") or "")[:10]
-            main_ratio = round(main_net / (main_net + abs(medium_net) + abs(small_net)) * 100, 2) if (abs(medium_net) + abs(small_net)) > 0 else 0.0
+
+            # 净占比口径对齐主源：东财「主力净流入-净占比」= 净额 / 当日成交总额，
+            # 本报表没有成交额字段。原实现用 main/(main+|中单|+|小单|) 自造公式，
+            # 实测（2026-09-29）算出 21% 而真实量级是 0.1~0.5%，与另外两条降级源
+            # 的数字不可比却同栏展示。四档流入+流出之和≈成交总额（买一卖一），据此估算。
+            def _turnover_proxy_wan(d: dict) -> float:
+                if not d:
+                    return 0.0
+                total = 0.0
+                for tier in ("SUPERDEAL", "BIGDEAL", "MIDDEAL", "SMALLDEAL"):
+                    total += abs(d.get(f"{tier}_INFLOW") or 0) + abs(d.get(f"{tier}_OUTFLOW") or 0)
+                return total
+
+            turnover_wan = _turnover_proxy_wan(sh_data) + _turnover_proxy_wan(sz_data)
+            main_ratio = round((sh_main + sz_main) / turnover_wan * 100, 2) if turnover_wan > 0 else 0.0
 
             result = MarketCapitalFlow(
                 date=trade_date,
@@ -370,7 +386,7 @@ class MarketService:
                 main_ratio = round(main_ratio / item_count, 2)
 
             return MarketCapitalFlow(
-                date=date.today().isoformat(),
+                date=beijing_today().isoformat(),
                 sh_index=None,
                 sh_change=None,
                 sz_index=None,
@@ -492,7 +508,7 @@ class MarketService:
             hsgt.south_net_buy = round(south_total, 2)
 
             if not hsgt.date:
-                hsgt.date = date.today().isoformat()
+                hsgt.date = beijing_today().isoformat()
 
             self._cache_set("hsgt_flow", hsgt)
             return hsgt
@@ -561,14 +577,18 @@ class MarketService:
 
             total = round(sse_amount + szse_amount, 2)
 
-            # 上一交易日
-            prev_str = today_str
+            # 上一交易日：按交易日历取最近 5 个交易日候选，命中即止
+            # 原实现无脑循环 10 个自然日 × 2 个接口 = 最坏 20 次请求打交易所日报，
+            # 长假后必然全打空（周末/节假日没有日报数据），既慢又容易被风控
             prev_total = 0.0
-            for _ in range(10):
-                dt = date(
-                    int(prev_str[:4]), int(prev_str[4:6]), int(prev_str[6:])
-                ) - timedelta(days=1)
-                prev_str = dt.strftime("%Y%m%d")
+            try:
+                # today_str 是交易所报告日期（YYYYMMDD）；解析失败则不做同比
+                _today = date(int(today_str[:4]), int(today_str[4:6]), int(today_str[6:8]))
+                prev_candidates = get_previous_trading_days(_today, count=5)
+            except (TypeError, ValueError):
+                prev_candidates = []
+            for prev_day in prev_candidates:
+                prev_str = prev_day.strftime("%Y%m%d")
                 try:
                     sse_prev = await _rate_limited_call(
                         ak.stock_sse_deal_daily, date=prev_str

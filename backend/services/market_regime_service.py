@@ -26,6 +26,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 import akshare as ak  # type: ignore
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class MarketRegimeSnapshot:
     margin_balance: Optional[float] = None
     margin_change_pct_7d: Optional[float] = None
     margin_date: Optional[str] = None
-    fetched_at: str = field(default_factory=lambda: date.today().isoformat())
+    fetched_at: str = field(default_factory=lambda: beijing_today().isoformat())
 
 
 class MarketRegimeService:
@@ -218,7 +219,7 @@ class MarketRegimeService:
     async def _fill_margin_flow(self, snap: MarketRegimeSnapshot) -> None:
         from backend.utils.concurrency import run_with_timeout
 
-        end = date.today()
+        end = beijing_today()
         start = end - timedelta(days=30)  # 日历30天 ≈ 20+ 交易日，足够取 7 日窗口
         df = await run_with_timeout(
             ak.stock_margin_sse,

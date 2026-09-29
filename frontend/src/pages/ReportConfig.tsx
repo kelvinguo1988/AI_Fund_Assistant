@@ -52,7 +52,7 @@ const SortableItem: React.FC<SortableItemProps> = ({ item, onToggle }) => {
   return (
     <ListItem ref={setNodeRef} style={style} sx={{ bgcolor: 'background.paper', mb: 0.5, borderRadius: 1, border: '1px solid #e0e0e0' }}>
       <ListItemIcon {...attributes} {...listeners} sx={{ cursor: 'grab' }}>
-        <IconButton size="small"><DragIcon /></IconButton>
+        <IconButton size="small" aria-label={`拖拽排序 ${item.name}`}><DragIcon /></IconButton>
       </ListItemIcon>
       <ListItemText primary={item.name} secondary={`标识: ${item.item_key}`} />
       <Switch checked={item.enabled} onChange={(e) => onToggle(item.id, e.target.checked)} size="small" />

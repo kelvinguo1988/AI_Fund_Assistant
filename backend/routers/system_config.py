@@ -227,10 +227,22 @@ async def test_connectivity(
     return ApiResponse(data=result)
 
 
+@router.get("/data-source-health", response_model=ApiResponse[dict])
+async def data_source_health():
+    """数据源运行时健康快照（零网络请求）
+
+    与 /connectivity 的分工：那边是"现在能不能连上"（会发探测请求），
+    这边是"刚刚被谁限了、还要冷却多久、手上的数据有多旧"，全部读进程内
+    既有状态。排查"仪表盘一片空"先看这里，别用探测接口去捅正在冷却的源。
+    """
+    from backend.services.data_source_health import collect_health
+
+    return ApiResponse(data=collect_health())
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 质量过滤配置 API
 # ═══════════════════════════════════════════════════════════════════════
-
 @router.get("/quality-config", response_model=ApiResponse[QualityConfigOut])
 async def get_quality_config(db: AsyncSession = Depends(get_db)):
     """获取质量过滤配置（DB 值 + 默认值 + 元数据）"""

@@ -86,6 +86,15 @@
   - **CronTrigger**：常规定时（如每日 14:50 / 15:30）
   - **DateTrigger**：一次性手动触发
 - 启动时从 `schedules` 表加载启用任务；前台增删改后热更新调度器
+- **启动顺序：市场缓存预热先行，调度器后至**（最多等 45s，`asyncio.shield` 超时放行）。APScheduler
+  一启动就按 `misfire_grace_time` 补跑错过的整轮全量分析，与预热并发等于同一时刻连打两拨行情源，
+  正是触发风控/封禁的成因；45s 预算需留足容器 healthcheck（`start_period` 15s + 3 次 × 30s）余量
+- **计划级当日熔断**（`TaskScheduler._daily_fail`，阈值 `DAILY_FAIL_LIMIT = 3`）：同一计划当日连续
+  失败 3 次后当天不再重跑并写入告警，跨日自动清零 —— 阻止小时级 cron 在数据源被风控时一天补跑十几轮
+- **任务内会话边界**：交易日闸门 / 分析 / 推送各用独立 DB 会话，不共用一个会话
+  （共用时中途 rollback 会把前一步已落库的数据一起吞掉）
+- 运行时可观测性：`GET /api/system/data-source-health` 只读聚合冷却/降级/当日熔断/缓存新鲜度，
+  排查"仪表盘一片空"看这里，不要用 `/api/system/connectivity` 去捅正在冷却的数据源
 
 ### 1.6 AI 大模型方案
 
@@ -144,6 +153,7 @@ backend/
 │   ├── factor_service.py            # 因子业务逻辑
 │   ├── analysis_service.py          # 分析编排（数据获取→因子计算→评分→信号→存储→推送）
 │   ├── push_service.py              # 推送编排（遍历渠道→格式化→发送）
+│   ├── data_source_health.py        # 数据源运行时健康快照（只读聚合冷却/降级/当日熔断/缓存新鲜度，零网络）
 │   └── ai_service.py                # AI 对话业务逻辑
 ├── engines/
 │   ├── __init__.py
@@ -489,6 +499,7 @@ class AIConfigOut(BaseModel):
 | GET | /api/ai/conversations | ?conversation_id= | `ApiResponse[List[ChatMessageOut]]` | 对话历史 |
 | GET | /api/system/config | - | `ApiResponse[AIConfigOut]` | 获取系统配置 |
 | PUT | /api/system/config | `AIConfigUpdate` | `ApiResponse[AIConfigOut]` | 更新系统配置 |
+| GET | /api/system/data-source-health | - | `ApiResponse[dict]` | 数据源运行时健康快照（冷却/降级/当日熔断/缓存新鲜度，零网络请求） |
 
 ---
 
@@ -777,15 +788,18 @@ chinese-calendar==1.9.1
 
 ### 7.2 红涨绿跌配色约定
 
-```css
-:root {
-  --signal-buy: #E74C3C;      /* 红色 — 加仓/上涨 */
-  --signal-sell: #27AE60;     /* 绿色 — 减仓/下跌 */
-  --signal-hold: #95A5A6;     /* 灰色 — 观望 */
-  --signal-buy-light: #FADBD8;
-  --signal-sell-light: #D5F5E3;
-}
+单一来源 `frontend/src/utils/format.ts`，页面/组件不再各自复制色号（历史上曾同时存在
+`#f44336` 与 `#E74C3C`、`#4caf50` 与 `#27AE60` 两套写法）：
+
+```ts
+export const GROWTH_UP = '#f44336';    // 红 — 上涨 / 买入
+export const GROWTH_DOWN = '#4caf50';  // 绿 — 下跌 / 减仓
+export const GROWTH_FLAT = '#999999';  // 灰 — 持平 / 观望 / 不可解析
 ```
+
+- `growthColor(v)`：数值 → 红/绿，null 与 0 走 `inherit`（继承上下文文字色）
+- `growthColorOrFlat(v)`：null 与 0 显式落到 `GROWTH_FLAT`，用于必须给出可见色的单元格
+- 信号强度文案与 Chip 颜色同样集中在 `STRENGTH_LABELS` / `STRENGTH_CHIP_COLOR`
 
 ### 7.3 代码风格约定
 
@@ -798,9 +812,13 @@ chinese-calendar==1.9.1
 ### 7.4 错误处理约定
 
 - 后端：全局 `@app.exception_handler` 捕获未处理异常，返回统一 `ApiResponse`
-- 数据源异常：捕获后返回因子评分为 null，不中断整体分析
+- 数据源异常：捕获后返回因子评分为 null，不中断整体分析；失败埋点 `log_source_failure(module, message, category)`，
+  `category` 默认 `other`（不是 `rate_limit`）——漏传参就报成风控会把排查方向整个带偏
 - 推送失败：记录日志，3 次重试（间隔 1min/5min/15min），失败后标记但不影响存储
-- 前端：Axios 拦截器统一处理 4xx/5xx，Snackbar 展示错误消息
+- 前端：Axios 拦截器统一处理 4xx/5xx，Snackbar 展示错误消息；渲染期崩溃由 `components/ErrorBoundary.tsx`
+  兜底成可读面板（React 18 下不兜底会卸载整棵树 → 白屏）
+- 前端 5xx 自动上报错误铃铛是 fire-and-forget，且**上报端点自身失败一律不再上报**
+  （`/system/error-logs` 的失败会命中同一个拦截器，自我放大成请求风暴）
 
 ### 7.5 配置文件格式约定
 

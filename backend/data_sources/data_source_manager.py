@@ -103,19 +103,26 @@ class DataSourceManager(BaseDataSource):
                 return src
         return None
 
-    def _try_recovery(self) -> None:
-        """尝试恢复已降级的数据源（冷却期满后）"""
+    async def _try_recovery(self) -> None:
+        """尝试恢复已降级的数据源（冷却期满后）
+
+        必须 await adapter.probe() 的**结果**：旧实现只读 available 属性，
+        AKShare 未覆写 → 恒 True → 冷却期一到立刻 mark_recovered，下一次
+        请求原路撞封禁（2026-09-29 审查 P0）。探测失败则 mark_degraded
+        重置 degraded_at，冷却重新计时。
+        """
         for src in self._sources:
             if not src.active and src.should_retry:
                 logger.info(f"尝试恢复数据源 [{src.name}]...")
                 try:
-                    # 探测必须看结果：旧实现只"读取 available 属性"且不判断，
-                    # AKShare 属性恒 True 且不抛异常 → 冷却期形同虚设，降级
-                    # 源立即复原。现在探测失败则维持降级、重新计时冷却。
-                    if src.adapter.available:
+                    if await src.adapter.probe():
                         src.mark_recovered()
                     else:
-                        src.mark_degraded()
+                        src.degraded_at = time.time()
+                        logger.info(
+                            f"数据源 [{src.name}] 探测未通过，继续冷却 "
+                            f"{_RECOVERY_COOLDOWN // 60} 分钟"
+                        )
                 except Exception:
                     src.mark_degraded()
 
@@ -127,7 +134,7 @@ class DataSourceManager(BaseDataSource):
             period: 回看天数
             fund_type: "etf"/"otc"，传递给数据源适配器用于接口路由
         """
-        self._try_recovery()
+        await self._try_recovery()
 
         last_error: Optional[Exception] = None
         tried_sources: list[str] = []

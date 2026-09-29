@@ -10,6 +10,7 @@ import type {
   ScoringConfigOut,
   ScoringConfigUpdate,
   ConnectivityResult,
+  DataSourceHealth,
   QualityConfigOut,
   QualityConfigUpdate,
 } from '../types';
@@ -40,6 +41,10 @@ export const systemApi = {
 
   testConnectivity: () =>
     apiClient.get<ApiResponse<ConnectivityResult>>(`${BASE}/connectivity`).then((r) => r.data),
+
+  /** 数据源运行时健康（冷却/降级/缓存新鲜度）：后端零网络请求，可随时刷新 */
+  getDataSourceHealth: () =>
+    apiClient.get<ApiResponse<DataSourceHealth>>(`${BASE}/data-source-health`).then((r) => r.data),
 
   getQualityConfig: () =>
     apiClient.get<ApiResponse<QualityConfigOut>>(`${BASE}/quality-config`).then((r) => r.data),

@@ -38,7 +38,7 @@ import {
 } from '@mui/icons-material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { agentApi, type AgentEvent, type AgentRunRequest } from '../api/agent';
+import { agentApi, type AgentConversationItem, type AgentEvent, type AgentRunRequest } from '../api/agent';
 import { aiApi } from '../api/ai';
 
 interface Msg { role: 'user' | 'assistant'; content: string }
@@ -78,7 +78,7 @@ const ToolTimeline: React.FC<{ traces: Trace[]; note?: string }> = ({ traces, no
                   {t.ok ? `${t.ms}ms · ${t.chars} 字符` : '失败'}
                 </Typography>
               )}
-              <IconButton size="small" onClick={() => setOpen((o) => ({ ...o, [key]: !o[key] }))}>
+              <IconButton size="small" aria-label={open[key] ? '收起工具入参' : '展开工具入参'} onClick={() => setOpen((o) => ({ ...o, [key]: !o[key] }))}>
                 <ExpandIcon fontSize="inherit" sx={{ transform: open[key] ? 'rotate(180deg)' : 'none' }} />
               </IconButton>
             </Box>
@@ -95,7 +95,7 @@ const ToolTimeline: React.FC<{ traces: Trace[]; note?: string }> = ({ traces, no
 };
 
 const AiWorkbench: React.FC = () => {
-  const [convs, setConvs] = useState<{ conversation_id: string; preview: string; last_at: string; turns: number }[]>([]);
+  const [convs, setConvs] = useState<AgentConversationItem[]>([]);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [activeConv, setActiveConv] = useState<string | null>(null);
 
@@ -110,7 +110,7 @@ const AiWorkbench: React.FC = () => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadConvs = () => {
-    agentApi.listConversations().then((r: any) => setConvs(r?.items ?? [])).catch(() => undefined);
+    agentApi.listConversations().then((r) => setConvs(r?.items ?? [])).catch(() => undefined);
   };
   useEffect(loadConvs, []);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, streamText, traces]);
@@ -164,6 +164,10 @@ const AiWorkbench: React.FC = () => {
             setStatus(`${ev.rounds ?? '?'} 轮 · ${ev.tool_calls ?? 0} 次工具 · ${ev.tokens ?? 0} tokens`);
             break;
           case 'error': setRunError(ev.message || '运行失败'); break;
+          case 'budget_exhausted':
+            // 预算耗尽后走的是不带工具的收尾轮：不给提示会像卡住
+            setStatus((s) => `${s} · 工具预算已用完（${ev.token_spent}/${ev.budget} tokens），正在生成总结`);
+            break;
           case 'done': loadConvs(); break;
         }
       },

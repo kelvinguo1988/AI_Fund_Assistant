@@ -117,7 +117,7 @@ const AIChatWidget: React.FC = () => {
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>AI 助手</Typography>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               <Button size="small" color="inherit" onClick={handleNewChat}>新对话</Button>
-              <IconButton size="small" color="inherit" onClick={() => setOpen(false)}>
+              <IconButton size="small" color="inherit" aria-label="关闭 AI 助手" onClick={() => setOpen(false)}>
                 <CloseIcon fontSize="small" />
               </IconButton>
             </Box>
@@ -182,7 +182,7 @@ const AIChatWidget: React.FC = () => {
               multiline
               maxRows={3}
             />
-            <IconButton color="primary" onClick={handleSend} disabled={loading || !input.trim()}>
+            <IconButton color="primary" aria-label="发送消息" onClick={handleSend} disabled={loading || !input.trim()}>
               <SendIcon />
             </IconButton>
           </Box>

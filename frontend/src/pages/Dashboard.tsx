@@ -3,7 +3,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { formatBeijingTime as formatRefreshTime, STRENGTH_CHIP_COLOR } from '../utils/format';
+import { formatBeijingTime as formatRefreshTime, STRENGTH_CHIP_COLOR, GROWTH_UP, GROWTH_DOWN, growthColor, growthColorOrFlat } from '../utils/format';
 import {
   Box,
   Grid,
@@ -55,10 +55,8 @@ const formatAmount = (v: number): string => {
   return (v * 10000).toFixed(0) + '万';
 };
 
-const flowColor = (v: number): string => v > 0 ? '#f44336' : v < 0 ? '#4caf50' : '#999';
-
-/** 估值分位配色：高位红（贵）/低位绿（便宜）/中位橙 */
-const regimeColor = (pct: number): string => pct > 0.6 ? '#f44336' : pct < 0.4 ? '#4caf50' : '#ff9800';
+/** 估值分位配色：高位红（贵）/低位绿（便宜）/中位橙 —— 与涨跌无关的独立口径 */
+const regimeColor = (pct: number): string => pct > 0.6 ? GROWTH_UP : pct < 0.4 ? GROWTH_DOWN : '#ff9800';
 const regimeLabel = (pct: number): string =>
   pct > 0.8 ? '高估' : pct > 0.6 ? '偏贵' : pct < 0.2 ? '低估' : pct < 0.4 ? '偏便宜' : '中性';
 
@@ -381,7 +379,7 @@ const Dashboard: React.FC = () => {
               </Typography>
               {indexValuations.map((v) => {
                 const zoneColor =
-                  v.zone === '低估' ? '#4caf50' : v.zone === '高估' ? '#f44336' : '#ff9800';
+                  v.zone === '低估' ? GROWTH_DOWN : v.zone === '高估' ? GROWTH_UP : '#ff9800';
                 return (
                   <Box key={v.index} sx={{ minWidth: 130 }}>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>{v.index}</Typography>
@@ -419,11 +417,11 @@ const Dashboard: React.FC = () => {
                   <Box sx={{ display: 'flex', gap: 3, alignItems: 'baseline' }}>
                     <Box>
                       <Typography variant="caption" color="text.secondary">上涨</Typography>
-                      <Typography variant="h5" sx={{ color: '#f44336' }}>{summary.adv_decline.up_count}</Typography>
+                      <Typography variant="h5" sx={{ color: GROWTH_UP }}>{summary.adv_decline.up_count}</Typography>
                     </Box>
                     <Box>
                       <Typography variant="caption" color="text.secondary">下跌</Typography>
-                      <Typography variant="h5" sx={{ color: '#4caf50' }}>{summary.adv_decline.down_count}</Typography>
+                      <Typography variant="h5" sx={{ color: GROWTH_DOWN }}>{summary.adv_decline.down_count}</Typography>
                     </Box>
                     <Box>
                       <Typography variant="caption" color="text.secondary">总计</Typography>
@@ -453,7 +451,7 @@ const Dashboard: React.FC = () => {
                     沪 {summary.turnover.sse_amount.toFixed(0)}亿 &nbsp;|&nbsp; 深 {summary.turnover.szse_amount.toFixed(0)}亿
                   </Typography>
                   <br />
-                  <Typography variant="caption" sx={{ color: flowColor(summary.turnover.change_pct) }}>
+                  <Typography variant="caption" sx={{ color: growthColorOrFlat(summary.turnover.change_pct) }}>
                     较上日 {summary.turnover.change_pct >= 0 ? '+' : ''}{summary.turnover.change_pct}%
                   </Typography>
                 </Box>
@@ -503,7 +501,7 @@ const Dashboard: React.FC = () => {
               <Typography variant="subtitle2" sx={{ mb: 1 }}>市场情绪（涨跌家数比）</Typography>
               {regime?.adv_decline_ratio != null ? (
                 <Box>
-                  <Typography variant="h4" sx={{ color: flowColor(regime.adv_decline_ratio) }}>
+                  <Typography variant="h4" sx={{ color: growthColorOrFlat(regime.adv_decline_ratio) }}>
                     {regime.adv_decline_ratio >= 0 ? '+' : ''}{regime.adv_decline_ratio.toFixed(2)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -524,7 +522,7 @@ const Dashboard: React.FC = () => {
               <Typography variant="subtitle2" sx={{ mb: 1 }}>资金面（两融余额 7 日变化）</Typography>
               {regime?.margin_change_pct_7d != null ? (
                 <Box>
-                  <Typography variant="h4" sx={{ color: flowColor(regime.margin_change_pct_7d) }}>
+                  <Typography variant="h4" sx={{ color: growthColorOrFlat(regime.margin_change_pct_7d) }}>
                     {regime.margin_change_pct_7d >= 0 ? '+' : ''}{(regime.margin_change_pct_7d * 100).toFixed(2)}%
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -548,7 +546,7 @@ const Dashboard: React.FC = () => {
         <Grid item xs={6}>
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="subtitle2" sx={{ color: '#f44336', mb: 1 }}>TOP10 买入信号</Typography>
+              <Typography variant="subtitle2" sx={{ color: GROWTH_UP, mb: 1 }}>TOP10 买入信号</Typography>
               {summary?.signals?.top_buy?.length ? (
                 <Table size="small">
                   <TableHead>
@@ -562,7 +560,7 @@ const Dashboard: React.FC = () => {
                     {summary.signals.top_buy.map((r) => (
                       <TableRow key={r.id} hover sx={{ cursor: 'pointer' }} onClick={() => setSelectedFund(r)}>
                         <TableCell sx={{ p: 0.5, fontSize: '0.8rem' }}>{r.fund_name}</TableCell>
-                        <TableCell sx={{ p: 0.5, fontSize: '0.8rem', color: '#f44336' }} align="right">{r.weighted_score}</TableCell>
+                        <TableCell sx={{ p: 0.5, fontSize: '0.8rem', color: GROWTH_UP }} align="right">{r.weighted_score}</TableCell>
                         <TableCell sx={{ p: 0.5 }} align="right">
                           <Chip label={r.signal_strength} size="small" color={STRENGTH_CHIP_COLOR[r.signal_strength] || 'default'} sx={{ height: 20, fontSize: '0.65rem' }} />
                         </TableCell>
@@ -581,7 +579,7 @@ const Dashboard: React.FC = () => {
         <Grid item xs={6}>
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="subtitle2" sx={{ color: '#4caf50', mb: 1 }}>TOP10 卖出信号</Typography>
+              <Typography variant="subtitle2" sx={{ color: GROWTH_DOWN, mb: 1 }}>TOP10 卖出信号</Typography>
               {summary?.signals?.top_sell?.length ? (
                 <Table size="small">
                   <TableHead>
@@ -595,7 +593,7 @@ const Dashboard: React.FC = () => {
                     {summary.signals.top_sell.map((r) => (
                       <TableRow key={r.id} hover sx={{ cursor: 'pointer' }} onClick={() => setSelectedFund(r)}>
                         <TableCell sx={{ p: 0.5, fontSize: '0.8rem' }}>{r.fund_name}</TableCell>
-                        <TableCell sx={{ p: 0.5, fontSize: '0.8rem', color: '#4caf50' }} align="right">{r.weighted_score}</TableCell>
+                        <TableCell sx={{ p: 0.5, fontSize: '0.8rem', color: GROWTH_DOWN }} align="right">{r.weighted_score}</TableCell>
                         <TableCell sx={{ p: 0.5 }} align="right">
                           <Chip label={r.signal_strength} size="small" color={STRENGTH_CHIP_COLOR[r.signal_strength] || 'default'} sx={{ height: 20, fontSize: '0.65rem' }} />
                         </TableCell>
@@ -621,18 +619,18 @@ const Dashboard: React.FC = () => {
                 <Box>
                   <Typography variant="body2">
                     上证: <b>{summary.market_flow.sh_index ?? '-'}</b>
-                    <span style={{ color: flowColor(summary.market_flow.sh_change ?? 0), marginLeft: 4 }}>
+                    <span style={{ color: growthColorOrFlat(summary.market_flow.sh_change ?? 0), marginLeft: 4 }}>
                       {summary.market_flow.sh_change ?? '-'}%
                     </span>
                     &nbsp;&nbsp;|&nbsp;&nbsp;
                     深证: <b>{summary.market_flow.sz_index ?? '-'}</b>
-                    <span style={{ color: flowColor(summary.market_flow.sz_change ?? 0), marginLeft: 4 }}>
+                    <span style={{ color: growthColorOrFlat(summary.market_flow.sz_change ?? 0), marginLeft: 4 }}>
                       {summary.market_flow.sz_change ?? '-'}%
                     </span>
                   </Typography>
                   <Divider sx={{ my: 1 }} />
                   <Typography variant="body2">
-                    主力净流入: <span style={{ color: flowColor(summary.market_flow.main_flow.net_amount) }}>
+                    主力净流入: <span style={{ color: growthColorOrFlat(summary.market_flow.main_flow.net_amount) }}>
                       <b>{formatAmount(summary.market_flow.main_flow.net_amount)}</b>
                     </span>
                     &nbsp;(占比: {summary.market_flow.main_flow.net_ratio}%)
@@ -658,12 +656,12 @@ const Dashboard: React.FC = () => {
               {summary?.hsgt_flow ? (
                 <Box>
                   <Typography variant="body2">
-                    北向资金: <span style={{ color: flowColor(summary.hsgt_flow.north_net_buy) }}>
+                    北向资金: <span style={{ color: growthColorOrFlat(summary.hsgt_flow.north_net_buy) }}>
                       <b>{formatAmount(summary.hsgt_flow.north_net_buy)}</b>
                     </span>
                   </Typography>
                   <Typography variant="body2">
-                    南向资金: <span style={{ color: flowColor(summary.hsgt_flow.south_net_buy) }}>
+                    南向资金: <span style={{ color: growthColorOrFlat(summary.hsgt_flow.south_net_buy) }}>
                       <b>{formatAmount(summary.hsgt_flow.south_net_buy)}</b>
                     </span>
                   </Typography>
@@ -692,11 +690,11 @@ const Dashboard: React.FC = () => {
                   {idx === sectorTab && (
                     <Grid container spacing={2}>
                       <Grid item xs={6}>
-                        <Typography variant="caption" sx={{ color: '#f44336', fontWeight: 'bold' }}>主力流入 TOP</Typography>
+                        <Typography variant="caption" sx={{ color: GROWTH_UP, fontWeight: 'bold' }}>主力流入 TOP</Typography>
                         <SectorFlowTable items={sr.by_inflow} />
                       </Grid>
                       <Grid item xs={6}>
-                        <Typography variant="caption" sx={{ color: '#4caf50', fontWeight: 'bold' }}>主力流出 TOP</Typography>
+                        <Typography variant="caption" sx={{ color: GROWTH_DOWN, fontWeight: 'bold' }}>主力流出 TOP</Typography>
                         <SectorFlowTable items={sr.by_outflow} />
                       </Grid>
                     </Grid>
@@ -755,7 +753,7 @@ const Dashboard: React.FC = () => {
                           }
                         >
                           <span style={{
-                            color: pct > 0 ? '#f44336' : pct < 0 ? '#4caf50' : 'inherit',
+                            color: growthColor(pct),
                             fontWeight: 500,
                           }}>
                             {pct > 0 ? '+' : ''}{pct.toFixed(2)}%
@@ -923,10 +921,10 @@ const SectorFlowTable: React.FC<{ items: SectorFlowItem[] }> = ({ items }) => {
         {items.map((item, i) => (
           <TableRow key={i}>
             <TableCell>{item.sector_name}</TableCell>
-            <TableCell align="right" sx={{ color: flowColor(item.main_net_inflow) }}>
+            <TableCell align="right" sx={{ color: growthColorOrFlat(item.main_net_inflow) }}>
               {formatAmount(item.main_net_inflow)}
             </TableCell>
-            <TableCell align="right" sx={{ color: flowColor(item.change_pct) }}>
+            <TableCell align="right" sx={{ color: growthColorOrFlat(item.change_pct) }}>
               {item.change_pct}%
             </TableCell>
             <TableCell sx={{ fontSize: '0.7rem' }}>{item.top_stock}</TableCell>

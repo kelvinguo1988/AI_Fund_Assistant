@@ -62,8 +62,23 @@ class BaseDataSource(ABC):
 
     @property
     def available(self) -> bool:
-        """数据源当前是否可用（默认 True）"""
+        """数据源当前是否可用（默认 True）
+
+        合约：本属性**必须是纯内存判断**，不得发起网络请求 —— 它在 async
+        路径上被高频读取（降级链 / manager 每次取数）。真实连通性探测放
+        `async probe()`（2026-09-29 审查 P0：JoinQuant 曾在 property 里同步
+        调 is_auth() 阻塞事件循环）。
+        """
         return True
+
+    async def probe(self) -> bool:
+        """冷却期后的主动恢复探测（默认沿用 available）
+
+        子类实现要点：**单次、轻量、自带失败冷却**，不得成为新的请求风暴源
+        （保留既有防封禁预算，不放松限流/退避）。返回 False 时 manager 会
+        重置降级计时继续冷却，而非立即复原。
+        """
+        return self.available
 
     @abstractmethod
     async def get_fund_data(self, code: str, period: int = 250, fund_type: Optional[str] = None) -> FundData:

@@ -131,9 +131,20 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
-    # 后台预热市场数据缓存（不阻塞启动；持强引用防 GC 取消）
+    # 后台预热市场数据缓存（持强引用防 GC 取消）
     global _prewarm_task
     _prewarm_task = asyncio.ensure_future(_prewarm_market_cache())
+
+    # 预热先行、调度器后至（2026-09-29 审查 P1）：APScheduler 一启动就会按
+    # misfire_grace_time 补跑错过的整轮全量分析，与预热并发即同一时刻连打两拨
+    # 行情源，正是触发风控/封禁的成因。给预热最多 45s：
+    # 容器 healthcheck 为 start_period 15s + 3 次×30s，等待必须留足余量，
+    # 超时后照常放行（shield 保证预热任务不被取消，继续在后台跑）；
+    # _prewarm_market_cache 内部已吞掉所有异常，故只处理超时。
+    try:
+        await asyncio.wait_for(asyncio.shield(_prewarm_task), timeout=45)
+    except asyncio.TimeoutError:
+        logger.warning("市场缓存预热 45s 未完成，调度器照常启动（预热继续后台执行）")
 
     # 存量脏标签自愈（延迟执行，保留引用防 GC 取消）
     global _tag_heal_task

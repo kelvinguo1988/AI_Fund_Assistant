@@ -22,6 +22,7 @@ from backend.data_sources.base import guess_fund_type
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.schemas.analysis import FundReviewItem, ReviewReport
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -294,5 +295,5 @@ async def _fetch_nav_series(
     if start_date:
         cutoff = (date.fromisoformat(start_date) - timedelta(days=60)).isoformat()
     else:
-        cutoff = (date.today() - timedelta(days=days)).isoformat()
+        cutoff = (beijing_today() - timedelta(days=days)).isoformat()
     return [(d, v) for d, v in series if d >= cutoff]

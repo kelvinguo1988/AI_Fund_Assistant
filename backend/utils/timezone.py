@@ -15,9 +15,24 @@ def now_beijing() -> datetime:
 
     返回 naive 与 SQLite DateTime 列存储行为保持一致（读写对齐）。
     """
+    return _now_beijing_dt()
+
+
+def _now_beijing_dt() -> datetime:
     try:
         from zoneinfo import ZoneInfo
 
         return datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
     except Exception:
         return datetime.now(_BEIJING).replace(tzinfo=None)
+
+
+def beijing_today():
+    """北京日期（date 对象）
+
+    凡"今天"参与交易日闸门 / analysis_date 落库 / 回测 cutoff 都必须用它：
+    容器 TZ=UTC 时 `date.today()` 在北京 18:00 之后仍返回昨天，与
+    now_beijing() 写的时间戳、uq_fund_date 唯一键、review/backtest 的北京日
+    基准错位（2026-09-29 审查 P1）。
+    """
+    return _now_beijing_dt().date()

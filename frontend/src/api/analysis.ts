@@ -74,6 +74,8 @@ export const analysisApi = {
 
         let sawComplete = false;
         let failedCodes: string[] = [];
+        const errors: string[] = [];
+        let malformed = 0;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -84,37 +86,48 @@ export const analysisApi = {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                switch (data.type) {
-                  case 'progress':
-                    callbacks.onProgress?.(data.current, data.total, data.fund_code);
-                    break;
-                  case 'chunk':
-                    callbacks.onChunk?.(data.results, data.progress);
-                    break;
-                  case 'complete':
-                    sawComplete = true;
-                    failedCodes = data.failed || [];
-                    callbacks.onComplete?.(data.total, data.succeeded);
-                    break;
-                }
-              } catch {
-                // skip malformed JSON
-              }
+            if (!line.startsWith('data: ')) continue;
+            let data: any;
+            try {
+              data = JSON.parse(line.slice(6));
+            } catch {
+              // 原样吞掉会让半包/脏数据变成"分析成功但结果少了"，计数后在收尾上报
+              malformed += 1;
+              continue;
+            }
+            switch (data.type) {
+              case 'progress':
+                callbacks.onProgress?.(data.current, data.total, data.fund_code);
+                break;
+              case 'chunk':
+                callbacks.onChunk?.(data.results, data.progress);
+                break;
+              case 'complete':
+                sawComplete = true;
+                failedCodes = data.failed || [];
+                callbacks.onComplete?.(data.total, data.succeeded);
+                break;
+              case 'error':
+                // 后端局部失败（某批结果写入回滚）：记下来继续收流，其余批次仍在推进
+                errors.push(data.message || '分析过程发生错误');
+                break;
             }
           }
         }
 
-        // 2026-08-29 修复：连接正常结束但从未收到 complete 事件（后端生成器
-        // 中途死亡/网络中断），原先 onComplete/onError 都不触发，
-        // streaming.active 永远为 true，刷新与手动分析按钮永久禁用
+        // 局部失败不再被 complete 掩盖：断流、后端 error 帧、坏帧、失败基金清单合成一条提示
+        // （onError 多次调用只会让 Snackbar 互相覆盖，故只报一次）
+        const notices: string[] = [];
         if (!sawComplete) {
-          callbacks.onError?.('连接中断，分析未完成');
-        } else if (failedCodes.length > 0) {
-          callbacks.onError?.(`以下基金分析失败: ${failedCodes.join('、')}`);
+          // 2026-08-29 修复：连接正常结束但从未收到 complete 事件（后端生成器
+          // 中途死亡/网络中断），原先 onComplete/onError 都不触发，
+          // streaming.active 永远为 true，刷新与手动分析按钮永久禁用
+          notices.push('连接中断，分析未完成');
         }
+        if (errors.length > 0) notices.push(errors.join('；'));
+        if (sawComplete && malformed > 0) notices.push(`有 ${malformed} 条分析事件无法解析，结果可能不完整`);
+        if (sawComplete && failedCodes.length > 0) notices.push(`以下基金分析失败: ${failedCodes.join('、')}`);
+        if (notices.length > 0) callbacks.onError?.(notices.join('；'));
       } catch (err: any) {
         if (err.name !== 'AbortError') {
           callbacks.onError?.(err.message || '流式分析请求失败');

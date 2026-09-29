@@ -2,7 +2,6 @@
 
 import sys, os
 import pytest
-import pytest_asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -280,21 +279,6 @@ async def test_recompute_total_fail_writes_fallback_for_dirty(db_session, monkey
     assert "数字经济" in fund.tags
 
 
-@pytest_asyncio.fixture
-async def db_session():
-    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-    from backend.database import Base
-    import backend.models
-
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as session:
-        yield session
-    await engine.dispose()
-
-
 # ── 指数估值近似映射（模块 C' 增强，2026-08-31 用户确认）──────────────
 
 class TestBenchmarkApprox:
@@ -521,3 +505,88 @@ class TestAdviceLearning:
         store._conn.commit()
         pend = store.pending_evaluations()
         assert len(pend) == 1 and pend[0]["fund_code"] == "x"
+
+
+# ── 建议阈值校准的近窗口口径（2026-09-29 审查 P1-9）──────────────────
+
+def _cal_store(tmp_path):
+    """独立连接的 AdviceLearningStore
+
+    用 object.__new__ 绕过单例 __new__：后者会先按 settings 打开
+    data/fund_quant.db 建表，测试不该碰真实库文件。
+    """
+    import sqlite3
+    import threading
+    from backend.services import advice_learning_service as mod
+    store = object.__new__(mod.AdviceLearningStore)
+    store._w = threading.Lock()
+    store._conn = sqlite3.connect(str(tmp_path / "cal.db"), check_same_thread=False)
+    store._conn.executescript(mod._SCHEMA)
+    store._conn.commit()
+    return store
+
+
+def _seed(store, action: str, n: int, *, hit: bool, age_days: int = 5):
+    """灌 n 条已到评估期、已回填命中的建议（ts 可控，用于窗口过滤测试）"""
+    from datetime import datetime, timedelta
+    from backend.services import advice_learning_service as mod
+    ts = (datetime.now() - timedelta(days=age_days)).strftime("%Y-%m-%d %H:%M:%S")
+    # sell 类：fund_change<0 记 hit；buy 类：>0 记 hit（与 record_outcome 同口径）
+    change = -1.0 if hit else 1.0
+    if action in mod.BUY_ACTIONS:
+        change = -change
+    for i in range(n):
+        cur = store._conn.execute(
+            "INSERT INTO advice_log (ts, fund_code, action, score) VALUES (?, ?, ?, 1.0)",
+            (ts, f"f{i}", action))
+        store._conn.execute(
+            "INSERT INTO advice_outcomes (advice_id, eval_date, fund_change_pct, "
+            "benchmark_change_pct, hit) VALUES (?, ?, 0.0, 0.0, ?)",
+            (cur.lastrowid, ts, 1 if hit else 0))
+    store._conn.commit()
+
+
+class TestAdviceCalibration:
+    def test_sample_below_floor_no_adjust(self, tmp_path):
+        """样本不足 CALIBRATION_MIN_SAMPLES 时不调参（原来 5 条就调，等于对着噪声动阈值）"""
+        from backend.services import advice_learning_service as mod
+        store = _cal_store(tmp_path)
+        _seed(store, "sell", mod.CALIBRATION_MIN_SAMPLES - 1, hit=False)
+        out = store.calibrate()
+        assert out["adjusted"] is False
+        assert out["sample_basis"] == mod.CALIBRATION_MIN_SAMPLES - 1
+
+    def test_low_hit_tightens_stop_loss(self, tmp_path):
+        """近窗口 sell 全不命中 → 止损线向上收紧一档"""
+        from backend.services import advice_learning_service as mod
+        store = _cal_store(tmp_path)
+        _seed(store, "sell", 30, hit=False)
+        out = store.calibrate()
+        change = {c["key"]: c for c in out["changes"]}
+        assert out["adjusted"] is True
+        assert change["stop_loss_pct"]["from"] == mod.DEFAULT_PARAMS["stop_loss_pct"]
+        assert change["stop_loss_pct"]["to"] == pytest.approx(-15.0)
+        # 无 buy 样本 → 止盈线不动
+        assert "profit_take_pct" not in change
+
+    def test_high_hit_decays_toward_default(self, tmp_path):
+        """命中好转要能回退：已收紧到 -30 的止损线，高命中时向默认值退半步而不是继续收紧"""
+        from backend.services import advice_learning_service as mod
+        store = _cal_store(tmp_path)
+        store._conn.execute(
+            "INSERT INTO advice_calibration (key, value, updated_at) VALUES ('stop_loss_pct', -30.0, 'x')")
+        _seed(store, "sell", 30, hit=True)
+        out = store.calibrate()
+        change = {c["key"]: c for c in out["changes"]}
+        assert change["stop_loss_pct"]["to"] == pytest.approx(-27.5)
+        assert change["stop_loss_pct"]["to"] > -30.0
+
+    def test_samples_outside_window_ignored(self, tmp_path):
+        """棘轮效应回归：120 天前的失败样本不得再参与校准，否则阈值只会单向漂到边界"""
+        from backend.services import advice_learning_service as mod
+        store = _cal_store(tmp_path)
+        _seed(store, "sell", 40, hit=False, age_days=mod.CALIBRATION_WINDOW_DAYS + 30)
+        assert store.stats(window_days=mod.CALIBRATION_WINDOW_DAYS)["evaluated"] == 0
+        assert store.calibrate()["adjusted"] is False
+        # 全量累计口径仍可见（UI 用的是无窗口 stats）
+        assert store.stats()["evaluated"] == 40

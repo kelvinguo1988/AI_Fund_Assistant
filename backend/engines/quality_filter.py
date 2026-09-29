@@ -24,6 +24,7 @@ import numpy as np
 
 from backend.data_sources.base import FundData
 from backend.engines.factor_engine import FactorScoreResult
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +316,7 @@ def check_liquidation_risk(
     Returns: True = 触发否决
     """
     if today is None:
-        today = date.today()
+        today = beijing_today()
 
     # 筛选已生效的季度数据
     active_records = _get_active_quarterly_records(quarterly_history, today)
@@ -441,7 +442,7 @@ def check_size_shock(
     Returns: True = 触发规模冲击
     """
     if today is None:
-        today = date.today()
+        today = beijing_today()
 
     active_records = _get_active_quarterly_records(quarterly_history, today)
     if len(active_records) < 2:
@@ -478,7 +479,7 @@ def check_allocation_drift(
     - is_high_purity: 高纯度（无调节）
     """
     if today is None:
-        today = date.today()
+        today = beijing_today()
 
     active_records = _get_active_quarterly_records(quarterly_history, today)
     # 取最近4个季报
@@ -536,7 +537,7 @@ def calc_institution_approval(
     Returns: 偏置分值（+bonus / 0 / penalty）
     """
     if today is None:
-        today = date.today()
+        today = beijing_today()
 
     active_records = _get_active_quarterly_records(quarterly_history, today)
 
@@ -857,7 +858,7 @@ class QualityFilter:
         Returns: (是否被否决, 否决原因)
         """
         if today is None:
-            today = date.today()
+            today = beijing_today()
 
         # 1. 棺材钉形态
         if check_coffin_nail_pattern(fund_data, self.cfg):
@@ -942,11 +943,11 @@ class QualityFilter:
 
     def check_size_shock(self, quarterly_history: list[dict], today: date = None) -> bool:
         """规模冲击检测"""
-        return check_size_shock(quarterly_history, today or date.today(), self.cfg)
+        return check_size_shock(quarterly_history, today or beijing_today(), self.cfg)
 
     def check_drift(self, quarterly_history: list[dict], today: date = None) -> tuple[bool, bool]:
         """资产配置纯度检测 → (is_drift, is_high_purity)"""
-        return check_allocation_drift(quarterly_history, today or date.today(), self.cfg)
+        return check_allocation_drift(quarterly_history, today or beijing_today(), self.cfg)
 
     def build_result(
         self,
@@ -965,7 +966,7 @@ class QualityFilter:
             如果被否决，corrected 参数返回原始值
         """
         if today is None:
-            today = date.today()
+            today = beijing_today()
 
         result = QualityFilterResult(fund_code=fund_code)
 

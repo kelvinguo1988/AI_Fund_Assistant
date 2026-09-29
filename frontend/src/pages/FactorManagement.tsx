@@ -286,8 +286,8 @@ const FactorManagement: React.FC = () => {
                   <Switch checked={f.status === 'active'} onChange={() => handleToggleStatus(f)} size="small" />
                 </TableCell>
                 <TableCell>
-                  <IconButton size="small" onClick={() => handleOpenEdit(f)}><EditIcon fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error" onClick={() => setDeleteTarget(f)}><DeleteIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => handleOpenEdit(f)} aria-label={`编辑因子 ${f.name}`}><EditIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" color="error" onClick={() => setDeleteTarget(f)} aria-label={`删除因子 ${f.name}`}><DeleteIcon fontSize="small" /></IconButton>
                 </TableCell>
               </TableRow>
             ))}

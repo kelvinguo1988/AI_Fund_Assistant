@@ -26,6 +26,7 @@ import { ExpandMore, ExpandLess } from '@mui/icons-material';
 import ReactECharts from 'echarts-for-react';
 import { fundApi } from '../api/fund';
 import type { FundPeriodReturn, HoldingChanges, ManagerChanges, FundExtendedData } from '../types';
+import { GROWTH_FLAT, growthColorOrFlat } from '../utils/format';
 
 /* ================================================================
    阶段涨幅子组件
@@ -44,11 +45,10 @@ const fmtReturn = (v: string | null): string => {
   return isNaN(n) ? '--' : `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 };
 
+/** 阶段收益字符串（"+3.21%"）→ 红涨绿跌；空值/解析失败 → 中性灰 */
 const returnColor = (v: string | null): string => {
-  if (!v) return '#95A5A6';
-  const n = parseFloat(v);
-  if (isNaN(n)) return '#95A5A6';
-  return n > 0 ? '#E74C3C' : n < 0 ? '#27AE60' : '#95A5A6';
+  const n = v == null ? NaN : parseFloat(v);
+  return isNaN(n) ? GROWTH_FLAT : growthColorOrFlat(n);
 };
 
 const parseReturn = (v: string | null): number => {
@@ -160,7 +160,7 @@ const HoldingRow: React.FC<{
   return (
     <>
       <TableRow hover sx={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>
-        <TableCell><IconButton size="small">{open ? <ExpandLess /> : <ExpandMore />}</IconButton></TableCell>
+        <TableCell><IconButton size="small" aria-label={open ? '收起持仓明细' : '展开持仓明细'}>{open ? <ExpandLess /> : <ExpandMore />}</IconButton></TableCell>
         <TableCell>{code}</TableCell>
         <TableCell>{name}</TableCell>
         <TableCell>{changes?.latest_quarter?.slice(0, 10) || '--'}</TableCell>
@@ -235,9 +235,13 @@ const HoldingTab: React.FC<{ funds: { id: number; code: string; name: string }[]
   const [holdingsMap, setHoldingsMap] = useState<Record<number, any[]>>({});
 
   useEffect(() => {
+    // 整批可取消：funds 一变（筛选/刷新/切 Tab）就会重新发起 N 只基金的持仓请求，
+    // 原实现既不取消旧请求也不判存活 → 慢的旧响应会后到并覆盖新结果，
+    // 组件卸载后还可能对已卸载组件 setState。34 只 = 34 个请求，代价可见。
+    const controller = new AbortController();
     Promise.all(
       funds.map((f) =>
-        fundApi.getHoldings(f.id)
+        fundApi.getHoldings(f.id, { signal: controller.signal })
           .then((res) => {
             const full = res.data || [];
             const text = full
@@ -249,12 +253,14 @@ const HoldingTab: React.FC<{ funds: { id: number; code: string; name: string }[]
           .catch(() => ({ id: f.id, text: '--', full: [] as any[] }))
       )
     ).then((results) => {
+      if (controller.signal.aborted) return;
       const m: Record<number, string> = {};
       const hm: Record<number, any[]> = {};
       results.forEach((r) => { m[r.id] = r.text; hm[r.id] = r.full; });
       setTop3Map(m);
       setHoldingsMap(hm);
     });
+    return () => controller.abort();
   }, [funds]);
 
   return (

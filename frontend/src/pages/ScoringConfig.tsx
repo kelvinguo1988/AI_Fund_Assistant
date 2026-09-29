@@ -166,7 +166,7 @@ const ScoringConfig: React.FC = () => {
                     sx={{ minWidth: 250 }} />
                 </TableCell>
                 <TableCell>
-                  <IconButton size="small" color="error" onClick={() => removeTier(i)}
+                  <IconButton size="small" color="error" aria-label={`删除第 ${i + 1} 档阈值`} onClick={() => removeTier(i)}
                     disabled={thresholds.length <= 3}>
                     <DeleteIcon fontSize="small" />
                   </IconButton>

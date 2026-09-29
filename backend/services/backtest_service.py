@@ -33,6 +33,11 @@ DEFAULT_ROUND_TRIP_FEE_PCT = 0.6
 FEE_CONFIG_KEY = "backtest_fee_pct"
 FEE_MIN, FEE_MAX = 0.0, 5.0
 
+# 净值窗口起点之前的信号，最多容忍顺延多少自然日（见
+# _align_signals_to_trading_days）：周末 2 天、元旦/清明 3~4 天、
+# 国庆/春节 8 天长假都要覆盖得到，再早的信号与这段净值无关。
+_MAX_PRE_WINDOW_SIGNAL_DAYS = 10
+
 
 async def load_fee_pct(db: AsyncSession) -> float:
     """读取回测调仓费率；未配置/非法值回落到默认，并夹在合法区间内"""
@@ -84,6 +89,9 @@ class BacktestService:
     # 用户反复回测同一基金时避免重复拉取全量净值（10 分钟内命中）
     _nav_cache: dict[tuple[str, int], tuple[float, object]] = {}
     _NAV_CACHE_TTL = 600.0  # 10 分钟
+    # key 是 (代码, 区间) 且区间由入参决定，缓存值为整条净值序列：不设上限时
+    # 反复变换区间回测会让字典只增不减（TTL 只挡读取，不淘汰条目）
+    _NAV_CACHE_MAX = 200
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -105,6 +113,9 @@ class BacktestService:
             logger.warning(f"回测净值拉取失败 {fund_code}: {e}")
             return None
         if fund_data is not None:
+            while len(BacktestService._nav_cache) >= BacktestService._NAV_CACHE_MAX:
+                # dict 保持插入序，弹最早写入的键即可（净值缓存无严格 LRU 语义需求）
+                BacktestService._nav_cache.pop(next(iter(BacktestService._nav_cache)), None)
             BacktestService._nav_cache[key] = (now, fund_data)
         return fund_data
 
@@ -236,14 +247,16 @@ class BacktestService:
             if idx >= len(norm_dates):
                 continue  # 晚于序列末尾，无交易日可作用
             if idx == 0 and date_key < norm_dates[0]:
-                # 早于净值窗口起点：映射到首日会触发一次无来由调仓并计费。
-                # 仅保留 ≤4 天的周末/短节假日顺延（真实作用时点就是首日），
-                # 更久远的陈旧信号丢弃。
+                # 早于净值窗口起点：映射到首日会触发一次无来由调仓并计费，
+                # 所以只接受"顺延"而非"补历史"，上限见 _MAX_PRE_WINDOW_SIGNAL_DAYS。
+                # 不用交易日历精确判"整段闭市"：调休补班的周六日股市实际不开市，
+                # 日历近似的判错方向更糟，且会让回测依赖日历数据。
                 try:
-                    gap = (date.fromisoformat(norm_dates[0]) - date.fromisoformat(date_key[:10])).days
+                    gap = (date.fromisoformat(norm_dates[0][:10])
+                           - date.fromisoformat(date_key[:10])).days
                 except ValueError:
                     continue
-                if gap > 4:
+                if gap > _MAX_PRE_WINDOW_SIGNAL_DAYS:
                     continue
             aligned[norm_dates[idx]] = signal_map[date_key]  # 后写覆盖 → 保留最新
         return aligned
