@@ -89,6 +89,7 @@ def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResul
                         score=val.get("score", 0),
                         direction=val.get("direction", "positive"),
                         data_valid=bool(val.get("data_valid", True)),
+                        weight=val.get("weight"),
                     ))
                 else:
                     factor_scores.append(FactorScore(

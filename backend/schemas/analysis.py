@@ -16,6 +16,10 @@ class FactorScore(BaseModel):
     # 因子数据不足标记：原先只活在内存里的 FactorScoreResult，落库 JSON 时被丢掉
     # → 从 DB 重建的报告/AI 上下文永远看不到"该因子缺数据"（2026-10-01 审查 P1）
     data_valid: bool = True
+    # 本轮实际参与加权的有效权重（含质量过滤的权重修正，如超额持续性=1 时
+    # 趋势一致性 0.5→0.8）。缺它的历史行无法用 Σ(score×weight) 复算 original_score
+    # —— 2026-10-02 取 NAS 287 行历史就复算不出，44 行恒差 +0.3。旧行/未跑过为 None。
+    weight: Optional[float] = None
 
 
 class AnalysisResultOut(BaseModel):

@@ -31,6 +31,15 @@
 - [新功能] `fund_quarterly` 落库链路补齐：「刷新数据」写 pingzhongdata 扩展缓存时同源解析资产配比/规模/持有人结构/申购赎回，按报告期 upsert（规模优先 `Data_fluctuationScale` 亿元→元，内部人份额 = 内部持有比例 × 总份额），生效日期按披露截止（季报 +2 月、半年报/年报 +3 月）取当月首个工作日。此前该表恒空，第零层质量过滤的清盘否决/规模冲击/仓位漂移/机构认可度四项长期按中性处理。零额外网络请求，本地回灌实测 56 只基金 / 361 个报告期
 - [新功能] 场外实时估值改为仓位感知：持仓加权只覆盖股票仓位的一部分，未覆盖的 `R_stock - 覆盖率` 份额按当日指数涨跌补齐（`est_model=position_aware`，R_stock 取最新已生效季报），替代原先"覆盖率<50% 才混合指数"的粗口径；缺季报仓位时回退旧归一法/指数混合，仪表盘 tooltip 同步标注
 
+### 2026-10-02 NAS 历史取证：落库自证契约（有效权重随因子分值落库）
+
+**取证结论先说**：NAS 库 287 行历史报告**只能证明自洽，不能证明口径正确**。可验证的部分——`operation_advice` 文案里的（原始/偏置）与 `weighted_score` 逐行一致、方向 vs ±1.5 动态阈值零违反、`signal_strength→equity_ratio` 全对；证明不了的部分——`original_score` / `dynamic_buy_threshold` / `dynamic_sell_threshold` / `quality_warnings` / `pool_size` / `factor_coverage` **287 行全 NULL**（这批 P0 地基列是 2026-09-23 之后才加的，NAS 跑的历史早于它），回测 batch `enabled=false` 且 results 空、建议命中率 evaluated=0，48 项质量配置全部等于代码默认值（生产从未覆盖过）。因此"因子/评分/质量/回测设计和配置值是否正确"目前**没有历史证据**，只能靠新落库的自证字段从下一轮开始积累。
+
+- [新功能] `FactorScore` 增加 `weight`（本轮实际参与加权的**有效**权重），`_save_result` 接收 `factor_weights` 并把它与因子分值同序写进 `factor_scores` JSON、透出到响应与导出，`_result_to_out` 读回，`_score_and_store` 传入质量过滤修正后的 `corrected_weights`
+- [修复] 复算恒等式 `Σ(score × weight) == original_score` 此前**在数学上不成立**：`apply_factor_corrections` 在超额持续性=1 且趋势分满档时把 `trend_consistency` 权重 0.5→0.8（`trend_consistency_boost_weight`），这个 boost 只存在于内存，落库 JSON 只有分值没有权重。NAS 287 行里 44 行因此恒差 +0.30，`factor_audit` 的历史有效性回算拿这些行做分母会系统性偏。旧行 `weight=None`，`score_caliber_note` 仍标"未记录"，不假装可复算
+- [测试] `tests/test_result_evidence.py` 7 条契约：可复算恒等式（走真实 `apply_factor_corrections` + `compute_with_quality_filter`，断言落库 `trend_consistency.weight==0.8`）、条件不满足时 boost **不得**落库（仍 0.5）、`_score_and_store` 源码必须把 `factor_weights=corrected_weights` 传下去（唯一生产调用点，链路只由此条守护）、地基字段不得退回 NULL、导出/覆盖导入回环不吞权重、旧行 `weight=None` 仍可读出、`market_valuation` 缺数据时 `factor_coverage` 必须 <1.0（能识别"死权重占分母"）。回归：`TZ=UTC pytest -q` **786 passed**（原 779 + 7），默认时区下相关 4 文件 111 passed
+- [遗留·待裁定] 薄池（每日仅 14 行有效样本，粒度 7.1%/只）下判据一（连续 5 交易日分歧 <15%）的口径选择；`shadow_report_service._stable_trading_days` 把 `low_sample` 轮次计入连续天数、与自家 caveat"不进入切换结论"矛盾（当前 14 行 >`LOW_SAMPLE_ROWS=10` 未触发）
+
 ### 2026-10-02 外部审查第一批整改（#53–#61：取数正确性、静默错数据与防封禁预算）
 
 **数据源与降级链**

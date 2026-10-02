@@ -688,6 +688,7 @@ class AnalysisService:
             fund, signal, corrected_scores, qf_result=qf_result,
             nav_as_of_date=nav_as_of or None,
             extra_fields=shadow_fields,
+            factor_weights=corrected_weights,
         )
 
     async def _save_result(
@@ -698,8 +699,12 @@ class AnalysisService:
         qf_result: Optional[QualityFilterResult] = None,
         nav_as_of_date: Optional[str] = None,
         extra_fields: Optional[dict] = None,
+        factor_weights: Optional[list[float]] = None,
     ) -> Optional[AnalysisResultOut]:
         """存储分析结果到数据库"""
+        # 有效权重与因子分值同序落库：质量过滤的权重修正（趋势一致性 boost 等）
+        # 只存在于内存，不落这一项的话该行永远无法复算 original_score
+        weights = list(factor_weights) if factor_weights else []
         factor_scores_json = json.dumps({
             fs.factor_code: {
                 "name": fs.factor_name,
@@ -707,8 +712,9 @@ class AnalysisService:
                 "score": fs.score,
                 "direction": fs.direction,
                 "data_valid": fs.data_valid,
+                "weight": weights[i] if i < len(weights) else None,
             }
-            for fs in factor_scores
+            for i, fs in enumerate(factor_scores)
         }, ensure_ascii=False)
 
         # 诊断地基字段（2026-09-23）：修正前原始分/动态阈值/质量警告落库，供 factor_audit 历史回算
@@ -779,8 +785,9 @@ class AnalysisService:
                     score=fs.score,
                     direction=fs.direction,
                     data_valid=fs.data_valid,
+                    weight=weights[i] if i < len(weights) else None,
                 )
-                for fs in factor_scores
+                for i, fs in enumerate(factor_scores)
             ],
             created_at=now_beijing(),
             original_score=signal.original_score,
