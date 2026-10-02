@@ -18,6 +18,43 @@ from backend.utils.timezone import now_beijing
 logger = logging.getLogger(__name__)
 
 
+def top_factor_lines_for_prompt(raw_scores, limit: int = 5) -> list[str]:
+    """factor_scores → "|因子名=±0.42（数据不足）|" 文本，按 |score| 取前 N
+
+    兼容三种历史形态：{code: {name,score,...}}（当前落库）、{code: score}（早期导入）、
+    [{factor_code,...}]（外部导入）。旧实现对 dict 形态直接 float(value)，而 value 是
+    因子字典 → 恒抛 TypeError 被上层 except 吞掉，AI 上下文里的因子明细从未出现过
+    （2026-10-01 审查 P1 同族问题）。
+    """
+    items: list[tuple[str, float, bool]] = []
+    if isinstance(raw_scores, dict):
+        for code, val in raw_scores.items():
+            if isinstance(val, dict):
+                name = str(val.get("name") or code)
+                score_raw = val.get("score", 0)
+                valid = bool(val.get("data_valid", True))
+            else:
+                name, score_raw, valid = str(code), val, True
+            try:
+                score = float(score_raw or 0)
+            except (TypeError, ValueError):
+                continue
+            items.append((name, score, valid))
+    elif isinstance(raw_scores, list):
+        for fs in raw_scores:
+            if not isinstance(fs, dict):
+                continue
+            name = str(fs.get("factor_name") or fs.get("factor_code") or "?")
+            try:
+                score = float(fs.get("score", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            items.append((name, score, bool(fs.get("data_valid", True))))
+
+    top = sorted(items, key=lambda x: abs(x[1]), reverse=True)[:limit]
+    return [f"{n}={s:+.2f}{'' if v else '(数据不足)'}" for n, s, v in top]
+
+
 class AIService:
     """AI 对话服务"""
 
@@ -163,23 +200,9 @@ class AIService:
                     try:
                         scores = json.loads(analysis.factor_scores)
                         # 只保留 |score| 最大的 5 个因子，控制 token 体积
-                        if isinstance(scores, dict) and scores:
-                            top = sorted(
-                                scores.items(),
-                                key=lambda kv: abs(float(kv[1] or 0)),
-                                reverse=True,
-                            )[:5]
-                            line += ", 因子=" + ", ".join(f"{k}={v}" for k, v in top)
-                        elif isinstance(scores, list) and scores:
-                            top = sorted(
-                                scores,
-                                key=lambda fs: abs(float(fs.get("score", 0) or 0)),
-                                reverse=True,
-                            )[:5]
-                            line += ", 因子=" + ", ".join(
-                                f"{fs.get('factor_name', fs.get('factor_code', '?'))}={fs.get('score')}"
-                                for fs in top
-                            )
+                        pairs = top_factor_lines_for_prompt(scores)
+                        if pairs:
+                            line += ", 因子=" + ", ".join(pairs)
                     except (json.JSONDecodeError, TypeError, ValueError):
                         pass
                     fund_lines.append(line)

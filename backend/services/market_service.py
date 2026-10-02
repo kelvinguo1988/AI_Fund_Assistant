@@ -90,10 +90,17 @@ class MarketService:
     _CACHE_TTL = 300  # 5 分钟
 
     @staticmethod
-    def clear_cache() -> None:
-        """清空所有缓存，强制下次请求重新获取"""
+    def clear_cache(include_failures: bool = False) -> None:
+        """清空结果缓存；include_failures=True 时连失败冷却一起解除
+
+        失败冷却默认保留：它是"刚刚被限了，别再打"的唯一记忆，定时推送过去
+        无条件清空 → 每天两轮推送各自把已耗尽的降级链再撞一遍（2026-10-01
+        审查 P2）。只有用户手动点"刷新"才该强制重试。
+        """
         MarketService._cache.clear()
-        logger.debug("MarketService 缓存已清空")
+        if include_failures:
+            MarketService._fail_cache.clear()
+        logger.debug("MarketService 缓存已清空（include_failures=%s）", include_failures)
 
     @staticmethod
     def _cache_get(key: str) -> object:

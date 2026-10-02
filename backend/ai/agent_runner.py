@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.ai_tools.registry import execute_tool, tool_specs
+from backend.llm.base import estimate_tokens
 from backend.models.ai_conversation import AIConversation
 from backend.models.system_config import SystemConfig
 from backend.utils.timezone import now_beijing
@@ -201,7 +202,15 @@ class AgentRunner:
                 errored = True
                 yield {"type": "error", "message": "LLM 无终态返回"}
                 break
-            token_spent += (resp.prompt_tokens + resp.completion_tokens) or 1
+            round_tokens = resp.prompt_tokens + resp.completion_tokens
+            if not round_tokens:
+                # 端点没回传 usage：按当前 prompt 规模估算。旧写法 `or 1` 让
+                # token_spent 等于轮数（≤15），12 万预算与 budget_exhausted
+                # 事件永远不可达（2026-10-01 审查 P1）。
+                round_tokens = estimate_tokens(
+                    "\n".join(str(m.get("content") or "") for m in messages) + resp.content
+                )
+            token_spent += round_tokens
             if not resp.has_tool_calls:
                 final_text = resp.content
                 break

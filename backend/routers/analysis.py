@@ -88,6 +88,7 @@ def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResul
                         raw_value=val.get("raw_value", 0),
                         score=val.get("score", 0),
                         direction=val.get("direction", "positive"),
+                        data_valid=bool(val.get("data_valid", True)),
                     ))
                 else:
                     factor_scores.append(FactorScore(
@@ -213,10 +214,13 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
     signal_summary.top_sell = [o for o in out_list if o.signal_direction == "sell"][-10:]
 
     # 3. 尝试返回缓存的行情数据
-    from backend.services.fund_cache_service import get_cached_json
+    from backend.services.fund_cache_service import (
+        build_market_summary_payload, get_cached_json, market_cache_has_data,
+        store_market_summary,
+    )
     market_cache, updated_at = await get_cached_json(db, CACHE_KEY_MARKET)
 
-    if market_cache and updated_at:
+    if market_cache_has_data(market_cache) and updated_at:
         summary = MarketSummaryOut(
             date=summary_date,
             signals=signal_summary,
@@ -245,15 +249,10 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
     sector_flow_list = list(sector_flow_raw.values())
 
     # 5. 写入缓存
-    from backend.services.fund_cache_service import set_cached_json
-    cache_data = {
-        "market_flow": market_flow.model_dump() if market_flow else None,
-        "sector_flow": [s.model_dump() for s in sector_flow_list],
-        "hsgt_flow": hsgt_flow.model_dump() if hsgt_flow else None,
-        "adv_decline": adv_decline.model_dump() if adv_decline else None,
-        "turnover": turnover.model_dump() if turnover else None,
-    }
-    updated_at = await set_cached_json(db, CACHE_KEY_MARKET, cache_data)
+    cache_data = build_market_summary_payload(
+        market_flow, sector_flow_list, hsgt_flow, adv_decline, turnover
+    )
+    updated_at = await store_market_summary(db, cache_data)
 
     summary = MarketSummaryOut(
         date=summary_date,
@@ -282,6 +281,7 @@ async def get_market_regime():
             valuation_percentile=snap.valuation_percentile,
             valuation_date=snap.valuation_date,
             valuation_current_pe=snap.valuation_current_pe,
+            valuation_sample_points=snap.valuation_sample_points,
             adv_decline_ratio=snap.adv_decline_ratio,
             up_count=snap.up_count,
             down_count=snap.down_count,
@@ -298,10 +298,13 @@ async def get_market_regime():
 async def refresh_market_summary(db: AsyncSession = Depends(get_db)):
     """后台刷新行情数据并更新缓存"""
     from backend.services.market_service import MarketService
-    from backend.services.fund_cache_service import set_cached_json
+    from backend.services.fund_cache_service import (
+        build_market_summary_payload, store_market_summary,
+    )
 
-    # 清除 MarketService 内存缓存，确保获取最新行情
-    MarketService.clear_cache()
+    # 手动刷新：连带解除失败冷却（用户就是要立刻重试）；定时推送路径不清，
+    # 避免每天两轮推送各自把已耗尽的降级链再撞一遍
+    MarketService.clear_cache(include_failures=True)
     import asyncio as _asyncio
     svc = MarketService()
     market_flow, sector_flow_raw, hsgt_flow, adv_decline, turnover = await _asyncio.gather(
@@ -314,14 +317,11 @@ async def refresh_market_summary(db: AsyncSession = Depends(get_db)):
 
     sector_flow_list = list(sector_flow_raw.values())
 
-    cache_data = {
-        "market_flow": market_flow.model_dump() if market_flow else None,
-        "sector_flow": [s.model_dump() for s in sector_flow_list],
-        "hsgt_flow": hsgt_flow.model_dump() if hsgt_flow else None,
-        "adv_decline": adv_decline.model_dump() if adv_decline else None,
-        "turnover": turnover.model_dump() if turnover else None,
-    }
-    updated_at = await set_cached_json(db, CACHE_KEY_MARKET, cache_data)
+    cache_data = build_market_summary_payload(
+        market_flow, sector_flow_list, hsgt_flow, adv_decline, turnover
+    )
+    # updated_at 为 None = 五路全空且本地也没有旧缓存
+    updated_at = await store_market_summary(db, cache_data)
 
     return ApiResponse(data={"updated_at": updated_at})
 

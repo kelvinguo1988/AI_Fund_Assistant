@@ -43,6 +43,9 @@ def _collect_cooldowns(now: float) -> list[dict[str, Any]]:
     from backend.data_sources.akshare_adapter import AKShareAdapter
     from backend.services import fund_manager_service
     from backend.services.fund_realtime_service import FundRealtimeService
+    from backend.services.index_valuation_service import (
+        IndexValuationService, OtcTradeStatusService,
+    )
     from backend.services.market_service import MarketService
 
     # 实时行情数据源熔断（腾讯 / 东财 / fundgz 等，单源失败即整源冷却）
@@ -61,6 +64,15 @@ def _collect_cooldowns(now: float) -> list[dict[str, Any]]:
     # 市场概况四级降级链耗尽
     for key, until in MarketService._fail_cache.items():
         item = _cooldown(f"market.{key}", until, now, "降级链全部失败")
+        if item:
+            out.append(item)
+
+    # 指数估值 / 场外申购状态整批失败后的短冷却（防重试风暴）
+    for label, until in (
+        ("index_valuation.leiguru", IndexValuationService._fail_until),
+        ("otc_trade_status.eastmoney", OtcTradeStatusService._fail_until),
+    ):
+        item = _cooldown(label, until, now, "整批取数失败，静默窗口内不重试")
         if item:
             out.append(item)
 

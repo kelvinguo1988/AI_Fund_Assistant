@@ -13,6 +13,9 @@ class FactorScore(BaseModel):
     raw_value: float
     score: float            # -1.0 ~ +1.0 标准化评分
     direction: str
+    # 因子数据不足标记：原先只活在内存里的 FactorScoreResult，落库 JSON 时被丢掉
+    # → 从 DB 重建的报告/AI 上下文永远看不到"该因子缺数据"（2026-10-01 审查 P1）
+    data_valid: bool = True
 
 
 class AnalysisResultOut(BaseModel):

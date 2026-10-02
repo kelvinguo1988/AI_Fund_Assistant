@@ -423,9 +423,10 @@ export interface MarketSummaryOut {
 /* ── 市场环境快照（估值分位/情绪/资金面） ─────────────────────────── */
 export interface MarketRegimeOut {
   fetched_at: string;
-  valuation_percentile: number | null;   // 沪深300 PE 近5年分位 0~1
+  valuation_percentile: number | null;   // 沪深300 PE 近10年分位 0~1
   valuation_date: string | null;
   valuation_current_pe: number | null;
+  valuation_sample_points: number | null;  // 参与分位的历史月点数
   adv_decline_ratio: number | null;     // 涨跌家数比 -1~1
   up_count: number | null;
   down_count: number | null;

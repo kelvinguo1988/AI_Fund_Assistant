@@ -552,7 +552,7 @@ class TaskScheduler:
             logger.error(f"注册调休自动同步任务失败: {e}")
 
     async def _run_holiday_auto_sync(self) -> None:
-        """执行调休自动同步（受 holiday_auto_sync_enabled 开关控制，成功后停用）"""
+        """执行调休自动同步（受 holiday_auto_sync_enabled 开关控制，成功后按 7 天节流）"""
         try:
             from backend.services.holiday_sync_service import auto_sync_if_enabled
 

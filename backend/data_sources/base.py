@@ -15,6 +15,17 @@ def guess_fund_type(code: str) -> str:
     return "etf" if ETF_CODE_PREFIX.match(code) else "otc"
 
 
+class NoDataError(Exception):
+    """该代码在本数据源确实没有记录（确定性空结果），不是数据源故障
+
+    与网络/风控类异常的区别必须保留：降级链过去把任何异常都当成源坏了，
+    于是池子里一只已清盘的代码就能让 AKShare 整源降级 5 分钟，后续所有
+    基金改打备源并触发告警（2026-10-01 审查 P1）。管理器见到本异常时
+    不降级、不换源（两家源覆盖的是同一个公募基金全集，空结果是代码的属性），
+    直接上抛交调用方按"无数据"跳过。
+    """
+
+
 @dataclass
 class FundData:
     """基金数据统一结构"""
@@ -92,6 +103,10 @@ class BaseDataSource(ABC):
 
         Returns:
             FundData 基金数据对象
+
+        Raises:
+            NoDataError: 该代码在本源确认无记录（不得当作源故障）
+            Exception: 请求级失败（超时/风控/认证），降级链据此切换数据源
         """
         ...
 

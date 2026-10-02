@@ -8,11 +8,30 @@
 - IndexValuationService.get_valuations  真实调用 = 拉乐咕 4 指数 PE 历史
   （乐咕已实测对短时重复请求限流）
 
-需要验证真实网络行为的测试应显式覆盖（monkeypatch 覆盖本 fixture 的补丁）。
+需要验证真实网络行为的测试应显式覆盖（monkeypatch 覆盖本 fixture 的补丁）；
+要驱动这两个服务自身逻辑（负缓存/合并）的用例请 request `real_valuation_services`。
 其余轻量接口（ETF spot/个股快照/fundgz 单只）由各测试自行 mock。
 """
 
 import pytest
+
+# 原始 classmethod 描述符：必须在任何补丁之前捕获（模块导入时即取）
+from backend.services import index_valuation_service as _ivs
+
+_IV_GET_VALUATIONS = _ivs.IndexValuationService.__dict__["get_valuations"]
+_OTC_GET_STATUS_MAP = _ivs.OtcTradeStatusService.__dict__["get_status_map"]
+
+
+@pytest.fixture
+def real_valuation_services(monkeypatch):
+    """解除上方 autouse 补丁，让用例驱动两个服务的真实实现
+
+    覆盖负缓存/部分合并这类**服务内部逻辑**时必须用：网络层仍由用例自己
+    stub（run_with_timeout），所以依然零真实请求。
+    """
+    monkeypatch.setattr(_ivs.IndexValuationService, "get_valuations", _IV_GET_VALUATIONS)
+    monkeypatch.setattr(_ivs.OtcTradeStatusService, "get_status_map", _OTC_GET_STATUS_MAP)
+    return _ivs
 
 
 @pytest.fixture(autouse=True)

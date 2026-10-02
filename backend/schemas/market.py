@@ -90,10 +90,11 @@ class MarketSummaryOut(BaseModel):
 class MarketRegimeOut(BaseModel):
     """市场环境快照（估值分位/情绪/资金面）"""
     fetched_at: str = ""
-    # 大盘估值：沪深300 PE 近5年分位 (0~1)
+    # 大盘估值：沪深300 PE 近10年分位 (0~1)
     valuation_percentile: Optional[float] = None
     valuation_date: Optional[str] = None
     valuation_current_pe: Optional[float] = None
+    valuation_sample_points: Optional[int] = None
     # 市场情绪：涨跌家数比 -1~1
     adv_decline_ratio: Optional[float] = None
     up_count: Optional[int] = None

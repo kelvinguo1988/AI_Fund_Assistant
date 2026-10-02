@@ -24,7 +24,10 @@ logger = logging.getLogger(__name__)
 # 全量经理数据缓存（服务启动后缓存一次，避免重复 ~30s 查询）
 _manager_cache: Optional[list[dict]] = None
 _cache_ts: float = 0.0
-_cache_lock = asyncio.Lock()
+# Python 3.9 的 asyncio.Lock() 构造时即 get_event_loop()：写在模块顶层会让
+# 本模块只能在一个已存在事件循环的进程里导入（先跑过 asyncio.run 的测试、
+# 或 worker 重启路径都会直接抛 RuntimeError）。按 concurrency.py 的约定 lazy 到首次 await。
+_cache_lock: Optional[asyncio.Lock] = None
 
 # 缓存 TTL：进程常驻（NAS 上常连续数周不重启），永久缓存会让新任命/离任
 # 在本进程内永远不可见（2026-09-29 审查 P2）。任免是慢变量，6 小时足够。
@@ -50,7 +53,7 @@ def _cache_fresh() -> bool:
 
 async def _get_all_managers() -> list[dict]:
     """获取全量基金经理数据（带 TTL 缓存 + 失败冷却）"""
-    global _manager_cache, _cache_ts, _last_fail_time
+    global _manager_cache, _cache_ts, _last_fail_time, _cache_lock
 
     if _cache_fresh():
         return _manager_cache
@@ -59,6 +62,8 @@ async def _get_all_managers() -> list[dict]:
     if _last_fail_time and time.time() - _last_fail_time < _FAIL_COOLDOWN:
         return _manager_cache or []
 
+    if _cache_lock is None:
+        _cache_lock = asyncio.Lock()
     async with _cache_lock:
         if _cache_fresh():
             return _manager_cache

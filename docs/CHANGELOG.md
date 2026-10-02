@@ -31,6 +31,38 @@
 - [新功能] `fund_quarterly` 落库链路补齐：「刷新数据」写 pingzhongdata 扩展缓存时同源解析资产配比/规模/持有人结构/申购赎回，按报告期 upsert（规模优先 `Data_fluctuationScale` 亿元→元，内部人份额 = 内部持有比例 × 总份额），生效日期按披露截止（季报 +2 月、半年报/年报 +3 月）取当月首个工作日。此前该表恒空，第零层质量过滤的清盘否决/规模冲击/仓位漂移/机构认可度四项长期按中性处理。零额外网络请求，本地回灌实测 56 只基金 / 361 个报告期
 - [新功能] 场外实时估值改为仓位感知：持仓加权只覆盖股票仓位的一部分，未覆盖的 `R_stock - 覆盖率` 份额按当日指数涨跌补齐（`est_model=position_aware`，R_stock 取最新已生效季报），替代原先"覆盖率<50% 才混合指数"的粗口径；缺季报仓位时回退旧归一法/指数混合，仪表盘 tooltip 同步标注
 
+### 2026-10-02 外部审查第一批整改（#53–#61：取数正确性、静默错数据与防封禁预算）
+
+**数据源与降级链**
+- [修复] 调休自动同步其实从未成功过：`fetch_holiday_json` 把 httpx 独有的 `resolution_callback` 传给了 `requests.get`，每次调用恒抛 TypeError，当年/次年安排一次都没落库（手动同步同样失败）。改为 requests 手动跟随重定向（上限 5 跳，每一跳落地前重新做 SSRF 校验，公网域名 302 → `169.254.169.254` 依旧打不通），`backend/requirements.txt` 的注释同步更正（`backend/services/holiday_sync_service.py:92-120`）
+- [修复] 自动同步"成功后把 enabled 置 false（只同步一次）"→ 保留开关、按 `holiday_last_sync_at` 做 7 天节流：次年安排要到当年才公布，一次性同步必然拿不到，跨年后交易日闸门只能回退 chinese_calendar（年份覆盖到期即退化为"周一至周五"，法定节假日照跑整轮全量分析）。手动 `POST /api/holiday/sync` 不受开关与节流限制
+- [新功能] `NoDataError` 把"这个代码在本源确实没有记录"从"源坏了"里摘出来：降级链过去把 `get_fund_data` 抛出的任何异常都记成源故障，池里一只已清盘代码就能让 AKShare 整源降级 5 分钟，之后的基金全改打备源并推"数据源故障"告警。管理器现在见到该异常不降级、也不轮询下一级（两家源覆盖同一个公募基金全集，主源说没有时备源基本也没有，为死代码逐个请求只是徒增上游压力），直接上抛交调用方按无数据跳过；`BaseDataSource.get_fund_data` 把这对合约写进文档
+- [改进] 分析侧配套：批量与流式两条取数路径各加 `NoDataError` 分支，归入既有 `analysis.data_missing` 埋点，日志由 error + 完整 traceback 降为 info —— 旧行为是每轮分析为几只失效代码刷 N 条"获取基金数据失败"，把真实断供埋在了噪声里
+
+**量化口径与因子链**
+- [修复] 场外基金净值改为分红复权口径：因子链此前直接吃裸 `单位净值(DWJZ)`，而除息日分红在 DWJZ 上表现为一次性下跌、同源「日增长率」却已按分红调整 → 有分红的基金在除息日被记成一天暴跌（实测 004815 真实 +0.74% 记成 -3.80%），动量/回撤/波动/MACD/截面分位五类因子同时被污染。新增 `build_forward_adjusted_nav`（纯 Python，自末值回推的前复权；缺日增长率的相邻日退回净值比，整段无增长率则不调整）喂给 `FundData.close_history`，展示字段 `close/date` 仍是官方单位净值且与复权序列末值同源。**注意信号漂移：分红型场外基金的因子值与总分在升级后会变，历史 `analysis_results` 与新记录不同口径**。遗留：复盘与建议回填链路仍取单位净值（`review_service.py:261-299`），本次未动，统一口径的方案见 `docs/QUANT_DECISIONS_2026-10.md` Q11
+- [修复] 停牌日 DWJZ 为空串时 `astype(float)` 会让整只基金抛 ValueError（再被上层当成数据源故障降级整源）→ 逐列 `to_numeric(errors="coerce")`，缺失交给复权链；整段无有效净值时保持 `close=None` 交给 data_missing，不再伪造最新值
+- [修复] 大盘估值分位真实生效：主源换成乐咕 `stock_index_pe_lg("沪深300")` 月频滚动市盈率（2005 至今），csindex 日频序列降为降级源。旧实现只有 csindex 一路，且 `_MIN_PE_POINTS=250` 的门槛 + `valid[-1215:]` 固定条数切片（假定日频 1215 条≈5 年）在月频序列上只剩 1 个点，分位直接失真。窗口改为近 10 个日历年日历跨度，新增 `valuation_sample_points` 贯穿 schema / 仪表盘卡片 / 飞书推送 / AI 简报（月频≈120、日频≈2400，数量级差异必须暴露给消费方，否则两个 0.4 不是同一个置信度）；本地实测分位 0.5833、当前 PE 12.48、120 样本，卡片标题由"近5年"更正为"近10年"
+- [新功能] PE 历史序列 6 小时缓存 + 双源全挂 60s 负缓存：序列本身是月频/日频长表，而快照 TTL 只有 1 小时，旧写法每天 24 次快照就拉 24 遍同一段全量历史 —— 与防封禁目标相反；`clear_cache()` 一并清除两层缓存
+- [改进] `data_valid` 全链路透传：因子"数据不足"标记原先只活在内存里的 `FactorScoreResult`，落库 JSON 时被丢掉 → 从 DB 重建的报告、AI 上下文与前端因子表永远看不到"该因子缺数据"，而 `score=0` 的两种含义（真实中性 / 缺数据占位）区分不开。现由 `analysis_service` 写入 `factor_scores`，`FactorScore` schema、`/api/analysis` 重建、Agent 的 `get_factor_history`、Skill 基金详情、飞书推送一致透传；`quality_filter` 修正波动率倒数时不再把重建出的因子洗回 `data_valid=True`
+- [修复] AI 提示词里的因子明细从未出现过：`ai_service` 对当前落库形态 `{code: {name,score,...}}` 直接 `float(value)` 恒抛 TypeError，被上层 `except` 静默吞掉 → "因子="那一段一直是空的。抽出 `top_factor_lines_for_prompt`，兼容三种历史形态（对象/`{code: score}`/列表），按 |score| 取前 5 并给缺数据因子标注"（数据不足）"
+
+**静默错数据与请求预算**
+- [新功能] 失败负缓存 + 按 key 部分合并：`IndexValuationService` / `OtcTradeStatusService` 取数异常**或接口通了一行没有**时置 120s 冷却（旧实现失败不推进时间戳，前端 5s 轮询 + 仪表盘多个区块会把一次风控抖动放大成请求风暴）；指数估值按指数名合并，本轮缺的指数沿用旧条目（最久 6 小时）而不是"忽隐忽现"；阶段涨幅与扩展详情按代码合并，60 只里挂 3 只不再把那 3 只的缓存清空。两个冷却窗口在 `/api/system/data-source-health` 可见
+- [修复] 行情五板块全空时不再落库：旧实现无条件 `set_cached_json`，五路同时被限的那一次会留下"全 None + 刚刚更新"的行，而读取路径只判断行是否存在 → 仪表盘此后永远空白、时间戳照旧推进，真实故障被伪装成"数据已最新"。新增 `store_market_summary`（空帧保留旧缓存与旧时间戳并告警）与 `market_cache_has_data`，三处写入点（`/summary`、`/refresh-summary`、推送回填）改用共用的 `build_market_summary_payload` 防口径漂移
+- [改进] `MarketService.clear_cache(include_failures=)`：失败冷却是"刚刚被限过、别再打"的唯一记忆，过去定时推送路径无条件清空 → 每天两轮推送各自把已耗尽的降级链再撞一遍。现默认保留冷却，只有用户手动点"刷新数据"（`POST /api/analysis/refresh-summary`）才连带解除
+
+**AI 预算与展示口径**
+- [修复] AI token 预算护栏此前形同虚设：流式请求不带 `stream_options` 时 usage 恒为 0，Agent 的 `token_spent += (prompt+completion) or 1` 于是只等于轮数（≤15），12 万预算与 `budget_exhausted` 事件永远不可达。现默认索要 `stream_options={"include_usage": true}`，端点不认识该参数时记标记并在后续轮次去掉；仍拿不到 usage 则按 `estimate_tokens`（CJK 1 字≈1 token，其余 4 字符≈1，宁可偏高）估算 prompt 与 completion
+- [修复] 亏损基金在 PK 对比表里没有年化收益：`annualized_return_pct` 的 `total <= 0 → None` 恰好对**亏钱的基金**留空，而夏普/回撤照常显示 → 对比表被动乐观。改为只对净值归零/为负判无定义
+
+**前端**
+- [修复] 回测页空闲期不再每 60s 打一次全表：自动回测配置 / 调仓费率 / 批量结果三项一次性加载与"仅在运行期间开轮询"拆成两个 effect（旧实现共用 `[batchRunning]`，每轮"运行中→完成"翻转就把三项整体重跑，空闲时也常驻定时器）；服务端回报 `running === false` 时收尾再拉一次结果，表格不留 60 秒前的中间态。浏览器实测空闲 80s 窗口零请求
+
+**测试与文档**
+- [新功能] 新增 `tests/test_no_data_error.py`（无记录不降级、不换源）、`tests/test_cache_merge_and_negative_cache.py`（负缓存 / 按 key 合并 / 空帧不落库）；conftest 补 `real_valuation_services` fixture —— 驱动这两个服务的内部逻辑时必须解除 autouse 网络补丁，网络层仍由用例自行 stub，红线"测试可以慢但不要触发限流"不变。回归：`pytest -q` 499 passed，`npm run build` 通过
+- [文档] `docs/QUANT_DECISIONS_2026-10.md`：第二批 14 项量化口径变更（市场三因子去重、回测基线与建议命中率、调仓权重与赎回费阶梯、复权口径统一等）**只做设计与取证**，全部涉及生产信号漂移，需确认方向后再开发；外部审查报告原文归档 `docs/CODE_REVIEW_2026-10-01.md`
+
 ### 2026-09-29 全量代码审查修复（P0→P3，框架/逻辑/功能模块/代码质量）
 
 **P0 — 正确性与凭据安全**

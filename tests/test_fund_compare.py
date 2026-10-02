@@ -28,9 +28,18 @@ class TestAnnualized:
         # 日期差按 len-1 近似 2 年？实际用日期差——这里手工传 days=730
         assert annualized_return_pct(vals, 730) == pytest.approx(10.0, abs=0.2)
 
+    def test_negative_period_still_defined(self):
+        """亏损区间也要给出年化（旧实现返回 None → PK 表只美化了亏钱的基金）"""
+        # 一年 -20% → 年化 -20%
+        assert annualized_return_pct([1.0, 0.8], 365) == pytest.approx(-20.0, abs=0.1)
+        # 两年从 1.0 跌到 0.64 → 年化 -20%
+        assert annualized_return_pct([1.0, 0.8, 0.64], 730) == pytest.approx(-20.0, abs=0.2)
+
     def test_invalid(self):
         assert annualized_return_pct([1.0], 365) is None
         assert annualized_return_pct([0.0, 1.0], 365) is None
+        # 净值归零仍是无定义（-100% 无法年化）
+        assert annualized_return_pct([1.0, 0.0], 365) is None
 
 
 class TestMaxDrawdown:

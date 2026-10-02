@@ -10,7 +10,7 @@ import time
 from datetime import date, timedelta
 from typing import Optional
 
-from backend.data_sources.base import BaseDataSource, FundData, MarketIndices
+from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, NoDataError
 from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ class JoinQuantAdapter(BaseDataSource):
             )
 
             if df is None or df.empty:
-                raise ValueError(f"JoinQuant 数据为空 code={code}")
+                raise NoDataError(f"JoinQuant 数据为空 code={code}")
 
             df = df.sort_values("time") if "time" in df.columns else df
             df = df.tail(period)

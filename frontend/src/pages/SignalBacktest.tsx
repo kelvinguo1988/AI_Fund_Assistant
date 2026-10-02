@@ -99,6 +99,9 @@ const SignalBacktest: React.FC = () => {
     }
   };
 
+  // 一次性加载：自动回测配置、调仓费率、已有批量结果都只在挂载时取一次
+  // （2026-10-01 审查 P2：过去它们和轮询挂在同一个 [batchRunning] effect 上，
+  //  每轮"运行中→完成"状态翻转就把三项整体重跑一遍）
   useEffect(() => {
     backtestBatchApi.getConfig()
       .then((r) => setAutoCfg(r.data))
@@ -107,27 +110,36 @@ const SignalBacktest: React.FC = () => {
       .then((r) => setFeePct(r.data?.fee_pct ?? feePct))
       .catch(() => { /* 读不到配置则沿用默认展示值 */ });
     loadBatch();
-    // 批量结果轮询：手动触发一轮全量回测后逐只落库，可实时看到进度。
-    // 终止条件以**服务端** running 为准（2026-09-29 审查 P0：旧实现只在
-    // triggerBatch 成功时把 batchRunning 置 true 且永不复位 → 按钮永久
-    // disabled、60s 轮询无终止条件，后端早已跑完前端也不知道）；
-    // 连续 3 次状态请求失败才兜底复位，避免后端不可达时空转。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* 批量进度轮询：只在一轮全量回测运行期间开 60s 轮询，空闲时不留定时器
+     （过去空闲也每 60s 拉一次全表并闪一次加载圈）。
+     终止条件以**服务端** running 为准（2026-09-29 审查 P0：旧实现只在
+     triggerBatch 成功时把 batchRunning 置 true 且永不复位 → 按钮永久
+     disabled、轮询无终止条件，后端早已跑完前端也不知道）；
+     连续 3 次状态请求失败才兜底复位，避免后端不可达时空转。 */
+  useEffect(() => {
+    if (!batchRunning) return;
     let statusFailStreak = 0;
     const t = setInterval(async () => {
       loadBatch();
-      if (!batchRunning) return;
       try {
         const s = await backtestBatchApi.status();
         statusFailStreak = 0;
         // 端点是 ApiResponse 信封，running 在 data 里（读 s.running 恒 undefined，
         // 复位只剩"连续 3 次失败"兜底 → 按钮永远禁用）
-        if (s?.data?.running === false) setBatchRunning(false);
+        if (s?.data?.running === false) {
+          setBatchRunning(false);
+          loadBatch();   // 收尾再拉一次，表格里不留 60s 前的中间态
+        }
       } catch {
         statusFailStreak += 1;
         if (statusFailStreak >= 3) setBatchRunning(false);
       }
     }, 60_000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchRunning]);
 
   useEffect(() => {

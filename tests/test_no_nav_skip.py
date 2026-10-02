@@ -36,7 +36,10 @@ class _StubSource:
 
     async def get_fund_data(self, code, fund_type=None):
         self.requested.append(code)
-        return self._mapping[code]
+        value = self._mapping[code]
+        if isinstance(value, Exception):
+            raise value
+        return value
 
 
 class _FakeEngine:
@@ -209,6 +212,65 @@ class TestStreamingPath:
         assert len(rows) == 1
         assert rows[0][1] == "data"
         assert "968049" in rows[0][3]
+
+
+class TestNoDataErrorPath:
+    """数据源明确回答"该代码没有记录"时按无数据跳过，不记 error 级故障"""
+
+    @pytest.mark.asyncio
+    async def test_batch_skips_without_error_log(self, db_session, monkeypatch, tmp_path, caplog):
+        import logging
+        from backend.data_sources.base import NoDataError
+
+        await _mk_funds(db_session, ["004011", "968049"])
+        _stub_cfg(monkeypatch)
+        engine = _FakeEngine()
+        monkeypatch.setattr(asis, "factor_engine", engine)
+
+        svc = asis.AnalysisService(db_session)
+        svc.data_source = _StubSource({
+            "004011": _nav_fund_data("004011"),
+            "968049": NoDataError("数据源无记录 code=968049"),
+        })
+
+        async def _fake_score(self, fund, cfg, **kwargs):
+            return None
+        monkeypatch.setattr(asis.AnalysisService, "_score_and_store", _fake_score)
+
+        with caplog.at_level(logging.WARNING, logger="backend.services.analysis_service"):
+            await svc.run_analysis()
+        await _drain_log_tasks()
+
+        assert engine.calculated == ["004011"]
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        rows = [r for r in _read_error_logs(tmp_path) if r[0] == "analysis.data_missing"]
+        assert len(rows) == 1
+        assert rows[0][1] == "data"
+        assert "968049" in rows[0][3]
+
+    @pytest.mark.asyncio
+    async def test_streaming_reports_failed_not_error(self, db_session, monkeypatch):
+        from backend.data_sources.base import NoDataError
+
+        await _mk_funds(db_session, ["004011", "968049"])
+        _stub_cfg(monkeypatch)
+        monkeypatch.setattr(asis, "factor_engine", _FakeEngine())
+
+        svc = asis.AnalysisService(db_session)
+        svc.data_source = _StubSource({
+            "004011": _nav_fund_data("004011"),
+            "968049": NoDataError("数据源无记录 code=968049"),
+        })
+
+        async def _fake_score(self, fund, cfg, **kwargs):
+            return None
+        monkeypatch.setattr(asis.AnalysisService, "_score_and_store", _fake_score)
+
+        events = [json.loads(e.replace("data: ", "").strip())
+                  for e in await _collect(svc.run_analysis_streaming()) if e.startswith("data:")]
+        complete = [e for e in events if e["type"] == "complete"][0]
+
+        assert complete["failed"] == ["968049"]
 
 
 async def _collect(agen) -> list[str]:

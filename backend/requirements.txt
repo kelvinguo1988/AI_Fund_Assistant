@@ -14,7 +14,8 @@ python-dotenv==1.0.1
 tzdata>=2024.1
 openai==1.35.0
 chinese-calendar~=1.11.0
-# 直接依赖（原经 akshare 传递引入）：调休同步的 SSRF 逐跳校验用到 2.31+ 的 resolution_callback
+# 直接依赖（原经 akshare 传递引入）：调休同步的 SSRF 校验用它手动跟随重定向
+#（requests 没有 httpx 的 resolution_callback，2026-10-01 审查已把那个假参数删掉）
 # 下限提到 2.32.4：2.31.0 有 CVE-2024-35195（Session 证书校验被跨请求关闭后不复位），
 # 而本库正是 SSRF 校验的落点（2026-09-29 审查 P0）
 requests>=2.32.4,<3.0

@@ -18,6 +18,46 @@ logger = logging.getLogger(__name__)
 CACHE_KEY_PERIOD_RETURNS = "period_returns"
 CACHE_KEY_REFRESH_TIME = "detail_last_refreshed"
 CACHE_KEY_EXTENDED_DETAIL = "extended_detail"
+CACHE_KEY_MARKET_SUMMARY = "market_summary"
+
+# 行情快照的五个板块：任一有值才算有效帧
+_MARKET_SECTIONS = ("market_flow", "sector_flow", "hsgt_flow", "adv_decline", "turnover")
+
+
+def build_market_summary_payload(
+    market_flow, sector_flow_list, hsgt_flow, adv_decline, turnover
+) -> dict:
+    """五板块 → 落库 dict（三处写入点共用，防口径漂移）"""
+    return {
+        "market_flow": market_flow.model_dump() if market_flow else None,
+        "sector_flow": [s.model_dump() for s in sector_flow_list],
+        "hsgt_flow": hsgt_flow.model_dump() if hsgt_flow else None,
+        "adv_decline": adv_decline.model_dump() if adv_decline else None,
+        "turnover": turnover.model_dump() if turnover else None,
+    }
+
+
+def market_cache_has_data(cache) -> bool:
+    """缓存帧是否含任一板块
+
+    全 None 的帧不是"合法的空行情"，而是五路取数同时失败的痕迹，不能当有效
+    缓存展示。
+    """
+    return bool(cache) and any(cache.get(k) for k in _MARKET_SECTIONS)
+
+
+async def store_market_summary(db: AsyncSession, cache_data: dict) -> Optional[str]:
+    """行情板块落库；整帧全空时保留旧缓存与旧时间戳
+
+    旧实现无条件 set_cached_json：五个源同时被限的那一次会留下"全 None + 刚刚
+    更新"的行，而读取路径只判断行是否存在 —— 仪表盘此后永远空白、时间戳照旧
+    推进，真实故障被伪装成"数据已最新"（2026-10-01 审查 P2）。
+    """
+    if not market_cache_has_data(cache_data):
+        _old, old_at = await get_cached_json(db, CACHE_KEY_MARKET_SUMMARY)
+        logger.warning("行情五板块全部为空，保留旧缓存、不推进更新时间")
+        return old_at
+    return await set_cached_json(db, CACHE_KEY_MARKET_SUMMARY, cache_data)
 
 
 async def get_cached_period_returns(
@@ -90,14 +130,26 @@ async def update_period_returns_cache(
     returns: dict[str, dict] = {}
     for code, text in js_texts.items():
         returns[code] = _parse_period_returns(text)
+
+    # 本轮没拉到 JS 文本的代码沿用上一轮的数值，而不是写一串 None：
+    # 全量 60 只里挂 3 只时，旧实现会把那 3 只在缓存里清空，而接口又是
+    # "先展示缓存"，前端表现成阶段涨幅随机消失（2026-10-01 审查 P2）
+    prev_rows, _prev_at = await get_cached_period_returns(db)
+    prev_map = {str(r.get("code")): r for r in prev_rows if isinstance(r, dict)}
+
+    def _cell(code: str, key: str):
+        if code in returns:
+            return returns[code].get(key)
+        return prev_map.get(code, {}).get(key)
+
     data = [
         {
             "code": code,
-            "name": name_map.get(code, ""),
-            "return_1m": returns.get(code, {}).get("return_1m"),
-            "return_3m": returns.get(code, {}).get("return_3m"),
-            "return_6m": returns.get(code, {}).get("return_6m"),
-            "return_1y": returns.get(code, {}).get("return_1y"),
+            "name": name_map.get(code, "") or prev_map.get(code, {}).get("name", ""),
+            "return_1m": _cell(code, "return_1m"),
+            "return_3m": _cell(code, "return_3m"),
+            "return_6m": _cell(code, "return_6m"),
+            "return_1y": _cell(code, "return_1y"),
         }
         for code in codes
     ]
@@ -139,7 +191,14 @@ async def update_extended_detail_cache(
         ext["name"] = name_map.get(code, "")
         all_data[code] = ext
 
-    await set_cached_json(db, CACHE_KEY_EXTENDED_DETAIL, all_data)
+    # 与上一轮按代码合并后落库：本函数只在"部分代码"刷新时被调用，整表覆盖
+    # 会让未参与本轮刷新的基金详情字段（累计净值/波动率）凭空消失
+    prev, _at = await get_cached_json(db, CACHE_KEY_EXTENDED_DETAIL)
+    if isinstance(prev, dict):
+        await set_cached_json(db, CACHE_KEY_EXTENDED_DETAIL, {**prev, **all_data})
+    else:
+        await set_cached_json(db, CACHE_KEY_EXTENDED_DETAIL, all_data)
+    # 返回值仍是本轮解析结果：下游拿它落 fund_quarterly，不该被历史条目放大
     return all_data
 
 

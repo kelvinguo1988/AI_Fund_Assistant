@@ -156,8 +156,14 @@ async def _render_fund_detail(db: AsyncSession, fund_id: int) -> str:
     ]
     try:
         scores = json.loads(ar.factor_scores)
-        brief = {k: {"评分": v.get("score"), "原始值": v.get("raw_value")}
-                 for k, v in scores.items()}
+        brief = {}
+        for k, v in scores.items():
+            if not isinstance(v, dict):
+                continue
+            entry = {"评分": v.get("score"), "原始值": v.get("raw_value")}
+            if v.get("data_valid", True) is False:
+                entry["数据不足"] = True   # 让 AI 知道这一项是中性 0 占位而非真实读数
+            brief[k] = entry
         parts.append(f"- 因子评分: {json.dumps(brief, ensure_ascii=False)}")
     except (json.JSONDecodeError, TypeError, AttributeError):
         pass

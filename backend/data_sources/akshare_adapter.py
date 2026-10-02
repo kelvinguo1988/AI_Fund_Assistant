@@ -1,6 +1,7 @@
 """AKShare 数据适配器 — 获取基金净值、PE、PB、成交量、指数数据"""
 
 import logging
+import math
 import random
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -12,7 +13,7 @@ import akshare as ak  # type: ignore
 import pandas as pd
 
 from backend.config import settings
-from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, guess_fund_type
+from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, NoDataError, guess_fund_type
 from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,61 @@ def _err_brief(e: BaseException, timeout: float) -> tuple[str, str]:
         else "(no error message)"
     )
     return reason, msg
+
+
+def _finite(x) -> bool:
+    try:
+        return math.isfinite(float(x))
+    except (TypeError, ValueError):
+        return False
+
+
+def build_forward_adjusted_nav(
+    nav: list[float], growth_pct: list[Optional[float]]
+) -> list[float]:
+    """单位净值序列 → 分红复权序列（前复权：末值仍等于最新单位净值）
+
+    场外基金的 单位净值(DWJZ) 在除息日会一次性扣掉分红，而数据源的 日增长率
+    已按分红调整。原实现把裸 DWJZ 直接喂给全部因子（动量/回撤/波动/MACD/截面
+    分位），有分红的基金在除息日就被记成一天暴跌 —— 实测 004815 在 2026-01-13
+    真实 +0.74% 却表现为 -3.80%（2026-10-01 审查 P1）。
+
+    Args:
+        nav: 单位净值，调用方需已过滤为正数有限值（与日期一一对应）
+        growth_pct: 同日 日增长率（百分数，0.74 表示 +0.74%），缺失可为 None/NaN
+
+    Returns:
+        复权净值序列，与 nav 等长
+    """
+    if not nav:
+        return []
+    if len(nav) == 1:
+        return list(nav)
+
+    steps: list[Optional[float]] = []
+    any_growth = False
+    for i in range(1, len(nav)):
+        g = growth_pct[i] if i < len(growth_pct) else None
+        step = 1.0 + float(g) / 100.0 if g is not None and _finite(g) else None
+        if step is not None and step > 0:
+            any_growth = True
+            steps.append(step)
+        else:
+            steps.append(None)  # 缺增长率/非法值，稍后退回净值比
+    if not any_growth:
+        return list(nav)  # 整段没有增长率（如只有 DWJZ 的备源）时不做任何调整
+
+    # 自末值回推：adjusted[-1] 恒等于最新单位净值，日增长率决定相邻两日之比
+    adj: list[float] = [0.0] * len(nav)
+    adj[-1] = float(nav[-1])
+    for i in range(len(nav) - 2, -1, -1):
+        step = steps[i]
+        if step is None:
+            prev, cur = nav[i], nav[i + 1]
+            step = cur / prev if prev > 0 and cur > 0 else 1.0
+        nxt = adj[i + 1] / step
+        adj[i] = nxt if _finite(nxt) and nxt > 0 else nav[i]
+    return adj
 
 
 # User-Agent 统一走 backend.utils.concurrency.random_ua（与各数据源共用一个池，
@@ -324,7 +380,7 @@ class AKShareAdapter(BaseDataSource):
         # 尝试获取 ETF 行情数据（1 次失败立即切场外基金接口，不重试）
         df = await self._call(ak.fund_etf_hist_em, symbol=code, period="daily", adjust="qfq", _max_attempts=1)
         if df is None or df.empty:
-            raise ValueError(f"ETF 行情数据为空 code={code}")
+            raise NoDataError(f"ETF 行情数据为空 code={code}")
 
         df = df.tail(period)
         df = df.sort_values("日期")
@@ -488,7 +544,11 @@ class AKShareAdapter(BaseDataSource):
             })
             df["净值日期"] = pd.to_datetime(df["净值日期"])
             df = df.sort_values("净值日期")
-            df["单位净值"] = df["单位净值"].astype(float)
+            # 停牌日 DWJZ 可能为空串，astype(float) 会整只基金抛 ValueError
+            # （被上层当成数据源故障降级整源）→ 逐列 coerce，缺失交给复权链处理
+            df["单位净值"] = pd.to_numeric(df["单位净值"], errors="coerce")
+            if "日增长率" in df.columns:
+                df["日增长率"] = pd.to_numeric(df["日增长率"], errors="coerce")
             return df.tail(period)
 
         logger.debug(f"天天基金原始 API 返回空数据 code={code}")
@@ -554,12 +614,29 @@ class AKShareAdapter(BaseDataSource):
             df = df.tail(period)
             df = df.sort_values("净值日期")
 
-            fund_data.close_history = df["单位净值"].astype(float).tolist()
-            fund_data.date_history = df["净值日期"].astype(str).tolist()
+            # 复权口径：因子链用分红复权净值，展示字段(close/date)仍是官方单位净值
+            nav = pd.to_numeric(df["单位净值"], errors="coerce").tolist()
+            if "日增长率" in df.columns:
+                growth = pd.to_numeric(df["日增长率"], errors="coerce").tolist()
+            else:
+                growth = [float("nan")] * len(nav)
+            dates = df["净值日期"].astype(str).tolist()
 
-            last_row = df.iloc[-1]
-            fund_data.close = float(last_row["单位净值"])
-            fund_data.date = str(last_row["净值日期"])
+            kept = [(d, v, g) for d, v, g in zip(dates, nav, growth) if _finite(v) and v > 0]
+            fund_data.date_history = [d for d, _, _ in kept]
+            fund_data.close_history = build_forward_adjusted_nav(
+                [v for _, v, _ in kept],
+                [g if _finite(g) else None for _, _, g in kept],
+            )
+
+            if kept:
+                # 与复权序列末值同源，保证 close == close_history[-1]
+                # （factor_engine 的价格分位同时用这两个字段，口径必须一致）
+                fund_data.close = float(kept[-1][1])
+                fund_data.date = kept[-1][0]
+            else:
+                # 整段无有效净值：保持 close=None，交 analysis_service 记 data_missing
+                logger.info(f"场外净值无有效数值 code={code}（{len(df)} 行全部缺失）")
         elif df is None:
             # 两策略都没拿到、且策略 2 是请求级失败 → 真实断供，必须上抛：
             # 旧实现返回空 FundData 被 manager 当成功（"AKShare 可用"），

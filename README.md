@@ -82,7 +82,7 @@ AI_Fund_Assistant/
 - **并发控制架构**：独立线程池隔离（akshare 专用 16 workers，与 asyncio 默认线程池隔离）+ 全局信号量限流（并发 5）+ 强制超时保护（25s）+ asyncio.Lock 双重检查防止缓存穿透，根治 40-60 只基金批量分析时的线程池耗尽与超时堆积问题
 - **共享数据缓存复用**：国债收益率、沪深300基准、指数估值（PE/PB）、ETF 行情、基金名称等全市场共享数据类级缓存（1h TTL），51 只基金并发分析时只发 1 次网络请求，其余命中缓存
 - **批量并发获取**：分析流程与基金详情刷新均采用 `asyncio.gather` 并发获取（替代串行 for 循环），每只基金使用独立 DB session 避免并发冲突，51 只基金分析耗时从 15+ 分钟降至 2-4 分钟
-- **调休/节假日日历自动同步**：从互联网官方通知源（默认 NateScarlet/holiday-cn，溯源国务院放假安排 gov.cn）同步当年+次年调休日历到 `holiday_calendar` 表。后台可配置同步地址、自动同步时间、开关；首次自动同步成功后自动停用（只同步一次），亦支持后台手动触发同步。后端 API 配置（暂无独立前端页面）
+- **调休/节假日日历自动同步**：从互联网官方通知源（默认 NateScarlet/holiday-cn，溯源国务院放假安排 gov.cn）同步当年+次年调休日历到 `holiday_calendar` 表。后台可配置同步地址、自动同步时间、开关；自动同步成功后**不再关闭开关**，改为按 `holiday_last_sync_at` 做 7 天节流（次年安排要到当年才公布，一次性同步必然拿不到，节流窗口过后自愈），亦支持后台手动触发（不受开关与节流限制）。抓取用 requests 手动跟随重定向（上限 5 跳，每一跳落地前重新做 SSRF 校验）。后端 API 配置（暂无独立前端页面）
 
 ---
 
@@ -141,7 +141,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 - **实时估值列**：场外基金的当日涨跌估算。触发时机为页面加载/刷新（不轮询）与定时推送前预热；鼠标悬停可看**数据来源**（官方估值/持仓自算）、**覆盖率**与**行情时间**。
 - 数据源三级降级：天天基金官方估值 → 持仓自算（季报 top10 × 个股实时行情，东财→腾讯→新浪）→ ETF 直接行情。任一源故障自动切换，互不影响。
-- 口径提醒：估值为盘中参考（日均误差 0.5~1pp、方向命中 75~90%），**不能当净值用**；所有信号计算基于官方收盘净值。
+- 口径提醒：估值为盘中参考（日均误差 0.5~1pp、方向命中 75~90%），**不能当净值用**；所有信号计算基于收盘净值的**分红复权序列**（见「因子评分体系」的净值口径）。
+- 「大盘估值分位」卡片显示沪深300 PE 的**近10年**分位与参与计算的历史样本数（月频主源≈120 点，日频降级源≈2400 点，两者置信度不同，必须随行展示）。
 
 ### 3. 分析与定时推送（/schedule）
 
@@ -205,11 +206,16 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 | 6 | 动量加速度 | momentum_accel | 0.5 | 截面 Z-score | `mom20 - mom60`，正值=加速 |
 | 7 | 趋势一致性 | trend_consistency | 0.5 | 截面 Z-score | `sign(mom20)+sign(mom60)` 归一 |
 | 8 | MACD信号 | macd_signal | 0.5 | 无（规则） | 金叉放量 +1 / 死叉放量 -1 |
-| 9 | 大盘估值分位 | market_valuation | 0.8 | 无（规则） | 沪深300 PE 5年分位（负向） |
+| 9 | 大盘估值分位 | market_valuation | 0.8 | 无（规则） | 沪深300 PE 近10年分位（负向） |
 | 10 | 市场情绪 | market_sentiment | 0.5 | 无（规则） | 全市场涨跌家数比 |
 | 11 | 资金面 | market_fund_flow | 0.5 | 无（规则） | 两融余额 7 日变化率 |
 
 每因子评分 -1.0 ~ +1.0，加权求和。市场因子快照缺失时降级中性 0 分。
+
+**净值口径（2026-10-01 审查起）**：#1–#8 与 `price_percentile` 等基于净值的因子统一吃**分红复权净值**
+（`build_forward_adjusted_nav`：由 pingzhongdata 的「日增长率」自末值回推，纯 Python、零额外请求）；裸单位净值在
+除息日会把分红记成一天暴跌（实测 004815 真实 +0.74% → -3.80%）。前端展示与 `FundData.close` 仍是官方单位净值。
+⚠️ 升级后分红型场外基金的因子值与总分会变，与历史记录不同口径，跨期比较注意。
 
 可手动启用的扩展因子：`price_percentile`（价格百分位）、`fed_model`（股债性价比，场外基金无 PE 自动降级中性）、`momentum_6m`、`info_ratio`（基准硬编码沪深300，主题基金参考性有限）、`max_drawdown`、`size_stability`（场外基金无规模序列自动降级中性）。
 
@@ -352,6 +358,10 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 
 任一源连续失败后降级，冷却期满（`_RECOVERY_COOLDOWN` = 5 分钟）由 `adapter.probe()` 决定复原还是继续冷却（探测未通过则重新计时，不会一到点就撞回被封接口）。
 
+**「这个代码没有记录」不是源故障**：`get_fund_data` 抛 `NoDataError` 表示确定性空结果（如已清盘代码），降级链不 `mark_degraded`、
+也不轮询备源（两家源覆盖的是同一个公募基金全集，主源说没有时备源基本也没有，为死代码逐个请求只是徒增上游压力），直接上抛交调用方
+按无数据跳过并归 `data_missing` 埋点。旧实现把任何异常都当源坏了 —— 池里一只清盘代码就能让 AKShare 整源降级 5 分钟，之后的基金全打备源并推"数据源故障"告警。
+
 **数据源合约**（`backend/data_sources/base.py`）：`available` 属性**必须是纯内存判断**，不得发起网络请求 —— 它在 async 路径被降级链高频读取；真实连通性校验放 `async probe()`，实现要求单次、轻量、自带失败冷却，不得成为新的请求风暴源（限流/jitter/退避等防封禁预算一律保留）。运行时冷却与降级状态可在 /system「数据源运行时健康」卡片只读查看。
 
 基金导入时自动根据代码前缀标记场内/场外类型（fund_type），查询时直接路由到对应接口，无需轮询降级。
@@ -390,7 +400,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 - 调休/节假日同步配置（键名 → 默认值）：
   - `holiday_sync_url` → `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json`（数据源地址，`{year}` 占位符在抓取时替换为年份；可选 timor.tech 等兼容格式）
   - `holiday_auto_sync_time` → `03:00`（每日自动检查时间，HH:MM）
-  - `holiday_auto_sync_enabled` → `true`（自动同步开关；首次同步成功后自动置 `false`，只同步一次）
+  - `holiday_auto_sync_enabled` → `true`（自动同步开关；成功后保持开启，由 `holiday_last_sync_at` 做 7 天节流）
   - `holiday_last_sync_at` → 空（最近一次同步时间，ISO 时间戳）
   - 同步数据落 `holiday_calendar` 表（`holiday_date` 唯一，`is_off_day` 表示休市/补班开市），通过 `GET/PUT /api/holiday/config` 与 `POST /api/holiday/sync` 管理。
 
@@ -422,6 +432,8 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | 国债收益率 | 1h | 全局锁 | 复用 `_index_value_cache` 中的 000300 数据，0 次额外请求 |
 | 沪深300基准 | 1h | 全局锁 | `stock_zh_index_daily`，全市场共享基准 |
 | 指数估值（PE/PB） | 1h | 按 index_code 分锁 | `stock_zh_index_value_csindex`，同指数多 ETF 不重复请求 |
+| 沪深300 PE 历史序列（估值分位） | 6h | 类级 | 主源 `stock_index_pe_lg`（乐咕月频）→ 降级 csindex；长表序列，1h 快照 TTL 若不带这层缓存，每天 24 次快照就拉 24 遍同一段历史 |
+| 失败冷却（负缓存） | 120s | 类级 | 指数估值 / 场外申购状态整批取数失败（含"接口通了一行没有"）后静默 2 分钟；`MarketService` 的降级链失败记忆默认**不随定时推送清空**，只有手动「刷新数据」传 `include_failures=True` 才解除 |
 
 ### 批量并发获取
 
@@ -467,6 +479,11 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 10. **线程池隔离**：akshare 调用使用专用独立线程池，与 asyncio 默认线程池隔离，防止数据源卡死拖垮整个应用
 11. **共享数据复用**：全市场共享数据（国债收益率、基准指数、估值）类级缓存 + asyncio.Lock 双重检查，避免 N 只基金 N 次重复请求
 12. **强制超时保护**：所有外部数据调用均通过 `run_with_timeout` 包裹，超时后释放资源，永不无限挂起
+13. **失败也要有记忆**：取数失败必须推进负缓存/冷却时间戳，否则前端轮询会把一次风控抖动放大成请求风暴；部分成功**按 key 合并**
+    （指数按名、基金按代码）沿用上一轮条目而不是整表覆盖；行情五板块全空的帧**不落库、不推进 `updated_at`**
+    （"全 None + 刚刚更新"会让故障伪装成数据已最新）
+14. **缺数据必须可区分**：因子 `data_valid=False`（数据不足取的中性 0）从计算一路透传到落库 JSON、schema、报告、AI/Skill 上下文与推送；
+    市场环境的估值分位随 `valuation_sample_points` 一起出，否则两个 0.4 不是同一个置信度
 
 ---
 
@@ -506,7 +523,7 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 - **需求**：27 年调休无法预测，需从互联网官方通知源读取调休安排，后台可配置自动同步时间及地址，同步成功后不再自动同步，后期可手动触发。
 - **实现**（commit `32dce80`）：
   - 新增 `backend/models/holiday_calendar.py`：`holiday_calendar` 表（`holiday_date` 唯一，`is_off_day` 区分休市/补班开市，`holiday_name`/`source`/`synced_at`）。
-  - 新增 `backend/services/holiday_sync_service.py`：抓取并解析 NateScarlet/holiday-cn（默认，溯源 gov.cn）与 timor.tech 两种 JSON 格式；`sync_holiday_calendar` 幂等 upsert 当年+次年；`auto_sync_if_enabled` 仅在开关开启时执行，同步成功后自动置 `enabled=false`（只同步一次）。
+  - 新增 `backend/services/holiday_sync_service.py`：抓取并解析 NateScarlet/holiday-cn（默认，溯源 gov.cn）与 timor.tech 两种 JSON 格式；`sync_holiday_calendar` 幂等 upsert 当年+次年；`auto_sync_if_enabled` 仅在开关开启时执行，同步成功后自动置 `enabled=false`（只同步一次）。〔该语义已在 2026-10 审查中更正：`requests` 无 `resolution_callback`，当年的实现每次调用恒抛 TypeError，同步从未成功；现改为手动跟随重定向 + 7 天节流，见文末「修复记录（2026-10-02）」〕
   - 新增 `backend/routers/holiday.py`：`GET /api/holiday`（查看）、`GET/PUT /api/holiday/config`（配置）、`POST /api/holiday/sync`（手动同步，绕过开关）。
   - `backend/scheduler/task_scheduler.py` 注册 `holiday_auto_sync` 每日任务（在 `holiday_auto_sync_time` 触发）。
   - `backend/database.py` 迁移写入默认配置（`holiday_sync_url` / `holiday_auto_sync_time=03:00` / `holiday_auto_sync_enabled=true` / `holiday_last_sync_at`）。
@@ -533,3 +550,47 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
 
 - 基金池标签排版整改：主标签前置去重、赛道 chips 全量展示统一配色、覆盖率与 ×N/% 口径 Tooltip 说明。
 - 错误日志测试隔离：pytest 埋点写入重定向临时库，不再污染生产 `error_logs`（并一次性清理历史污染行）。
+
+---
+
+## 修复记录（2026-10-02）
+
+外部审查报告 `docs/CODE_REVIEW_2026-10-01.md`（2 P0 / 27 P1 / 19 P2 / 5 P3）逐条核实后的**第一批整改**，
+完整逐条说明见 `docs/CHANGELOG.md` 同日期小节。
+
+### 1. 三条"纸面防线其实从未生效"
+
+- **调休同步从未成功**：`fetch_holiday_json` 把 httpx 独有的 `resolution_callback` 传给 `requests.get`，每次调用恒抛 `TypeError`，
+  被按年 `except` 吞进 errors 列表 → `holiday_calendar` 一次也没落过库。改为 requests 手动跟随重定向（≤5 跳，逐跳 SSRF 校验）。
+- **自动同步"成功后关开关"**：次年安排当年才公布，一次性同步必然拿不到，跨年后交易日闸门只能回退 `chinese_calendar`
+  （年份覆盖到期即退化成"周一至周五"，法定节假日照跑整轮全量分析）。改为保留开关 + `holiday_last_sync_at` 7 天节流。
+- **AI token 预算形同虚设**：流式不带 `stream_options` 时 usage 恒为 0，Agent 的 `token_spent += (p+c) or 1` 只等于轮数（≤15），
+  12 万预算与 `budget_exhausted` 事件永远不可达。现默认索要 usage，端点不认识时自动降级并记住，两头都拿不到则按
+  `estimate_tokens`（CJK 1 字≈1 token，其余 4 字符≈1，宁高不低）估算。
+
+### 2. 三条"看起来对"的静默错数据
+
+- **场外净值改为分红复权口径**（`build_forward_adjusted_nav`，纯 Python、零额外请求）：裸 DWJZ 在除息日把分红记成暴跌
+  （实测 004815 真实 +0.74% → -3.80%），动量/回撤/波动/MACD/截面分位同时被污染。展示字段仍是官方单位净值。
+  ⚠️ **分红型场外基金的信号会因此漂移**，历史 `analysis_results` 与新记录不同口径。
+- **估值分位从未算出过真实值**：csindex 单源 + `_MIN_PE_POINTS=250` 门槛永远过不了。现主源乐咕月频滚动 PE、窗口近 10 个日历年，
+  并新增 `valuation_sample_points`（本地实测：分位 0.5833 / PE 12.48 / 120 样本）。
+- **失败不留记忆 + 部分成功整表覆盖**：指数估值/申购状态失败不推进时间戳（前端轮询放大成请求风暴）→ 120s 负缓存；
+  指数按名、阶段涨幅与扩展详情按代码合并；行情五板块全空帧不落库、不推进 `updated_at`；
+  `MarketService.clear_cache(include_failures=)` 默认保留失败记忆，只有手动刷新才解除。
+
+### 3. 契约与展示口径
+
+- `NoDataError`：代码级空结果不再降级整源、不再轮询备源，分析侧降为 info 日志并归 `data_missing` 埋点。
+- `data_valid` 全链路透传（落库 JSON → schema → 报告重建 → Agent 工具 → AI/Skill 上下文 → 推送），`quality_filter` 重建波动率因子时不再洗回 True。
+- AI 提示词里的因子明细从未出现过（对 `{code: {name,score}}` 形态恒抛 `TypeError` 被静默吞）→ 抽出 `top_factor_lines_for_prompt`，兼容三种历史形态。
+- PK 表亏损基金没有年化收益（`total <= 0 → None`）→ 只对净值归零判无定义。
+- 回测页三项一次性加载与运行期轮询拆成两个 effect，空闲期不再常驻定时器。
+
+### 4. 回归与第二批
+
+- `pytest -q` 499 passed（新增 `tests/test_no_data_error.py`、`tests/test_cache_merge_and_negative_cache.py`，
+  conftest 补 `real_valuation_services` fixture：驱动服务内部逻辑时解除 autouse 网络补丁，网络层仍由用例 stub，零真实请求）；
+  `npm run build` 通过，前端改动均浏览器实测取证。
+- **第二批 14 项量化口径变更**（市场三因子去重、回测基线、建议命中率、调仓权重与赎回费阶梯、复权口径统一等）
+  **只做设计与取证，未动代码**：`docs/QUANT_DECISIONS_2026-10.md`，待确认方向后再开发。

@@ -39,8 +39,9 @@ export const analysisApi = {
   summary: () =>
     apiClient.get<ApiResponse<MarketSummaryOut>>(`${BASE}/summary`).then((r) => r.data),
 
+  // updated_at 为 null：五路行情全部取空且本地也没有旧缓存（不写空帧）
   refreshSummary: () =>
-    apiClient.post<ApiResponse<{ updated_at: string }>>(`${BASE}/refresh-summary`, {}, { timeout: 180000 }).then((r) => r.data),
+    apiClient.post<ApiResponse<{ updated_at: string | null }>>(`${BASE}/refresh-summary`, {}, { timeout: 180000 }).then((r) => r.data),
 
   /** 流式触发分析 — 使用 fetch ReadableStream 消费 SSE，逐块更新回调 */
   triggerStream: (

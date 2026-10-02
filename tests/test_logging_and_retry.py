@@ -395,6 +395,96 @@ class TestOtcNavFromPingzhong:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 2b. 场外净值分红复权口径
+# ═══════════════════════════════════════════════════════════════════
+
+class TestForwardAdjustedNav:
+    """单位净值在除息日一次性扣分红，裸 DWJZ 喂给因子 = 凭空暴跌。
+
+    实测 004815 2026-01-13：真实日增长率 +0.74%，单位净值表现为 -3.80%。
+    """
+
+    @staticmethod
+    def _build(nav, growth):
+        from backend.data_sources.akshare_adapter import build_forward_adjusted_nav
+        return build_forward_adjusted_nav(nav, growth)
+
+    def test_ex_dividend_fake_drop_removed(self):
+        adj = self._build([1.00, 0.96, 0.9696], [None, 0.0, 1.0])
+        assert adj == pytest.approx([0.96, 0.96, 0.9696])
+        assert adj[-1] == pytest.approx(0.9696)  # 前复权：末值仍是最新单位净值
+
+    def test_no_dividend_reproduces_nav(self):
+        nav = [1.0, 1.02, 1.01, 1.05]
+        growth = [None, 2.0, -0.980392, 3.960396]
+        assert self._build(nav, growth) == pytest.approx(nav, abs=1e-6)
+
+    def test_missing_growth_falls_back_to_nav_ratio(self):
+        nav = [2.0, 2.2, 1.98]
+        assert self._build(nav, [None, None, None]) == pytest.approx(nav)
+
+    def test_blank_growth_row_only_breaks_chain(self):
+        """中间某行增长率缺失 → 该行退回净值比，其余行仍按官方增长率复权"""
+        adj = self._build([1.0, 0.96, 0.99], [None, None, 1.0])
+        assert adj[-1] == pytest.approx(0.99)
+        assert adj[1] / adj[0] - 1 == pytest.approx(-0.04)   # 净值比口径
+        assert adj[2] / adj[1] - 1 == pytest.approx(0.01)    # 官方日增长率口径
+
+    def test_degenerate_growth_clamped_to_ratio(self):
+        # -100% 会得到 step=0，不可用 → 这段没有可用增长率，直接交回裸净值
+        assert self._build([1.0, 0.5], [None, -100.0]) == pytest.approx([1.0, 0.5])
+
+    def test_empty_and_single(self):
+        assert self._build([], []) == []
+        assert self._build([1.5], [None]) == [1.5]
+
+    @pytest.mark.asyncio
+    async def test_adapter_returns_adjusted_history(self, monkeypatch):
+        """_get_otc_fund_data 透传 日增长率 → close_history 复权，close 仍为官方净值"""
+        import pandas as pd
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        adapter = AKShareAdapter.__new__(AKShareAdapter)
+        df = pd.DataFrame({
+            "净值日期": ["2026-01-12", "2026-01-13", "2026-01-14"],
+            "单位净值": [2.258, 2.1722, 2.1883],
+            "日增长率": [float("nan"), 0.74, -0.30],
+        })
+        adapter._get_otc_nav_from_js = AsyncMock(return_value=df)
+        adapter._get_cached_fund_name = AsyncMock(return_value="测试基金")
+
+        fd = await adapter._get_otc_fund_data("004815", period=60)
+
+        assert fd.close == pytest.approx(2.1883)
+        assert fd.close_history[-1] == pytest.approx(fd.close)
+        # 除息日不再表现为 -3.8%，按 +0.74% 递增回推
+        assert fd.close_history[0] == pytest.approx(2.1883 / (1.0074 * 0.997))
+        assert fd.date_history == ["2026-01-12", "2026-01-13", "2026-01-14"]
+
+    @pytest.mark.asyncio
+    async def test_blank_nav_rows_are_dropped(self, monkeypatch):
+        """停牌空行不再让 astype(float) 抛 ValueError（曾把整源拖成 degraded）"""
+        import pandas as pd
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+
+        adapter = AKShareAdapter.__new__(AKShareAdapter)
+        df = pd.DataFrame({
+            "净值日期": ["2026-01-12", "2026-01-13", "2026-01-14"],
+            "单位净值": [1.5, float("nan"), 1.52],
+            "日增长率": [float("nan"), float("nan"), 1.33],
+        })
+        adapter._get_otc_nav_from_js = AsyncMock(return_value=df)
+        adapter._get_cached_fund_name = AsyncMock(return_value="测试基金")
+
+        fd = await adapter._get_otc_fund_data("004815", period=60)
+
+        assert fd.date_history == ["2026-01-12", "2026-01-14"]
+        # 停牌行的 1.33% 增长率与保留行之间的真实净值比略有出入，按增长率链回推
+        assert fd.close_history == pytest.approx([1.52 / 1.0133, 1.52], abs=1e-9)
+        assert fd.close == pytest.approx(1.52)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 3. 日志配置：7 天轮转
 # ═══════════════════════════════════════════════════════════════════
 

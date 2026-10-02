@@ -141,9 +141,13 @@ class PushService:
                     snap = await MarketRegimeService().get_snapshot()
                     regime_lines = []
                     if snap.valuation_percentile is not None:
+                        sample = (
+                            f"，近10年 {snap.valuation_sample_points} 样本"
+                            if snap.valuation_sample_points else ""
+                        )
                         regime_lines.append(
                             f"- 大盘估值：沪深300 PE 分位 **{snap.valuation_percentile:.0%}**"
-                            f"（当前 PE {snap.valuation_current_pe}，{snap.valuation_date}）"
+                            f"（当前 PE {snap.valuation_current_pe}，{snap.valuation_date}{sample}）"
                         )
                     if snap.adv_decline_ratio is not None:
                         regime_lines.append(
@@ -221,15 +225,17 @@ class PushService:
 
                 # 同步更新仪表盘行情缓存，确保推送后仪表盘看到的是最新数据
                 try:
-                    from backend.services.fund_cache_service import set_cached_json
-                    cache_data = {
-                        "market_flow": market_flow.model_dump() if market_flow else None,
-                        "sector_flow": [s.model_dump() for s in sector_flow_raw.values()],
-                        "hsgt_flow": hsgt_flow.model_dump() if hsgt_flow else None,
-                        "adv_decline": adv_decline.model_dump() if adv_decline else None,
-                        "turnover": turnover.model_dump() if turnover else None,
-                    }
-                    await set_cached_json(self.db, "market_summary", cache_data)
+                    from backend.services.fund_cache_service import (
+                        build_market_summary_payload, store_market_summary,
+                    )
+                    cache_data = build_market_summary_payload(
+                        market_flow,
+                        list(sector_flow_raw.values()),
+                        hsgt_flow, adv_decline, turnover,
+                    )
+                    # 整帧全空时 store_market_summary 会保留旧缓存：推送本身
+                    # 只发一次，若把空帧写进去就是拿一次抖动换掉仪表盘全天数据
+                    await store_market_summary(self.db, cache_data)
                     logger.info("推送同时已更新仪表盘行情缓存")
                 except Exception as ce:
                     logger.warning(f"仪表盘行情缓存更新失败: {ce}")
@@ -301,6 +307,7 @@ class PushService:
                                     raw_value=fs.raw_value,
                                     score=fs.score,
                                     direction=fs.direction,
+                                    data_valid=fs.data_valid,
                                 )
                                 for fs in r.factor_scores
                             ]

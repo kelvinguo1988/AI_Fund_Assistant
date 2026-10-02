@@ -9,6 +9,7 @@
 - 记录降级状态（含时间戳），5 分钟后自动尝试恢复
 - 恢复成功 → 重新提升为活跃源
 - 恢复失败 → 维持降级状态，继续使用当前稳定源
+- NoDataError（该代码在本源确认无记录）不算源故障：不降级、不换源，直接上抛
 """
 
 import logging
@@ -16,7 +17,7 @@ import time
 from datetime import date, timedelta
 from typing import Optional
 
-from backend.data_sources.base import BaseDataSource, FundData, MarketIndices
+from backend.data_sources.base import BaseDataSource, FundData, MarketIndices, NoDataError
 from backend.data_sources.akshare_adapter import AKShareAdapter
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,15 @@ class DataSourceManager(BaseDataSource):
                 if not src.active:
                     src.mark_recovered()
                 return data
+            except NoDataError as e:
+                # 代码级答案：本源确认这个代码没有记录，源本身是健康的。
+                # 旧实现把它并入 Exception 分支 → mark_degraded，池子里一只清盘
+                # 基金就能让 AKShare 整源降级 5 分钟，之后的基金全改打备源并
+                # 触发"数据源故障"告警（2026-10-01 审查 P1）。
+                # 也不轮询下一级：两家源覆盖的是同一个公募基金全集，主源说没有
+                # 时备源基本也没有，为死代码逐个源请求只是徒增上游压力。
+                logger.info(f"数据源 [{src.name}] 无该代码记录 code={code}: {e}")
+                raise
             except Exception as e:
                 last_error = e
                 src.mark_degraded()

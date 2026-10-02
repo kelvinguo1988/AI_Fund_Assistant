@@ -174,6 +174,8 @@ async def t_get_factor_history(db, code: str, factor: str, days: int = 60) -> li
             "date": str(r.analysis_date),
             "score": val.get("score") if isinstance(val, dict) else val,
             "raw_value": val.get("raw_value") if isinstance(val, dict) else None,
+            # score=0 有两种含义（真实中性 / 缺数据占位），不透传就区分不开
+            "data_valid": val.get("data_valid", True) if isinstance(val, dict) else True,
         })
     return out
 

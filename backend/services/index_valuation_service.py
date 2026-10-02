@@ -9,6 +9,10 @@
 场外交易可执行性（A'）:
 - fund_open_fund_daily_em 全市场单请求（申购/赎回状态/手续费），类级缓存 1h
 - 暂停申购/限大额 → 买入阻断；暂停赎回 → 卖出阻断
+
+两个服务都带 120s 失败冷却：过去失败不推进缓存时间戳，于是每个页面请求都会
+重打一次上游（前端轮询 + 仪表盘多个区块），把一次风控抖动放大成请求风暴。
+指数估值另外按指数名合并部分成功结果，缺的指数沿用上一次的条目而不是消失。
 """
 
 import logging
@@ -45,12 +49,35 @@ class IndexValuationService:
     _cache: Optional[list[dict]] = None
     _ts: float = 0.0
     _TTL = 3600.0
+    # 整批失败后的冷却：过去失败不推进 _ts，于是每个页面请求都重打一遍乐咕
+    # 接口（前端 5s 轮询 + 仪表盘三个区块），把上游抖动放大成请求风暴
+    _FAIL_COOLDOWN = 120.0
+    _fail_until: float = 0.0
+    # 合并保留旧条目的上限：部分成功时不缺的指数继续显示，但最久只保留这么久
+    _STALE_KEEP = 6 * 3600.0
+
+    @classmethod
+    def _merge(cls, fresh: list[dict], now: float) -> list[dict]:
+        """按指数名合并：本次拿到的覆盖旧的，没拿到的沿用旧值
+
+        4 个指数逐个抓，任一失败过去会让整批只剩成功的那几个（甚至直接丢弃），
+        前端表现成"中证500 忽隐忽现"。
+        """
+        by_index = {r["index"]: r for r in fresh}
+        prev: dict[str, dict] = {}
+        if now - cls._ts <= cls._STALE_KEEP:
+            prev = {r["index"]: r for r in (cls._cache or []) if r["index"] not in by_index}
+        merged = {**prev, **by_index}
+        # 按声明顺序输出，避免部分成功时前端指数卡片顺序跳变
+        return [merged[name] for name in SUPPORTED_INDEXES if name in merged]
 
     @classmethod
     async def get_valuations(cls, force: bool = False) -> list[dict]:
         now = time.time()
         if not force and cls._cache is not None and now - cls._ts < cls._TTL:
             return cls._cache
+        if not force and now < cls._fail_until:
+            return cls._cache or []
 
         import numpy as np
 
@@ -92,11 +119,16 @@ class IndexValuationService:
             rows = await run_with_timeout(_fetch_all, timeout=100.0)
         except Exception as e:
             logger.warning(f"指数 PE 获取失败: {e}")
+            cls._fail_until = now + cls._FAIL_COOLDOWN
             return cls._cache or []
         if rows:
-            cls._cache = rows
+            cls._cache = cls._merge(rows, now)
             cls._ts = now
-        return rows or (cls._cache or [])
+            cls._fail_until = 0.0
+        else:
+            # 接口通了但一行没有：同样是失败，需要冷却而不是下个请求再来一遍
+            cls._fail_until = now + cls._FAIL_COOLDOWN
+        return cls._cache or []
 
     # 基准指数占比提取（近似映射用）：指数名 ... ×占比%
     _BENCH_RATIO_RE = r"({})[^0-9×*]*[×*](\d+(?:\.\d+)?)%"
@@ -165,12 +197,18 @@ class OtcTradeStatusService:
     _cache: Optional[dict[str, dict]] = None
     _ts: float = 0.0
     _TTL = 3600.0
+    # 与 IndexValuationService 同理：失败不推进 _ts 会让每个请求重打东财
+    # fund_open_fund_daily_em（全市场大表），正是最容易二次触发风控的形态
+    _FAIL_COOLDOWN = 120.0
+    _fail_until: float = 0.0
 
     @classmethod
     async def get_status_map(cls, force: bool = False) -> dict[str, dict]:
         now = time.time()
         if not force and cls._cache is not None and now - cls._ts < cls._TTL:
             return cls._cache
+        if not force and now < cls._fail_until:
+            return cls._cache or {}
 
         def _fetch_all():
             import akshare as ak
@@ -192,13 +230,17 @@ class OtcTradeStatusService:
         try:
             # 东财域名接口：统一走信号量串行，避免绕过防封禁管线
             data = await run_with_timeout(_fetch_all, timeout=45.0)
-            if data:
-                cls._cache = data
-                cls._ts = now
-            return data or (cls._cache or {})
         except Exception as e:
             logger.warning(f"场外申购状态获取失败: {e}")
+            cls._fail_until = now + cls._FAIL_COOLDOWN
             return cls._cache or {}
+        if data:
+            cls._cache = data
+            cls._ts = now
+            cls._fail_until = 0.0
+        else:
+            cls._fail_until = now + cls._FAIL_COOLDOWN
+        return cls._cache or {}
 
     @classmethod
     def trade_hints(cls, code: str, status: Optional[dict]) -> list[dict]:

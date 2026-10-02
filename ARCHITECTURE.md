@@ -95,6 +95,11 @@
   （共用时中途 rollback 会把前一步已落库的数据一起吞掉）
 - 运行时可观测性：`GET /api/system/data-source-health` 只读聚合冷却/降级/当日熔断/缓存新鲜度，
   排查"仪表盘一片空"看这里，不要用 `/api/system/connectivity` 去捅正在冷却的数据源
+- **调休日历自愈**（`holiday_sync_service`，2026-10 审查第一批）：自动同步成功后**不再关闭开关**，改按
+  `holiday_last_sync_at` 做 7 天节流 —— 次年安排要到当年才公布，"只同步一次"的旧语义必然拿不到，跨年后
+  交易日闸门只能回退 `chinese_calendar`（其年份覆盖到期即退化成"周一至周五"，法定节假日照跑整轮分析）。
+  抓取改为 requests 手动跟随重定向（≤5 跳，每一跳落地前重新做 SSRF 校验）；旧代码把 httpx 独有的
+  `resolution_callback` 传给了 `requests.get`，每次调用恒抛 `TypeError`，同步从未成功过
 
 ### 1.6 AI 大模型方案
 
@@ -103,6 +108,11 @@
 - 通过 `system_config` 表存储当前选中模型 + API Key + Base URL
 - 前台切换模型只改配置，不动代码
 - AI 总开关：`system_config` 中 `ai_enabled` 字段，关闭时前端隐藏对话入口，后端拒绝 AI 请求
+- **token 预算护栏要真拿到用量**（2026-10 审查第一批）：流式默认带 `stream_options={"include_usage": true}`，
+  端点不认识该参数时本次会话自动去掉并记住；两条路都拿不到 usage 则用 `llm/base.estimate_tokens`
+  （CJK 1 字≈1 token，其余 4 字符≈1，宁可偏高）估算 prompt+completion。Agent 侧同一套估算兜底 ——
+  旧写法 `token_spent += (prompt+completion) or 1` 让累计值只等于轮数（≤15），12 万预算与 `budget_exhausted`
+  事件永远不可达
 
 ---
 
@@ -819,6 +829,9 @@ export const GROWTH_FLAT = '#999999';  // 灰 — 持平 / 观望 / 不可解析
   兜底成可读面板（React 18 下不兜底会卸载整棵树 → 白屏）
 - 前端 5xx 自动上报错误铃铛是 fire-and-forget，且**上报端点自身失败一律不再上报**
   （`/system/error-logs` 的失败会命中同一个拦截器，自我放大成请求风暴）
+- 提示词/上下文拼装分支**不能 `except` 后静默跳过**：旧实现对当前落库形态 `{code: {name,score,…}}` 直接
+  `float(value)` 恒抛 `TypeError`，被上层吞掉后 AI 上下文里的"因子="那段一直是空的且无人发现。
+  现抽为 `ai_service.top_factor_lines_for_prompt`（兼容对象/`{code: score}`/列表三种历史形态）并由测试覆盖
 
 ### 7.5 配置文件格式约定
 
@@ -826,6 +839,27 @@ export const GROWTH_FLAT = '#999999';  // 灰 — 持平 / 观望 / 不可解析
 - 数据库运行时配置：`system_config` 表 KV 结构
 - 因子参数：`factors.params` 字段，JSON 格式
 - 推送渠道额外配置：`push_channels.config` 字段，JSON 格式
+
+### 7.6 数据口径与失败记忆约定（2026-10 审查第一批固化）
+
+- **净值口径**：因子链（动量/波动率/回撤修复/MACD/价格分位等）统一吃**分红复权净值**
+  （`akshare_adapter.build_forward_adjusted_nav`：由 pingzhongdata 的「日增长率」自末值回推，纯 Python、零额外请求）；
+  `FundData.close/date` 与前端展示仍是官方**单位净值**，且 `close == close_history[-1]`
+  （价格分位同时用这两个字段，口径必须一致）。复盘/建议回填链路仍是单位净值 → 见 `docs/QUANT_DECISIONS_2026-10.md` Q11。
+  停牌日空 DWJZ 用 `to_numeric(errors="coerce")` 逐列容错，整段无有效净值则 `close=None` 交 `data_missing`，不得抛错降级整源
+- **代码级空结果 ≠ 源故障**：`get_fund_data` 抛 `NoDataError` 表示"这个代码在本源确实没有记录"，降级链不得
+  `mark_degraded`、不得轮询备源，调用方按无数据跳过（info 级日志 + `analysis.data_missing` 埋点，不写 traceback）
+- **失败冷却的记忆不得被非手动路径抹掉**：`MarketService.clear_cache()` 默认保留 `_fail_cache`，只有
+  `POST /api/analysis/refresh-summary`（用户点刷新）传 `include_failures=True`；`IndexValuationService._fail_until`
+  与 `OtcTradeStatusService._fail_until`（各 120s）同理，两者都出现在 `/api/system/data-source-health`
+- **部分成功按 key 合并，不允许整表覆盖**：指数估值按指数名、阶段涨幅与扩展详情按基金代码沿用上一轮条目
+  （带 `_STALE_KEEP` 时限）；行情五板块**全空的帧不落库、不推进 `updated_at`**（`store_market_summary`），
+  否则"全 None + 刚刚更新"会把故障伪装成数据已最新
+- **因子缺数据标记 `data_valid` 必须一路透传**：计算 → 落库 JSON → `FactorScore` schema → 报告重建 →
+  Agent 工具 → AI/Skill 提示词 → 飞书推送；`score=0` 有两种含义（真实中性 / 缺数据占位），丢了标记就区分不开，
+  `quality_filter` 修正波动率倒数时不得把重建出的因子洗回 True
+- **市场环境快照的置信度要随行**：`valuation_sample_points`（月频主源≈120 vs 日频降级源≈2400）与分位值一起出，
+  否则两个 0.4 不是同一个东西；长表序列另有 6h 缓存（快照 TTL 只有 1h，不带这层就是每天 24 遍全量历史）
 
 ---
 

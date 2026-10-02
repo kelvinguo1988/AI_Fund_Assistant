@@ -5,7 +5,8 @@
 2. 快照缺失时中性 0 分兜底
 3. compute_dynamic_thresholds 极端估值调节（高估上调/低估下调/无快照不动）
 4. MarketRegimeService 分位计算（mock 数据源，无网络）
-5. 融资融券 7 日变化率计算（mock）
+5. PE 历史序列取数链：主源 stock_index_pe_lg → 降级 csindex → 序列缓存/负缓存
+6. 融资融券 7 日变化率计算（mock）
 """
 
 import asyncio
@@ -201,8 +202,7 @@ class TestMarketRegimeService:
         monkeypatch.setattr(svc, "_get_index_pe_series", _pe)
         monkeypatch.setattr(svc, "_fill_adv_decline", _adv)
         monkeypatch.setattr(svc, "_fill_margin_flow", _margin)
-        monkeypatch.setattr(MarketRegimeService, "_snapshot", None)
-        monkeypatch.setattr(MarketRegimeService, "_snapshot_ts", 0.0)
+        MarketRegimeService.clear_cache()
 
     def test_valuation_percentile_computed(self, monkeypatch):
         svc = MarketRegimeService()
@@ -245,10 +245,144 @@ class TestMarketRegimeService:
 
     def test_short_pe_history_skips_percentile(self, monkeypatch):
         svc = MarketRegimeService()
-        self._patch_sources(monkeypatch, svc, pe_series=(["2026-01-01"] * 100, [12.0] * 100),
+        self._patch_sources(monkeypatch, svc, pe_series=(["2026-01-01"] * 40, [12.0] * 40),
                             adv=None, margin=None)
         snap = asyncio.run(svc.get_snapshot())
-        assert snap.valuation_percentile is None  # 数据不足 250 行
+        assert snap.valuation_percentile is None  # 少于 _MIN_PE_POINTS=60 点
+        assert snap.valuation_sample_points is None
+
+    def test_monthly_series_now_works(self, monkeypatch):
+        """月频序列（120 点）在原实现下会被 250 行门槛直接判死，现在要能出分位"""
+        svc = MarketRegimeService()
+        dates = [f"20{16 + i // 12}-{i % 12 + 1:02d}-01" for i in range(120)]
+        pes = [10.0 + (i % 10) for i in range(120)]
+        self._patch_sources(monkeypatch, svc, pe_series=(dates, pes), adv=None, margin=None)
+        snap = asyncio.run(svc.get_snapshot())
+        assert snap.valuation_percentile is not None
+        assert 60 <= snap.valuation_sample_points <= len(pes)
+
+
+# ── 6b. PE 序列取数链（主源/降级/缓存，mock 无网络） ──────────────────
+
+def _lg_frame(rows):
+    import pandas as pd
+    return pd.DataFrame(
+        [{"日期": d, "指数": 4000.0, "滚动市盈率": pe} for d, pe in rows]
+    )
+
+
+def _csindex_frame(rows):
+    import pandas as pd
+    return pd.DataFrame([{"日期": d, "市盈率1": pe} for d, pe in rows])
+
+
+class TestPeSeriesChain:
+    @pytest.fixture(autouse=True)
+    def _reset_caches(self):
+        MarketRegimeService.clear_cache()
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        AKShareAdapter._index_value_cache.clear()
+        yield
+        MarketRegimeService.clear_cache()
+        AKShareAdapter._index_value_cache.clear()
+
+    def _patch_ak(self, monkeypatch, lg=None, cs=None):
+        import backend.services.market_regime_service as mrs
+        if lg is not None:
+            monkeypatch.setattr(mrs.ak, "stock_index_pe_lg", lg)
+        if cs is not None:
+            monkeypatch.setattr(mrs.ak, "stock_zh_index_value_csindex", cs)
+
+    def test_primary_sorted_and_filtered(self, monkeypatch):
+        calls = []
+
+        def lg(symbol):
+            calls.append(symbol)
+            # 乱序 + 一行缺失/零值，验证排序与过滤
+            return _lg_frame([
+                ("2026-03-31", 12.5),
+                ("2024-01-31", 10.0),
+                ("2025-06-30", None),
+                ("2023-01-31", 0.0),
+                ("2026-09-30", 13.2),
+            ])
+
+        self._patch_ak(monkeypatch, lg=lg)
+        svc = MarketRegimeService()
+        series = asyncio.run(svc._get_index_pe_series())
+        assert calls == ["沪深300"]
+        dates, pes = series
+        assert dates == ["2024-01-31", "2026-03-31", "2026-09-30"]
+        assert pes == [10.0, 12.5, 13.2]
+
+    def test_fallback_to_csindex(self, monkeypatch):
+        def lg(symbol):
+            raise RuntimeError("SSL: CERTIFICATE_VERIFY_FAILED")
+
+        def cs(symbol):
+            return _csindex_frame([("2026-01-30", 11.0), ("2026-02-27", 12.0)])
+
+        self._patch_ak(monkeypatch, lg=lg, cs=cs)
+        svc = MarketRegimeService()
+        series = asyncio.run(svc._get_index_pe_series())
+        assert series is not None
+        assert series[1] == [11.0, 12.0]
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        assert "000300" in AKShareAdapter._index_value_cache
+
+    def test_series_cached(self, monkeypatch):
+        n = {"c": 0}
+
+        def lg(symbol):
+            n["c"] += 1
+            return _lg_frame([("2026-01-31", 11.0), ("2026-02-28", 12.0)])
+
+        self._patch_ak(monkeypatch, lg=lg)
+        svc = MarketRegimeService()
+        s1 = asyncio.run(svc._get_index_pe_series())
+        s2 = asyncio.run(svc._get_index_pe_series())
+        assert n["c"] == 1  # 6 小时序列缓存：多次快照不再重复拉全量历史
+        assert s1 == s2
+
+    def test_both_fail_uses_negative_cache(self, monkeypatch):
+        n = {"lg": 0, "cs": 0}
+
+        def lg(symbol):
+            n["lg"] += 1
+            raise RuntimeError("boom")
+
+        def cs(symbol):
+            n["cs"] += 1
+            raise RuntimeError("boom")
+
+        self._patch_ak(monkeypatch, lg=lg, cs=cs)
+        svc = MarketRegimeService()
+        assert asyncio.run(svc._get_index_pe_series()) is None
+        assert asyncio.run(svc._get_index_pe_series()) is None
+        assert n == {"lg": 1, "cs": 1}  # FAIL_TTL 内不重打接口
+
+    def test_percentile_window_is_10_years(self, monkeypatch):
+        # 30 年月频序列：只有近 10 年进窗口
+        rows = []
+        for y in range(1996, 2027):
+            for m in range(1, 13):
+                if (y, m) > (2026, 9):
+                    continue
+                rows.append((f"{y}-{m:02d}-01", 15.0 if y < 2016 else 10.0))
+
+        def lg(symbol):
+            return _lg_frame(rows)
+
+        self._patch_ak(monkeypatch, lg=lg)
+        svc = MarketRegimeService()
+        snap = MarketRegimeSnapshot()
+        asyncio.run(svc._fill_valuation_percentile(snap))
+        assert snap.valuation_current_pe == 10.0
+        # 2016-01 起（含）到 2026-09 的月点在 10 年日历窗口内 ≈ 129 点
+        assert 100 < snap.valuation_sample_points <= len(rows)
+        assert snap.valuation_sample_points < len(rows)
+        # 窗口内全是 10.0 → 分位 1.0；若把 2016 年前的高 PE 也算进来会被稀释
+        assert snap.valuation_percentile == 1.0
 
 
 # ── 7. 端到端：因子引擎计算市场因子（注入快照） ─────────────────────

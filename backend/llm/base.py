@@ -38,6 +38,28 @@ class LLMResponse:
         return bool(self.tool_calls)
 
 
+def estimate_tokens(text: str) -> int:
+    """端点不回传 usage 时的保守估算（CJK 1 字≈1 token，其余 4 字符≈1 token）
+
+    流式请求不带 stream_options 时 usage 恒为 0，token 预算护栏会因此永不触发
+    （2026-10-01 审查 P1）。估算宁可偏高，也不要让预算形同虚设。
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿" or "豈" <= ch <= "﫿")
+    other = len(text) - cjk
+    return cjk + other // 4 + 1
+
+
+def _messages_text(messages: list[dict], tools: Optional[list[dict]] = None) -> str:
+    parts = [str(m.get("content") or "") for m in messages]
+    # role/工具名/参数也在 prompt 里，粗算进预算
+    parts += [str(m.get("role") or "") for m in messages]
+    if tools:
+        parts.append(json.dumps(tools, ensure_ascii=False))
+    return "\n".join(parts)
+
+
 def _parse_completion(response) -> LLMResponse:
     msg = response.choices[0].message
     tool_calls: list[ToolCall] = []
@@ -67,6 +89,8 @@ class BaseLLMProvider(ABC):
         self.model_name = model_name
         self.api_key = api_key
         self.base_url = base_url
+        # 端点不认识 stream_options 时置 False，后续轮次不再带该参数
+        self._stream_options_ok = True
 
     @abstractmethod
     async def chat(
@@ -142,7 +166,19 @@ class BaseLLMProvider(ABC):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        stream = await self._require_client().chat.completions.create(**kwargs)
+        # 流式默认不返回 usage，必须显式索要；否则 token 预算永远收到 0
+        if self._stream_options_ok:
+            kwargs["stream_options"] = {"include_usage": True}
+        try:
+            stream = await self._require_client().chat.completions.create(**kwargs)
+        except Exception as e:
+            if self._stream_options_ok and "stream_options" in str(e).lower():
+                logger.info("端点不支持 stream_options，本次会话改用用量估算")
+                self._stream_options_ok = False
+                kwargs.pop("stream_options", None)
+                stream = await self._require_client().chat.completions.create(**kwargs)
+            else:
+                raise
 
         content_parts: list[str] = []
         tool_acc: dict[int, dict] = {}  # index -> {id, name, arguments 拼接}
@@ -167,6 +203,11 @@ class BaseLLMProvider(ABC):
                     slot["name"] += tc.function.name
                 if tc.function and tc.function.arguments:
                     slot["arguments"] += tc.function.arguments
+
+        if not (prompt_tokens or completion_tokens):
+            # 端点确实不回传 usage（老兼容层）：按字符估算，预算护栏才有意义
+            prompt_tokens = estimate_tokens(_messages_text(messages, tools))
+            completion_tokens = estimate_tokens("".join(content_parts))
 
         tool_calls: list[ToolCall] = []
         for idx in sorted(tool_acc):

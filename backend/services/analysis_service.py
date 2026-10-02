@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.data_sources.data_source_manager import DataSourceManager
-from backend.data_sources.base import FundData
+from backend.data_sources.base import FundData, NoDataError
 from backend.engines.factor_engine import factor_engine, FactorScoreResult
 from backend.engines.scoring_engine import SignalResult, compute_with_quality_filter
 from backend.engines.quality_filter import (
@@ -224,6 +224,13 @@ class AnalysisService:
                     _log_missing_nav(fund, reason)
                     return fund, None
                 return fund, fd
+            except NoDataError as e:
+                # 清盘/失效代码：确定性结论，按无数据跳过即可。旧实现落进
+                # Exception 分支 → error 级 + 完整 traceback，每轮分析刷 N 条
+                # "获取基金数据失败"，把真断供埋在了噪声里
+                _log_missing_nav(fund, "数据源无该代码记录")
+                logger.info(f"基金 {fund.code} 数据源无记录，跳过评分: {e}")
+                return fund, None
             except Exception as e:
                 logger.error(
                     f"获取基金 {fund.code} 数据失败: {type(e).__name__}: {e}",
@@ -361,6 +368,11 @@ class AnalysisService:
                     return fund, None, None, reason
                 fs = await asyncio.to_thread(factor_engine.calculate_all, fd, cfg.regime_factors)
                 return fund, fd, fs, None
+            except NoDataError as e:
+                reason = "数据源无该代码记录"
+                _log_missing_nav(fund, reason)
+                logger.info(f"基金 {fund.code} 数据源无记录，跳过评分: {e}")
+                return fund, None, None, reason
             except Exception as e:
                 logger.error(
                     f"获取/计算基金 {fund.code} 失败: {type(e).__name__}: {e}",
@@ -569,6 +581,7 @@ class AnalysisService:
                 "raw_value": fs.raw_value,
                 "score": fs.score,
                 "direction": fs.direction,
+                "data_valid": fs.data_valid,
             }
             for fs in factor_scores
         }, ensure_ascii=False)
@@ -636,6 +649,7 @@ class AnalysisService:
                     raw_value=fs.raw_value,
                     score=fs.score,
                     direction=fs.direction,
+                    data_valid=fs.data_valid,
                 )
                 for fs in factor_scores
             ],

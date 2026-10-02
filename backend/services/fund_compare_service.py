@@ -31,12 +31,17 @@ RF_ANNUAL = 2.0  # 无风险利率 %（对齐 WorkBuddy）
 
 
 def annualized_return_pct(values: list[float], days: int) -> Optional[float]:
-    """区间年化收益（几何）"""
+    """区间年化收益（几何）
+
+    亏损区间同样有定义（只要期末净值 > 0）。旧写法 `total <= 0 → None` 让 PK 表
+    恰好对**亏钱的基金**把年化留空，而夏普/回撤照常显示 → 对比表被动乐观
+    （2026-10-01 审查 P2）。
+    """
     if len(values) < 2 or days <= 0 or values[0] <= 0:
         return None
     total = values[-1] / values[0] - 1
     years = days / 365.0
-    if years <= 0 or total <= 0:
+    if years <= 0 or values[-1] <= 0:  # 净值归零/为负才是真的无定义
         return None
     return round(((1 + total) ** (1 / years) - 1) * 100, 2)
 

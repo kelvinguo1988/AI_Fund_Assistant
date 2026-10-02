@@ -115,6 +115,7 @@ async def build_brief_payload(db) -> dict:
         payload["sections"]["market_regime"] = {
             "regime": getattr(snap, "regime", None),
             "valuation_percentile": snap.valuation_percentile,
+            "valuation_sample_points": getattr(snap, "valuation_sample_points", None),
             "adv_decline_ratio": snap.adv_decline_ratio,
             "margin_change_pct_7d": snap.margin_change_pct_7d,
         }

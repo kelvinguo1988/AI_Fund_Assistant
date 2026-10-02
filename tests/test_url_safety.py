@@ -46,6 +46,107 @@ def test_accepts_public_https_host():
         assert "无法解析" in str(e), f"意外拒绝原因: {e}"
 
 
+class TestHolidayHopValidation:
+    """调休同步的逐跳 SSRF 校验
+
+    旧实现把 httpx 才有的 `resolution_callback` 传给 requests.get → 每次调用恒抛
+    TypeError，异常被按年吞进 errors，holiday_calendar 长期 0 行（2026-10-01 审查 P1）。
+    """
+
+    class _Resp:
+        def __init__(self, status=200, location=None, payload=None):
+            self.status_code = status
+            self.headers = {"Location": location} if location else {}
+            self._payload = payload or {"days": []}
+
+        @property
+        def is_redirect(self):
+            return self.status_code in (301, 302, 303, 307, 308) and bool(self.headers.get("Location"))
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def json(self):
+            return self._payload
+
+    @pytest.fixture
+    def harness(self, monkeypatch):
+        """返回 (validated_urls, requested_urls)；校验器替换为不依赖 DNS 的假实现"""
+        validated, requested = [], []
+
+        def fake_validate(url):
+            validated.append(url)
+            if any(p in url for p in ("169.254.", "127.0.0.1", "10.0.0.")):
+                raise ValueError("拒绝内网/保留地址")
+
+        monkeypatch.setattr(
+            "backend.services.connectivity_service._validate_public_url", fake_validate
+        )
+        return validated, requested, monkeypatch
+
+    def _patch_get(self, monkeypatch, requested, responses):
+        it = iter(responses)
+
+        def fake_get(url, **kwargs):
+            requested.append((url, kwargs))
+            return next(it)
+
+        monkeypatch.setattr("requests.get", fake_get)
+
+    async def test_basic_fetch_works_and_ignores_redirect_kwarg(self, harness):
+        from backend.services.holiday_sync_service import fetch_holiday_json
+
+        validated, requested, monkeypatch = harness
+        self._patch_get(monkeypatch, requested, [self._Resp(payload={"days": [
+            {"date": "2026-10-01", "name": "国庆节", "isOffDay": True}]})])
+
+        data = await fetch_holiday_json(2026, "https://raw.githubusercontent.com/x/{year}.json")
+        assert data["days"][0]["date"] == "2026-10-01"
+        assert validated == ["https://raw.githubusercontent.com/x/2026.json"]
+        # 必须手动跟随重定向：交给 requests 自动跟随 = 跳过逐跳校验
+        assert requested[0][1].get("allow_redirects") is False
+
+    async def test_each_hop_revalidated(self, harness):
+        from backend.services.holiday_sync_service import fetch_holiday_json
+
+        validated, requested, monkeypatch = harness
+        self._patch_get(monkeypatch, requested, [
+            self._Resp(302, location="https://cdn.example.com/2026.json"),
+            self._Resp(payload={"days": [{"date": "2026-05-01", "isOffDay": True}]}),
+        ])
+
+        data = await fetch_holiday_json(2026, "https://raw.githubusercontent.com/x/{year}.json")
+        assert data["days"]
+        assert validated == [
+            "https://raw.githubusercontent.com/x/2026.json",
+            "https://cdn.example.com/2026.json",
+        ]
+
+    async def test_redirect_to_metadata_address_blocked_before_request(self, harness):
+        from backend.services.holiday_sync_service import fetch_holiday_json
+
+        validated, requested, monkeypatch = harness
+        self._patch_get(monkeypatch, requested, [
+            self._Resp(302, location="http://169.254.169.254/latest/meta-data/"),
+        ])
+
+        with pytest.raises(ValueError, match="内网"):
+            await fetch_holiday_json(2026, "https://raw.githubusercontent.com/x/{year}.json")
+        # 第二跳根本不该发出请求
+        assert len(requested) == 1
+
+    async def test_redirect_loop_gives_up(self, harness):
+        from backend.services.holiday_sync_service import fetch_holiday_json
+
+        validated, requested, monkeypatch = harness
+        self._patch_get(monkeypatch, requested,
+                        [self._Resp(302, location="https://cdn.example.com/hop") for _ in range(10)])
+
+        with pytest.raises(ValueError, match="重定向"):
+            await fetch_holiday_json(2026, "https://raw.githubusercontent.com/x/{year}.json")
+
+
 class TestEastmoneyHostMatch:
     """补丁的目标域判定（审查 P2：原为 `domain in url` 子串匹配）
 

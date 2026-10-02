@@ -470,7 +470,7 @@ const Dashboard: React.FC = () => {
         <Grid item xs={4}>
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="subtitle2" sx={{ mb: 1 }}>大盘估值分位（沪深300 PE 近5年）</Typography>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>大盘估值分位（沪深300 PE 近10年）</Typography>
               {regime?.valuation_percentile != null ? (
                 <Box>
                   <Typography variant="h4" sx={{ color: regimeColor(regime.valuation_percentile) }}>
@@ -478,6 +478,7 @@ const Dashboard: React.FC = () => {
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
                     当前 PE {regime.valuation_current_pe} · {regime.valuation_date}
+                    {regime.valuation_sample_points ? ` · ${regime.valuation_sample_points} 样本` : ''}
                     {' '}· {regimeLabel(regime.valuation_percentile)}
                   </Typography>
                   <LinearProgress

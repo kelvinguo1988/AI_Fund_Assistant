@@ -5,6 +5,7 @@ LLM 全部用脚本化 Fake Provider（不进 CI 真实调用）。
 
 import json
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -354,3 +355,100 @@ class TestAgentRouter:
         with pytest.raises(HTTPException) as ei:
             await run_agent(AgentRunRequest(prompt="x", task="nope"), _seed_config)
         assert ei.value.status_code == 400
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. 流式用量（token 预算的数据来源）
+# ═══════════════════════════════════════════════════════════════════
+
+class _FakeCompletions:
+    """记录每次 create 的 kwargs；按脚本返回流或抛错"""
+
+    def __init__(self, chunks_factory, reject_stream_options=False):
+        self.calls: list[dict] = []
+        self._chunks_factory = chunks_factory
+        self._reject = reject_stream_options
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._reject and kwargs.get("stream_options"):
+            raise TypeError("Unsupported parameter: 'stream_options' is not a valid parameter")
+        return self._chunks_factory(kwargs)
+
+
+def _provider_for(completions):
+    from backend.llm.base import BaseLLMProvider
+
+    class _P(BaseLLMProvider):
+        async def chat(self, system_prompt, messages, max_tokens=2048, temperature=0.7):
+            return ""
+
+    p = _P("fake-model", "k", "https://api.example.com/v1")
+    p._client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    return p
+
+
+def _chunk(content=None, usage=None):
+    delta = SimpleNamespace(content=content, tool_calls=None)
+    choices = [SimpleNamespace(delta=delta)] if content is not None else []
+    return SimpleNamespace(choices=choices, usage=usage)
+
+
+def _stream(items):
+    async def gen():
+        for it in items:
+            yield it
+    return gen()
+
+
+class TestStreamUsage:
+    @pytest.mark.asyncio
+    async def test_requests_include_usage_and_uses_reported_numbers(self):
+        comp = _FakeCompletions(lambda kw: _stream([
+            _chunk(content="结论"),
+            _chunk(usage=SimpleNamespace(prompt_tokens=9000, completion_tokens=300)),
+        ]))
+        provider = _provider_for(comp)
+        events = [e async for e in provider.astream_with_tools(
+            [{"role": "user", "content": "看下A"}],
+            tools=[{"function": {"name": "x"}}],
+        )]
+        final = events[-1]["response"]
+        assert comp.calls[0].get("stream_options") == {"include_usage": True}
+        assert (final.prompt_tokens, final.completion_tokens) == (9000, 300)
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_estimation_when_endpoint_silent_on_usage(self):
+        comp = _FakeCompletions(lambda kw: _stream([_chunk(content="这是一段中文回答内容")]))
+        provider = _provider_for(comp)
+        events = [e async for e in provider.astream_with_tools([
+            {"role": "system", "content": "系统口径" * 50},
+            {"role": "user", "content": "分析"},
+        ])]
+        final = events[-1]["response"]
+        # 旧行为：usage 恒 0 → runner 的 `or 1` 把预算变成轮数计数器
+        assert final.prompt_tokens > 50
+        assert final.completion_tokens >= 1
+
+    @pytest.mark.asyncio
+    async def test_endpoint_rejecting_stream_options_retries_without_it(self):
+        comp = _FakeCompletions(
+            lambda kw: _stream([_chunk(content="ok")]),
+            reject_stream_options=True,
+        )
+        provider = _provider_for(comp)
+        events = [e async for e in provider.astream_with_tools([{"role": "user", "content": "hi"}])]
+        assert events[-1]["type"] == "final"
+        assert len(comp.calls) == 2                 # 第一次撞错、第二次去掉参数
+        assert "stream_options" not in comp.calls[1]
+        assert provider._stream_options_ok is False
+        # 后续轮次不再重复撞错
+        _ = [e async for e in provider.astream_with_tools([{"role": "user", "content": "again"}])]
+        assert "stream_options" not in comp.calls[-1]
+        assert len(comp.calls) == 3
+
+    def test_estimate_tokens_counts_cjk_close_to_one_per_char(self):
+        from backend.llm.base import estimate_tokens
+        assert estimate_tokens("") == 0
+        assert estimate_tokens("基金量化分析系统") == 9        # 8 字 + 1
+        assert estimate_tokens("a" * 40) == 11               # 40/4 + 1

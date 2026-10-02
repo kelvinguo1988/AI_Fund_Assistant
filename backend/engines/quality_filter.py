@@ -652,6 +652,8 @@ def apply_factor_corrections(
             raw_value=corrected_scores[inv_vol_idx].raw_value,
             score=round(new_score, 6),
             direction=corrected_scores[inv_vol_idx].direction,
+            # 缺数据的因子被这轮重建洗回了 data_valid=True，风险提示随之漏报
+            data_valid=corrected_scores[inv_vol_idx].data_valid,
         )
         logger.info(
             f"波动率倒数修正: {original_score:.4f} × {multiplier:.4f} = {new_score:.4f}"

@@ -132,3 +132,110 @@ class TestDiagPersistRoundtrip:
         row = (await db_session.execute(select(AnalysisResult))).scalars().one()
         assert row.original_score == pytest.approx(1.2345)
         assert json.loads(row.quality_warnings) == ["导出警告"]
+
+
+# ── data_valid 全链路透传（2026-10-01 审查 P1）────────────────────────
+
+def _mk_factors():
+    from backend.engines.factor_engine import FactorScoreResult
+    return [
+        FactorScoreResult("short_momentum", "短期动量", 0.11, 0.5, "positive"),
+        FactorScoreResult(
+            "market_valuation", "大盘估值分位", 0.0, 0.0, "negative", data_valid=False
+        ),
+    ]
+
+
+class TestDataValidRoundtrip:
+    @pytest.mark.asyncio
+    async def test_saved_json_and_out_keep_flag(self, db_session):
+        from backend.services.analysis_service import AnalysisService
+
+        fund = await _mk_fund(db_session)
+        out = await AnalysisService(db_session)._save_result(fund, _mk_signal(), _mk_factors())
+        await db_session.commit()
+
+        row = (await db_session.execute(select(AnalysisResult))).scalars().one()
+        stored = json.loads(row.factor_scores)
+        assert stored["short_momentum"]["data_valid"] is True
+        assert stored["market_valuation"]["data_valid"] is False
+        assert [fs.data_valid for fs in out.factor_scores] == [True, False]
+
+    @pytest.mark.asyncio
+    async def test_result_to_out_rebuilds_flag(self, db_session):
+        from backend.routers.analysis import _result_to_out
+        from backend.services.analysis_service import AnalysisService
+
+        fund = await _mk_fund(db_session)
+        await AnalysisService(db_session)._save_result(fund, _mk_signal(), _mk_factors())
+        await db_session.commit()
+        row = (await db_session.execute(select(AnalysisResult))).scalars().one()
+
+        out = _result_to_out(row, fund)
+        assert [fs.data_valid for fs in out.factor_scores] == [True, False]
+
+    @pytest.mark.asyncio
+    async def test_legacy_json_defaults_true(self, db_session):
+        """改造前落库的 JSON 没有 data_valid 键，读出应视为有效而非全 False"""
+        from backend.routers.analysis import _result_to_out
+
+        fund = await _mk_fund(db_session)
+        row = AnalysisResult(
+            fund_id=fund.id,
+            analysis_date=date(2026, 1, 1), weighted_score=1.0,
+            signal_direction="buy", signal_strength="moderate_buy",
+            operation_advice="x", equity_ratio=0.5,
+            factor_scores=json.dumps({"short_momentum": {"name": "短期动量", "score": 0.5}}),
+        )
+        db_session.add(row)
+        await db_session.commit()
+
+        out = _result_to_out(row, fund)
+        assert out.factor_scores[0].data_valid is True
+
+
+def test_quality_correction_preserves_data_valid():
+    """inv_volatility 修正重建 FactorScoreResult 时不得把 data_valid 洗回 True"""
+    from backend.engines.factor_engine import FactorScoreResult
+    from backend.engines.quality_filter import apply_factor_corrections
+
+    scores = [
+        FactorScoreResult(
+            "inv_volatility", "波动率倒数", 0.0, 0.4, "positive", data_valid=False
+        )
+    ]
+    active = [{"code": "inv_volatility", "weight": 1.0}]
+    corrected, _ = apply_factor_corrections(scores, active, 0.5, 0)
+    assert corrected[0].data_valid is False
+    assert corrected[0].score == pytest.approx(0.4 * (0.5 + 0.5 * 0.5))
+
+
+class TestAIFactorContext:
+    def test_dict_shape_is_parsed(self):
+        """旧实现对 {code: {...}} 做 float(dict) → 恒抛 TypeError，因子明细从未进过提示词"""
+        from backend.services.ai_service import top_factor_lines_for_prompt
+
+        raw = {
+            "short_momentum": {"name": "短期动量", "score": 0.2, "data_valid": True},
+            "macd_signal": {"name": "MACD信号", "score": -0.9, "data_valid": False},
+        }
+        lines = top_factor_lines_for_prompt(raw)
+        assert lines == ["MACD信号=-0.90(数据不足)", "短期动量=+0.20"]
+
+    def test_legacy_shapes(self):
+        from backend.services.ai_service import top_factor_lines_for_prompt
+
+        assert top_factor_lines_for_prompt({"a": 0.3, "b": -0.5}) == ["b=-0.50", "a=+0.30"]
+        listed = top_factor_lines_for_prompt([
+            {"factor_code": "x", "factor_name": "X因子", "score": 0.7},
+            {"factor_code": "y", "factor_name": "Y因子", "score": 0.1, "data_valid": False},
+        ])
+        assert listed == ["X因子=+0.70", "Y因子=+0.10(数据不足)"]
+
+    def test_limit_and_garbage(self):
+        from backend.services.ai_service import top_factor_lines_for_prompt
+
+        raw = {f"f{i}": {"name": f"因子{i}", "score": i / 10} for i in range(12)}
+        assert len(top_factor_lines_for_prompt(raw)) == 5
+        assert top_factor_lines_for_prompt({"a": {"score": "not-a-number"}}) == []
+        assert top_factor_lines_for_prompt(None) == []
