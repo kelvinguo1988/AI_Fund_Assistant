@@ -48,19 +48,26 @@ class TestErrorLogStore:
         assert len(store.query()) == 2
 
     def test_count_since(self, store):
+        """since_ts 只数其后的行 —— 截断时刻必须与列同一把钟（北京时）
+
+        `log()` 写入的 ts 是 `now_beijing()`（UTC 容器里也和机器时区无关），
+        而本测试原来用 `time.localtime()` 造 cutoff：本机是东八区时两者相等所以一直"通过"，
+        GitHub CI 的 UTC runner 上 cutoff 比行时间戳早 8 小时，两条全被算进来 → 2026-10-02 挂在那儿。
+        """
         import time
+        from backend.utils.timezone import now_beijing
+
         store.log("m1", "old")
-        # 等 1 秒翻转（ts 为秒级精度，同秒内 since 比较会歧义）
-        start_sec = time.strftime("%H:%M:%S")
-        while time.strftime("%H:%M:%S") == start_sec:
-            time.sleep(0.05)
-        cutoff = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        cutoff_sec = time.strftime("%H:%M:%S")
-        while time.strftime("%H:%M:%S") == cutoff_sec:
+        # 秒级精度：cutoff 与 m1 同秒时被严格 `>` 排除，跨秒时更早，两种情况都稳定不计入
+        cutoff = now_beijing().strftime("%Y-%m-%d %H:%M:%S")
+        cutoff_hms = cutoff[-8:]
+        # 等到下一秒再写 m2，保证 m2 的 ts 严格大于 cutoff
+        while now_beijing().strftime("%H:%M:%S") == cutoff_hms:
             time.sleep(0.05)
         store.log("m2", "new")
         assert store.count() == 2
         assert store.count(since_ts=cutoff) == 1
+        assert [r["message"] for r in store.query(since_ts=cutoff)] == ["new"]
 
     def test_capacity_trim(self, store):
         for i in range(60):

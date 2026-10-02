@@ -185,7 +185,9 @@ class ErrorLogStore:
         with self._write_lock:
             rows = self._conn.execute(sql, params).fetchall()
         lines = [
-            f"# 错误日志导出 {time.strftime('%Y-%m-%d %H:%M:%S')} 共 {len(rows)} 条"
+            # 导出头必须是北京时：行内 ts 就是北京时，用 time.strftime（容器里是 UTC）
+            # 会让标题比内容早 8 小时
+            f"# 错误日志导出 {now_beijing().strftime('%Y-%m-%d %H:%M:%S')} 共 {len(rows)} 条"
             + (f"（分类={category}）" if category else "")
         ]
         for ts, sev, cat, module, msg, detail in rows:
