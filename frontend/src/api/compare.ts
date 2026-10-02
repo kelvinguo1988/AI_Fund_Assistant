@@ -4,6 +4,7 @@
 
 import apiClient from './client';
 import type { ApiResponse } from '../types';
+import type { CaliberInfo } from './review';
 
 export interface FundCompareMetrics {
   window_label: string;
@@ -29,6 +30,7 @@ export interface CompareReport {
   baseline: string;
   items: FundCompareItem[];
   summary_md: string;
+  caliber?: CaliberInfo;
 }
 
 export const compareApi = {

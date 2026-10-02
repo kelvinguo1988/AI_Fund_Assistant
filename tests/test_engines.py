@@ -33,7 +33,6 @@ def make_fund_data(
     pe: float = 12.0,
     bond_yield: float = 2.8,
     close_history_len: int = 250,
-    volume_history_len: int = 250,
     trend: str = "up",
 ) -> FundData:
     """构造测试用 FundData"""
@@ -50,18 +49,17 @@ def make_fund_data(
     closes = base_price + np.cumsum(deltas)
     closes = np.maximum(closes, 0.5)
 
-    volumes = np.random.randint(1000000, 5000000, size=volume_history_len).astype(float)
+    volumes = np.random.randint(1000000, 5000000, size=close_history_len).astype(float)
 
+    # Q13：FundData 已删掉误标的 pb 与无人消费的 volume_history，这里不再传
     return FundData(
         code=code,
         name=name,
         date="2025-05-16",
         pe=pe,
-        pb=1.5,
         close=float(closes[-1]),
         close_history=closes.tolist(),
         volume=float(volumes[-1]),
-        volume_history=volumes.tolist(),
         index_close=float(closes[-1]),
         bond_yield=bond_yield,
     )

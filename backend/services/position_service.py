@@ -9,15 +9,17 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from datetime import date
 from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.ai.holding_fee import holding_days_between, parse_date_flex
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.models.user_position import UserPosition
-from backend.utils.timezone import now_beijing
+from backend.utils.timezone import beijing_today, now_beijing
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,10 @@ logger = logging.getLogger(__name__)
 CODE_ALIASES = {"基金代码", "证券代码", "代码", "产品代码", "场内基金代码", "code"}
 SHARES_ALIASES = {"持有份额", "基金份额", "份额", "保有份额", "持仓份额", "数量", "shares"}
 COST_ALIASES = {"持仓成本价", "成本价", "单位成本", "估算成本价", "持仓单位成本", "成本净值", "cost"}
-WEIGHT_ALIASES = {"持仓占比", "占组合比例", "占比", "权重"}  # 识别但忽略：权重由份额×成本推算
+# 首次买入日：支付宝/天天导出里叫法最杂，且各 App 的"确认日期"实际就是买入确认日
+DATE_ALIASES = {"首次买入日期", "买入日期", "买入时间", "确认日期", "交易日期",
+                "持仓天数开始日", "first_buy_date"}
+WEIGHT_ALIASES = {"持仓占比", "占组合比例", "占比", "权重"}  # 识别但忽略：权重由份额×净值推算
 
 
 def _norm_header(h: str) -> str:
@@ -46,7 +51,7 @@ def _parse_number(raw: str) -> Optional[float]:
 def parse_positions_csv(text: str) -> tuple[list[dict], list[str]]:
     """解析 CSV 文本 → (rows, errors)。
 
-    rows: [{code, shares, cost_nav}]，errors 为逐行跳过原因。
+    rows: [{code, shares, cost_nav, first_buy_date}]，errors 为逐行跳过原因。
     无表头自动探测：首行若无任何别名列，则视为「代码,份额[,成本]」裸数据。
     """
     errors: list[str] = []
@@ -69,6 +74,8 @@ def parse_positions_csv(text: str) -> tuple[list[dict], list[str]]:
             idx.setdefault("shares", i)
         elif key in {a.lower() for a in COST_ALIASES}:
             idx.setdefault("cost", i)
+        elif key in {a.lower() for a in DATE_ALIASES}:
+            idx.setdefault("date", i)
         elif key in {a.lower() for a in WEIGHT_ALIASES}:
             pass
     if "code" in idx:
@@ -99,7 +106,16 @@ def parse_positions_csv(text: str) -> tuple[list[dict], list[str]]:
             cost = _parse_number(r[idx["cost"]])
             if cost is not None and cost <= 0:
                 cost = None
-        out.append({"code": code, "shares": shares, "cost_nav": cost})
+        # 首买日：认不出来留 None（持有期未知），晚于今天当没填而不是拦下整份导入
+        first_buy = None
+        di = idx.get("date", -1)
+        if 0 <= di < len(r):
+            first_buy = parse_date_flex(r[di])
+            if first_buy is not None and first_buy > now_beijing().date():
+                errors.append(f"第{n}行({code})：首次买入日 {first_buy} 晚于今天，已按未填处理")
+                first_buy = None
+        out.append({"code": code, "shares": shares, "cost_nav": cost,
+                    "first_buy_date": first_buy})
     return out, errors
 
 
@@ -125,6 +141,9 @@ async def list_positions(db: AsyncSession) -> list[dict]:
         {
             "id": p.id, "fund_id": p.fund_id, "fund_code": f.code, "fund_name": f.name,
             "shares": p.shares, "cost_nav": p.cost_nav, "source": p.source,
+            # 持有期输入（Q10-C）：未填首买日 → None，前端显示"—"并提示未做约束
+            "first_buy_date": str(p.first_buy_date) if p.first_buy_date else None,
+            "holding_days": holding_days_between(p.first_buy_date, beijing_today()),
             "fund_type": f.fund_type, "status": f.status,
             "latest_score": latest[p.fund_id].weighted_score if p.fund_id in latest else None,
             "latest_signal": latest[p.fund_id].signal_direction if p.fund_id in latest else None,
@@ -137,8 +156,13 @@ async def list_positions(db: AsyncSession) -> list[dict]:
 async def upsert_position(
     db: AsyncSession, fund_code: str, shares: float,
     cost_nav: Optional[float] = None, source: str = "manual",
+    first_buy_date: Optional[date] = None,
 ) -> dict:
-    """按基金代码建仓/覆盖更新。代码不在池中抛 ValueError。"""
+    """按基金代码建仓/覆盖更新。代码不在池中抛 ValueError。
+
+    `first_buy_date=None` 表示**不改**已有首买日（而不是清空）：CSV 再导入常常不带
+    日期列，覆盖式更新会把用户手工补录的持有期输入抹掉。要清除走 PUT /{id}。
+    """
     fund = (await db.execute(
         select(Fund).where(Fund.code == str(fund_code).strip())
     )).scalars().first()
@@ -146,17 +170,23 @@ async def upsert_position(
         raise ValueError(f"基金不在基金池: {fund_code}")
     if shares is None or float(shares) <= 0:
         raise ValueError("份额必须大于 0")
+    if first_buy_date is not None and first_buy_date > beijing_today():
+        # 未来的首买日只会让持有期算成 0 天、把所有建议都按惩罚档拦掉，明显是录错
+        raise ValueError(f"首次买入日不能晚于今天: {first_buy_date}")
     p = (await db.execute(
         select(UserPosition).where(UserPosition.fund_id == fund.id)
     )).scalars().first()
     created = p is None
     if p is None:
-        p = UserPosition(fund_id=fund.id, shares=float(shares), cost_nav=cost_nav, source=source)
+        p = UserPosition(fund_id=fund.id, shares=float(shares), cost_nav=cost_nav,
+                         source=source, first_buy_date=first_buy_date)
         db.add(p)
     else:
         p.shares = float(shares)
         p.cost_nav = cost_nav
         p.source = source
         p.updated_at = now_beijing()
+        if first_buy_date is not None:
+            p.first_buy_date = first_buy_date
     await db.commit()
     return {"fund_id": fund.id, "fund_code": fund.code, "created": created}

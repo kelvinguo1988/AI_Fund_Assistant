@@ -13,6 +13,7 @@ from backend.models.fund import Fund
 from backend.models.system_config import SystemConfig
 from backend.models.analysis_result import AnalysisResult
 from backend.schemas.ai import ChatMessage, ChatResponse
+from backend.engines.scoring_engine import score_caliber_note
 from backend.utils.timezone import now_beijing
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,13 @@ class AIService:
             # token 预算：大池截断，防止系统提示词膨胀挤占上下文
             if len(pool_block) > 4000:
                 pool_block = pool_block[:4000] + "\n…（基金列表过长已截断）"
+            # Q5：口径标注放在截断之后，否则长池里第一个被切掉的就是它
+            pools = [a.pool_size for a in analysis_by_fund.values() if a.pool_size]
+            pool_block += (
+                f"\n【评分口径】{score_caliber_note(max(pools) if pools else None)}；"
+                "上面这个分数的高低只代表当日池内的相对位置，不是基金的绝对质量，"
+                "不能跨日/跨池比较，也不要用它单独下结论。"
+            )
             global_parts.append(pool_block)
 
         # 2. 评分阈值配置
@@ -248,7 +256,10 @@ class AIService:
                 )
                 analysis = analysis_result.scalars().first()
                 if analysis:
-                    context_parts.append(f"最新评分: {analysis.weighted_score}")
+                    context_parts.append(
+                        f"最新评分: {analysis.weighted_score}"
+                        f"（{score_caliber_note(analysis.pool_size)}）"
+                    )
                     context_parts.append(f"信号方向: {analysis.signal_direction}")
                     context_parts.append(f"信号强度: {analysis.signal_strength}")
                     context_parts.append(f"操作建议: {analysis.operation_advice}")

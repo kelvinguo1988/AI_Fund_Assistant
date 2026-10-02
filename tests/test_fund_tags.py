@@ -492,8 +492,8 @@ class TestAdviceLearning:
         store._w = threading.Lock()
         store._conn = sqlite3.connect(str(tmp_path / "al2.db"), check_same_thread=False)
         store._conn.executescript(mod._SCHEMA)
-        # 40 天前的建议（到评估期）
-        old_ts = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d %H:%M:%S")
+        # 50 天前 → 过了自然日粗筛下限（EVAL_HORIZON_NATURAL_DAYS=46 ≈ 30 交易日 + 节假日余量）
+        old_ts = (datetime.now() - timedelta(days=50)).strftime("%Y-%m-%d %H:%M:%S")
         store._conn.execute(
             "INSERT INTO advice_log (ts, fund_code, action) VALUES (?, 'x', 'sell')",
             (old_ts,))
@@ -527,7 +527,11 @@ def _cal_store(tmp_path):
 
 
 def _seed(store, action: str, n: int, *, hit: bool, age_days: int = 5):
-    """灌 n 条已到评估期、已回填命中的建议（ts 可控，用于窗口过滤测试）"""
+    """灌 n 条已到评估期、已回填命中的建议（ts 可控，用于窗口过滤测试）
+
+    Q7 之后校准读的是 by_mode[口径] 的分母，所以 hit_abs/hit_excess 两列都要写；
+    只写 hit 的旧行在新口径下算"未判定"，不进分母。
+    """
     from datetime import datetime, timedelta
     from backend.services import advice_learning_service as mod
     ts = (datetime.now() - timedelta(days=age_days)).strftime("%Y-%m-%d %H:%M:%S")
@@ -541,8 +545,8 @@ def _seed(store, action: str, n: int, *, hit: bool, age_days: int = 5):
             (ts, f"f{i}", action))
         store._conn.execute(
             "INSERT INTO advice_outcomes (advice_id, eval_date, fund_change_pct, "
-            "benchmark_change_pct, hit) VALUES (?, ?, 0.0, 0.0, ?)",
-            (cur.lastrowid, ts, 1 if hit else 0))
+            "benchmark_change_pct, hit, hit_abs, hit_excess) VALUES (?, ?, 0.0, 0.0, ?, ?, ?)",
+            (cur.lastrowid, ts, 1 if hit else 0, 1 if hit else 0, 1 if hit else 0))
     store._conn.commit()
 
 

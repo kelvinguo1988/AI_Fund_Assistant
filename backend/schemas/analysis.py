@@ -25,7 +25,7 @@ class AnalysisResultOut(BaseModel):
     fund_code: str
     fund_name: str
     analysis_date: date
-    weighted_score: float         # -6.0 ~ +6.0 归一化评分
+    weighted_score: float         # -8.5 ~ +8.5（池内相对分，见 pool_size）
     signal_direction: str         # buy / sell / hold
     signal_strength: str
     operation_advice: str
@@ -37,6 +37,11 @@ class AnalysisResultOut(BaseModel):
     dynamic_buy_threshold: Optional[float] = None  # 动态买入阈值
     dynamic_sell_threshold: Optional[float] = None # 动态卖出阈值
     quality_warnings: Optional[List[str]] = None   # 质量过滤警告
+    # Q9：本次评分依据的最新净值日期（与 analysis_date 的差 = 披露缺口；旧行为 NULL）
+    nav_as_of_date: Optional[str] = None
+    # Q5：本轮参与截面标准化的基金数 —— weighted_score 是**池内相对分**，
+    # 同一个 2.5 分在 50 只池和 8 只池不是一回事；旧行与未跑过分析的为 NULL
+    pool_size: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -99,13 +104,15 @@ class ReviewReport(BaseModel):
     end_date: str
     fund_count: int
     portfolio_growth_pct: Optional[float] = None   # 等权组合区间收益 %
-    benchmark_growth_pct: Optional[float] = None   # 沪深300 同区间 %
+    benchmark_growth_pct: Optional[float] = None   # 基准同区间 %（沪深300 价格指数 + 股息，见 caliber）
     excess_pct: Optional[float] = None             # 超额 %
     best: Optional[FundReviewItem] = None
     worst: Optional[FundReviewItem] = None
     items: list[FundReviewItem] = []
-    # 信号复盘：区间首日前最近信号与区间实际涨跌的同向率
+    # 信号复盘：区间首日前最近信号与区间实际涨跌的同向率（绝对 + 超额两个口径）
     signal_stats: dict = {}
+    # 生效口径（Q11）：{nav_adjusted, bench_div_yield_pct, lines=[三行口径头]}
+    caliber: dict = {}
     summary_md: str = ""                            # Markdown 复盘报告（可直接喂 AI 解读）
 
 
@@ -135,4 +142,5 @@ class FundCompareItem(BaseModel):
 class CompareReport(BaseModel):
     baseline: str = "沪深300"
     items: list[FundCompareItem] = []
+    caliber: dict = {}   # 生效口径（Q11）：同 ReviewReport.caliber
     summary_md: str = ""

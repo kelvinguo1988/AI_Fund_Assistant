@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Float, String, Integer, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Date, Float, String, Integer, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
@@ -25,7 +25,11 @@ class UserPosition(Base):
     )
     shares: Mapped[float] = mapped_column(Float, nullable=False, comment="持有份额")
     cost_nav: Mapped[Optional[float]] = mapped_column(
-        Float, nullable=True, comment="持仓成本单价（可空，缺省时组合权重按等权近似）"
+        Float, nullable=True, comment="持仓成本单价（可空）：实时估值缓存未命中时用它估算权重"
+    )
+    first_buy_date: Mapped[Optional[date]] = mapped_column(
+        Date, nullable=True,
+        comment="首次买入日（可空）。持有期/赎回费约束的唯一输入，created_at 只是入系统时间"
     )
     source: Mapped[str] = mapped_column(
         String(10), nullable=False, default="manual", comment="manual / import"

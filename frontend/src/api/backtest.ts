@@ -29,7 +29,26 @@ export const backtestApi = {
     apiClient
       .put<ApiResponse<{ fee_pct: number }>>(`${BASE}/config/fee`, { fee_pct: feePct })
       .then((r) => r.data),
+
+  /** 回测度量口径（仓位延续 / 样本下限）——同时是 Q6 的回滚开关 */
+  getMeasurementConfig: () =>
+    apiClient
+      .get<ApiResponse<BacktestMeasurementConfig & {
+        defaults: { carry_position: boolean; min_signals: number; min_coverage_pct: number };
+      }>>(`${BASE}/config/measurement`)
+      .then((r) => r.data),
+
+  updateMeasurementConfig: (patch: Partial<BacktestMeasurementConfig>) =>
+    apiClient
+      .put<ApiResponse<BacktestMeasurementConfig>>(`${BASE}/config/measurement`, patch)
+      .then((r) => r.data),
 };
+
+export interface BacktestMeasurementConfig {
+  carry_position: boolean;
+  min_signals: number;
+  min_coverage_pct: number;
+}
 
 /* ── 自动全量回测 ── */
 
@@ -51,6 +70,18 @@ export interface BacktestBatchItem {
   finished_at?: string | null;
   error?: string | null;
   ok: boolean;
+  // ── Q6 新口径（旧行 NULL → 前端不显示）──
+  baseline_buy_hold?: number | null;
+  baseline_static_half?: number | null;
+  excess_vs_static_half?: number | null;
+  signal_count_non_hold?: number | null;
+  signal_coverage_ratio?: number | null;
+  low_sample?: boolean | null;
+  caveat?: string | null;
+  coverage_start_date?: string | null;
+  coverage_days?: number | null;
+  pool_size_at?: number | null;
+  carry_position?: boolean | null;
 }
 
 export interface AutoBacktestConfig {

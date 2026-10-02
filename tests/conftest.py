@@ -84,9 +84,41 @@ def _isolate_error_log_store(tmp_path, monkeypatch):
             pass
 
 
+@pytest.fixture(autouse=True)
+def _isolate_advice_store(tmp_path, monkeypatch):
+    """advice_log 测试隔离：工单落库写临时库，不污染真实命中率样本
+
+    2026-10-02 排查：调仓 Agent 任务测试带 record_advice=True，把 004011/011452
+    等**测试基金**代码写进了开发库的 advice_log —— Q7 命中率与阈值校准的样本
+    必须是真实工单，掺入测试行会让校准结果失真。与 _isolate_error_log_store
+    同理：改 settings 里的库路径，再重建单例。
+    """
+    from backend.config import settings as _s
+    from backend.services.advice_learning_service import AdviceLearningStore
+
+    monkeypatch.setattr(_s, "DATABASE_DIR", str(tmp_path))
+    monkeypatch.setattr(_s, "DATABASE_NAME", "advice_test.db")
+    with AdviceLearningStore._lock:
+        stale = AdviceLearningStore._instance
+        AdviceLearningStore._instance = None
+    if stale is not None:
+        try:
+            stale._conn.close()
+        except Exception:
+            pass
+    yield
+    with AdviceLearningStore._lock:
+        inst = AdviceLearningStore._instance
+        AdviceLearningStore._instance = None
+    if inst is not None:
+        try:
+            inst._conn.close()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 async def db_session():
-    """共享内存库会话（原 4 个测试文件各自复制粘贴，统一于此）"""
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
     from backend.database import Base
     import backend.models  # noqa: F401

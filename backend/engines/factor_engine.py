@@ -10,7 +10,9 @@
 7. 最大回撤 (max_drawdown)       — 正向, 权重 0.5
 8. 规模稳定性 (size_stability)    — 正向, 权重 0.4
 
-分值范围: -1.0 ~ +1.0（每因子），加权求和 → -6.4 ~ +6.4
+分值范围: -1.0 ~ +1.0（每因子）；加权求和的范围由**当前启用的权重合计**决定
+（生产口径见 scoring_engine.threshold_ref_total_weight，现为 8.3 → -8.3 ~ +8.3），
+不是这里写死的数字。
 """
 
 import json
@@ -401,7 +403,10 @@ def calculate_macd_signal(fund_data: FundData, params: Optional[dict] = None) ->
     """MACD 信号 — 正向
 
     公式: DIF=EMA(12)-EMA(26), DEA=EMA(DIF,9), MACD柱=2*(DIF-DEA)
-    信号: 金叉+放量→1.0, 金叉+缩量→0.5, 死叉+放量→-1.0, else→0
+    信号: DIF>DEA 且柱放大→1.0, DIF>DEA 且柱收敛→0.5, DIF<DEA 且柱下移→-1.0, else→0
+
+    Q13：旧文档写"金叉+放量→1.0 / 金叉+缩量→0.5"，实现里从来没有量能项（场外基金也没有
+    可靠的分钟级成交序列）—— 文档按实现改写，勿再按"放量"理解这一档。
     """
     p = params or {}
     fast = p.get("fast", 12)
@@ -464,11 +469,17 @@ def calculate_size_stability(fund_data: FundData, params: Optional[dict] = None)
     """规模稳定性 — 正向
 
     公式:
-      size_cv = std(4季度规模) / mean(4季度规模)
-      stability = 1 / size_cv
+      size_cv = std(最近 window 期规模) / mean(最近 window 期规模)
+      stability = min(1 / size_cv, 5.0)
       附加调整：2亿~50亿 +0.2，超过100亿 -0.1
       final = stability + bonus
     返回值作为 pre-norm score，后续做截面 Z-score
+
+    量纲（Q13）：`fund_size_history` 与下面的 2e8/5e9/1e10 分档都是**元**，
+    数据源侧已把深交所"基金份额"（份）换算成 份额 × 最新净值。
+    注意源给的是**日频份额**而不是季度规模，相邻期差异极小 → CV 天然偏小、
+    该因子几乎恒定拿满 5.0 cap，区分度存疑；且只有 159xxx 能取到。
+    因此**当前未启用**，启用前必须先跑一次覆盖率/区分度检查。
     """
     window = (params or {}).get("window", 4)
 
@@ -496,7 +507,7 @@ def calculate_size_stability(fund_data: FundData, params: Optional[dict] = None)
     elif latest_size > 1e10:
         bonus = -0.1
 
-    final = min(stability, 5.0) + bonus
+    final = stability + bonus
 
     return FactorScoreResult("size_stability", "规模稳定性", round(final, 4), round(final, 4), "positive")
 
@@ -774,6 +785,30 @@ FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreRe
 }
 
 
+# Q13 死配置清单：这些因子的计算函数**不读** DB 里的 signal_rules —— 它们把 raw 值
+# （或函数自己内嵌的二档逻辑）直接当 pre-norm 分返回，之后由截面 zscore_thresholds
+# 分档。于是因子管理页给它们填"信号规则"完全不生效，属于假可配项。
+# 判据可机检：函数源码里不出现 rules_from_params；tests/test_dead_config.py 断言两者
+# 一致，以后给某个计算函数接上可配规则却忘了更新这张表会被测试拦下。
+SIGNAL_RULES_INERT_FACTORS: frozenset[str] = frozenset({
+    "inv_volatility",
+    "info_ratio",
+    "macd_signal",
+    "max_drawdown",
+    "size_stability",
+    "short_momentum",
+    "mid_momentum",
+    "return_risk_ratio",
+    "momentum_accel",
+    "trend_consistency",
+})
+
+
+def signal_rules_effective(code: str) -> bool:
+    """该因子行的 signal_rules 是否真的参与打分（False = 前端编辑无效）"""
+    return code not in SIGNAL_RULES_INERT_FACTORS
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 因子引擎主类
 # ═══════════════════════════════════════════════════════════════════════
@@ -822,14 +857,20 @@ class FactorEngine:
                 params = params_str or {}
 
             # DB 配置的 signal_rules 注入 params，计算函数内经 rules_from_params
-            # 优先采用（前端因子页可编辑，此前恒被内嵌默认规则覆盖）
+            # 优先采用（前端因子页可编辑，此前恒被内嵌默认规则覆盖）。
+            # 死配置因子（SIGNAL_RULES_INERT_FACTORS）不注入：它们不读这个键，
+            # 注入了也只是让 params 里多一团没人看的东西。
             configured_rules = factor.get("signal_rules")
             if isinstance(configured_rules, str):
                 try:
                     configured_rules = json.loads(configured_rules) if configured_rules else None
                 except json.JSONDecodeError:
                     configured_rules = None
-            if isinstance(configured_rules, list) and configured_rules:
+            if (
+                isinstance(configured_rules, list)
+                and configured_rules
+                and signal_rules_effective(code)
+            ):
                 params = {**params, "_signal_rules": configured_rules}
 
             calculator = self._calculators.get(code)

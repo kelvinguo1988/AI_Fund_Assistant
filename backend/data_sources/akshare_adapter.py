@@ -386,7 +386,6 @@ class AKShareAdapter(BaseDataSource):
         df = df.sort_values("日期")
 
         fund_data.close_history = df["收盘"].astype(float).tolist()
-        fund_data.volume_history = df["成交量"].astype(float).tolist()
         fund_data.date_history = df["日期"].astype(str).tolist()
 
         last_row = df.iloc[-1]
@@ -402,7 +401,7 @@ class AKShareAdapter(BaseDataSource):
 
         # 尝试获取 PE/PB 数据（通过关联指数）
         try:
-            await self._fill_pe_pb_for_etf(code, fund_data)
+            await self._fill_pe_for_etf(code, fund_data)
         except Exception as e:
             logger.warning(f"ETF PE/PB 数据获取失败 code={code}: {e}")
 
@@ -749,10 +748,12 @@ class AKShareAdapter(BaseDataSource):
 
         return None
 
-    async def _fill_pe_pb_for_etf(self, code: str, fund_data: FundData) -> None:
-        """根据 ETF 代码尝试填充 PE/PB 数据
+    async def _fill_pe_for_etf(self, code: str, fund_data: FundData) -> None:
+        """根据 ETF 代码填充关联指数的市盈率（喂给 fed_model）
 
         通过 stock_zh_index_value_csindex 接口获取关联指数的估值数据。
+        只取"市盈率1"：Q13 起原先赋给 `FundData.pb` 的"市盈率2"其实是滚动市盈率，
+        字段名标成"市净率"且全仓无消费方，已连同赋值一起删除。
         优化：按指数代码缓存，同一指数不重复请求（如多只 ETF 都跟踪沪深300）。
 
         并发安全：按 index_code 分锁，防止多只跟踪同一指数的 ETF 并发时
@@ -772,8 +773,15 @@ class AKShareAdapter(BaseDataSource):
 
         index_code = etf_index_map.get(code)
         if index_code is None:
-            logger.debug(f"ETF {code} 无关联指数映射，跳过 PE/PB 获取")
+            logger.debug(f"ETF {code} 无关联指数映射，跳过 PE 获取")
             return
+
+        def _pe_of(row) -> Optional[float]:
+            try:
+                v = float(row.get("市盈率1"))
+            except (TypeError, ValueError):
+                return None
+            return v if v > 0 else None
 
         # 检查缓存（无锁快速路径）
         now = _time.time()
@@ -781,14 +789,10 @@ class AKShareAdapter(BaseDataSource):
         if cached is not None:
             ts, df = cached
             if now - ts < AKShareAdapter._SHARED_CACHE_TTL and df is not None:
-                row = df.iloc[-1]
-                pe_str = str(row.get("市盈率1", ""))
-                pb_str = str(row.get("市盈率2", ""))
-                if pe_str and pe_str not in ("", "None", "nan"):
-                    fund_data.pe = float(pe_str)
-                if pb_str and pb_str not in ("", "None", "nan"):
-                    fund_data.pb = float(pb_str)
-                logger.debug(f"PE/PB 命中缓存 index={index_code}")
+                pe = _pe_of(df.iloc[-1])
+                if pe is not None:
+                    fund_data.pe = pe
+                logger.debug(f"PE 命中缓存 index={index_code}")
                 return
 
         # 获取锁后再次检查（按 index_code 分锁，不同指数不互相阻塞）
@@ -800,14 +804,10 @@ class AKShareAdapter(BaseDataSource):
             if cached is not None:
                 ts, df = cached
                 if now - ts < AKShareAdapter._SHARED_CACHE_TTL and df is not None:
-                    row = df.iloc[-1]
-                    pe_str = str(row.get("市盈率1", ""))
-                    pb_str = str(row.get("市盈率2", ""))
-                    if pe_str and pe_str not in ("", "None", "nan"):
-                        fund_data.pe = float(pe_str)
-                    if pb_str and pb_str not in ("", "None", "nan"):
-                        fund_data.pb = float(pb_str)
-                    logger.debug(f"PE/PB 命中缓存（锁内复用）index={index_code}")
+                    pe = _pe_of(df.iloc[-1])
+                    if pe is not None:
+                        fund_data.pe = pe
+                    logger.debug(f"PE 命中缓存（锁内复用）index={index_code}")
                     return
 
             try:
@@ -815,16 +815,12 @@ class AKShareAdapter(BaseDataSource):
                 if df is not None and not df.empty:
                     # 写入缓存
                     AKShareAdapter._index_value_cache[index_code] = (now, df)
-                    row = df.iloc[-1]  # 取最新一条
-                    pe_str = str(row.get("市盈率1", ""))
-                    pb_str = str(row.get("市盈率2", ""))
-                    if pe_str and pe_str not in ("", "None", "nan"):
-                        fund_data.pe = float(pe_str)
-                    if pb_str and pb_str not in ("", "None", "nan"):
-                        fund_data.pb = float(pb_str)
-                    logger.info(f"PE/PB 缓存已填充 index={index_code}（首次网络请求）")
+                    pe = _pe_of(df.iloc[-1])  # 取最新一条
+                    if pe is not None:
+                        fund_data.pe = pe
+                    logger.info(f"PE 缓存已填充 index={index_code}（首次网络请求）")
             except Exception as e:
-                logger.warning(f"PE/PB 数据获取失败 index={index_code}: {e}")
+                logger.warning(f"PE 数据获取失败 index={index_code}: {e}")
 
     async def _fill_benchmark_data(self, fund_data: FundData, period: int) -> None:
         """填充基准指数（沪深300）历史行情用于信息比率计算
@@ -892,10 +888,16 @@ class AKShareAdapter(BaseDataSource):
         return sorted(zip(dates, closes))
 
     async def _fill_fund_size(self, code: str, fund_data: FundData) -> None:
-        """填充基金季度规模数据用于规模稳定性计算
+        """填充基金规模序列（单位：元）用于规模稳定性计算
 
         fund_scale_open_sina 接口对多数基金不可靠（KeyError），直接跳过以节省时间。
         策略: fund_scale_daily_szse（深交所 ETF 日频份额数据，仅 159 开头代码可用）。
+
+        Q13 量纲修正：接口给的是**份额（份）**，而 `calculate_size_stability` 的加减分档
+        按"2 亿~50 亿元"判断 —— 份额×1 元面值的数字会被当成亿元，档位永远命中不了。
+        这里统一换算成规模（元）= 份额 × 最新单位净值。
+        已知口径局限（该因子当前未启用，启用前需先跑覆盖率检查）：序列是**日频**份额，
+        不是因子的文档所说的"4 季度规模"；净值也只有最新一期，早期份额按最新净值折算。
         """
         # 仅尝试深交所 ETF 份额数据（159xxx）
         if code.startswith("159"):
@@ -908,8 +910,16 @@ class AKShareAdapter(BaseDataSource):
                 if df is not None and not df.empty:
                     match = df[df["基金代码"].astype(str) == code]
                     if not match.empty:
-                        fund_data.fund_size_history = match.sort_values("日期")["基金份额"].astype(float).tail(4).tolist()
-                        logger.info(f"基金规模数据填充完成: {len(fund_data.fund_size_history)} 期 (daily_szse)")
+                        shares = match.sort_values("日期")["基金份额"].astype(float).tail(4).tolist()
+                        nav = fund_data.close
+                        if nav and nav > 0:
+                            fund_data.fund_size_history = [float(s) * float(nav) for s in shares]
+                            logger.info(
+                                f"基金规模数据填充完成: {len(fund_data.fund_size_history)} 期 "
+                                f"(daily_szse 份额×净值 {nav:.4f})"
+                            )
+                        else:
+                            logger.debug(f"基金规模份额已取到但无净值可折算 code={code}，跳过")
                         return
             except Exception as e:
                 logger.debug(f"基金规模获取失败 code={code} (daily_szse): {e}")
@@ -951,7 +961,7 @@ class AKShareAdapter(BaseDataSource):
         添加类级缓存，1 小时内复用，避免 51 只基金重复请求同一接口。
 
         并发安全：使用 asyncio.Lock 防止 51 只基金并发时同时穿透缓存
-        （实测 stock_zh_index_value_csindex 在 get_bond_yield 和 _fill_pe_pb_for_etf
+        （实测 stock_zh_index_value_csindex 在 get_bond_yield 和 _fill_pe_for_etf
         中同时被调用，并发时大量超时）。
 
         注：bond_china_yield 数据源自 2021 年起未更新，新日期范围返回空。
@@ -988,8 +998,8 @@ class AKShareAdapter(BaseDataSource):
                 return None
 
             # 策略 1: 尝试全局指数估值表获取无风险利率参考
-            # 优化：优先复用 _fill_pe_pb_for_etf 已缓存的 000300 数据，
-            # 避免同一接口被 get_bond_yield 和 _fill_pe_pb_for_etf 同时调用。
+            # 优化：优先复用 _fill_pe_for_etf 已缓存的 000300 数据，
+            # 避免同一接口被 get_bond_yield 和 _fill_pe_for_etf 同时调用。
             cached_df = None
             cached_entry = AKShareAdapter._index_value_cache.get("000300")
             if cached_entry is not None:
@@ -1010,7 +1020,7 @@ class AKShareAdapter(BaseDataSource):
             try:
                 df = await self._call(ak.stock_zh_index_value_csindex, symbol="000300")
                 if df is not None and not df.empty:
-                    # 同时写入 _index_value_cache 供 _fill_pe_pb_for_etf 复用
+                    # 同时写入 _index_value_cache 供 _fill_pe_for_etf 复用
                     AKShareAdapter._index_value_cache["000300"] = (now, df)
                     last_row = df.iloc[-1]
                     div_yield = last_row.get("股息率1", None)

@@ -33,14 +33,15 @@ class FundData:
     name: str = ""                       # 基金名称
     date: str = ""                       # 数据日期 YYYY-MM-DD
     # ── 估值指标 ──
-    pe: Optional[float] = None           # 市盈率
-    pb: Optional[float] = None           # 市净率
+    pe: Optional[float] = None           # 市盈率（中证指数"市盈率1"）；Q13：原 pb 字段实为
+                                         #   csindex"市盈率2"（滚动 PE）却标成"市净率"，且全仓
+                                         #   无消费方 → 字段删除，勿再加回同名误标
     # ── 价格数据 ──
     close: Optional[float] = None        # 收盘价/净值
     close_history: list[float] = field(default_factory=list)   # 收盘价序列
     # ── 成交量 ──
     volume: Optional[float] = None       # 当日成交量
-    volume_history: list[float] = field(default_factory=list)  # 成交量序列
+    #   Q13：原 volume_history 序列无任何因子/服务消费（MACD 文档提到的"放量"未实现）→ 删除
     # ── 指数数据 ──
     index_close: Optional[float] = None  # 关联指数收盘价
     benchmark_history: list[float] = field(default_factory=list)  # 基准指数（沪深300）收盘价序列

@@ -65,3 +65,19 @@ export const STRENGTH_CHIP_COLOR: Record<string, 'error' | 'success' | 'default'
   moderate_sell: 'success',
   heavy_sell: 'success',
 };
+
+/** 截面样本数低于此值时，z 分/分位数的抽样误差大于因子区分度（与后端 THIN_POOL_SIZE 同值） */
+export const THIN_POOL_SIZE = 20;
+
+/**
+ * 评分口径标注（Q5）— 文案与后端 `scoring_engine.score_caliber_note` 对齐
+ *
+ * weighted_score 由 6 个截面 z 因子加权而来，当日池内均值恒为 0：它只回答"这只在当天
+ * 这批基金里排第几"，不回答"这只基金好不好"。池子构成一变分数就变，所以同一个 2.5 分
+ * 在 57 只池和 8 只池不是一回事，也不能跨日比较。全仓只在这里定义一次措辞。
+ */
+export const scoreCaliberNote = (poolSize?: number | null): string => {
+  if (!poolSize) return '池内相对分（当日截面样本数未记录，不能跨期/跨池比较）';
+  const thin = poolSize < THIN_POOL_SIZE ? '，池子偏薄、截面标准化本身不稳定' : '';
+  return `池内相对分（当日 ${poolSize} 只参与截面标准化${thin}）`;
+};

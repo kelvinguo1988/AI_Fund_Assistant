@@ -24,6 +24,7 @@ from backend.engines.quality_filter import (
     QualityFilterResult,
     QUALITY_CONFIG,
     check_coffin_nail_pattern,
+    coffin_nail_pending_warning,
     check_ecg_pattern,
     check_liquidation_risk,
     calc_momentum_stability,
@@ -204,6 +205,81 @@ class TestCoffinNailVeto:
         )
         assert result.vetoed is True
         assert result.fund_code == "COFFIN01"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 场景 1b（Q8）：恢复窗口未走完 → 暂不判定，只标注待确认
+# ═══════════════════════════════════════════════════════════════════════
+
+def make_fresh_crash_fund(tail_days: int) -> FundData:
+    """涨 200 日 → 连续 20 日暴跌约 30% → 末尾横盘 tail_days 天
+
+    tail_days < coffin_nail_recovery_days(60) 时，该形态的恢复期**还没观测满**，
+    按定义不能判定"60 日未恢复"；tail_days ≥ 60 时窗口走完了，必须照常否决。
+    """
+    prices = [4.0]
+    for _ in range(199):
+        prices.append(prices[-1] * 1.005)          # 缓慢上涨到峰值
+    for _ in range(20):
+        prices.append(prices[-1] * 0.982)          # 20 个交易日 -30%
+    for _ in range(tail_days):
+        prices.append(prices[-1])                  # 暴跌后横盘（远低于峰值 90%）
+    return FundData(
+        code="FRESH01",
+        name="刚暴跌基金",
+        date="2025-06-13",
+        close=prices[-1],
+        close_history=prices,
+    )
+
+
+class TestCoffinNailPendingWindow:
+    def test_incomplete_recovery_window_not_vetoed(self):
+        """恢复期只观测 30 日 → 不否决（旧实现这里会因为 min() 截断而误否决）"""
+        fd = make_fresh_crash_fund(tail_days=10)
+        assert check_coffin_nail_pattern(fd) is False
+
+    def test_completed_recovery_window_still_vetoed(self):
+        """同一个形态，恢复期观测满 60 日 → 必须照常否决（Q8 不是放松防线）"""
+        fd = make_fresh_crash_fund(tail_days=80)
+        assert check_coffin_nail_pattern(fd) is True
+
+    def test_pending_warning_reports_observed_days(self):
+        fd = make_fresh_crash_fund(tail_days=10)
+        note = coffin_nail_pending_warning(fd)
+        assert "待确认" in note and "暂不否决" in note
+        # 崩窗结束到序列末尾 = 10 天横盘 + 崩窗内多算的那几天，务必 < 60
+        assert "60 日恢复期" in note
+
+    def test_no_pending_warning_for_clean_fund(self):
+        assert coffin_nail_pending_warning(make_fund_data(trend="up")) == ""
+
+    def test_rollback_key_restores_old_behavior(self):
+        """coffin_nail_require_full_recovery_window=0 → 回到「昨天暴跌也否决」"""
+        cfg = dict(QUALITY_CONFIG)
+        cfg["coffin_nail_require_full_recovery_window"] = 0
+        fd = make_fresh_crash_fund(tail_days=10)
+        assert check_coffin_nail_pattern(fd, cfg) is True
+        assert coffin_nail_pending_warning(fd, cfg) == ""
+
+    def test_build_result_carries_pending_warning(self):
+        """未否决时待确认提示进 warnings（→ signal.quality_warnings → 前端/调仓清单可见）"""
+        qf = QualityFilter()
+        fd = make_fresh_crash_fund(tail_days=10)
+        factors = make_default_factors_config()
+        factor_scores = [
+            FactorScoreResult(f["code"], f["name"], 0.5, 0.5, "positive")
+            for f in factors
+        ]
+        result, _, _ = qf.build_result(
+            fund_code="FRESH01",
+            fund_data=fd,
+            quarterly_history=[],
+            factor_scores=factor_scores,
+            active_factors=factors,
+        )
+        assert result.vetoed is False
+        assert any("待确认" in w for w in result.warnings)
 
 
 # ═══════════════════════════════════════════════════════════════════════

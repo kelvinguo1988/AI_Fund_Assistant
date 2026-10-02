@@ -34,16 +34,39 @@ class TestCsvParse:
     def test_tiantian_style_aliases(self):
         from backend.services.position_service import parse_positions_csv
         rows, errors = parse_positions_csv("证券代码,份额,成本价,持仓占比\n004011,100,,45%")
-        assert rows == [{"code": "004011", "shares": 100.0, "cost_nav": None}]
+        assert rows == [{"code": "004011", "shares": 100.0, "cost_nav": None,
+                         "first_buy_date": None}]
         assert errors == []
 
     def test_headerless_and_bad_rows(self):
         from backend.services.position_service import parse_positions_csv
         rows, errors = parse_positions_csv("004011,1000.5,1.234\nabc,5,6\n004011,0,1")
-        assert rows == [{"code": "004011", "shares": 1000.5, "cost_nav": 1.234}]
+        assert rows == [{"code": "004011", "shares": 1000.5, "cost_nav": 1.234,
+                         "first_buy_date": None}]
         assert any("表头" in e for e in errors)
         assert any("abc" in e for e in errors)
         assert any("份额" in e for e in errors)
+
+    def test_first_buy_date_column_and_dirty_values(self):
+        """首买日列：认得「首次买入日期/买入日期/确认日期」，认不出来就留 None 而不是猜"""
+        from backend.services.position_service import parse_positions_csv
+        rows, errors = parse_positions_csv(
+            "基金代码,持有份额,首次买入日期\n"
+            "004011,1000,2026-08-01\n"
+            "011452,500,2026/9/3\n"
+            "630010,300,未知\n"
+        )
+        assert [r["first_buy_date"] for r in rows] == [
+            date(2026, 8, 1), date(2026, 9, 3), None,
+        ]
+        assert errors == []
+
+    def test_future_first_buy_date_reported_not_imported(self):
+        """晚于今天的首买日会把持有期算成 0 天、凭空拦掉建议 → 按未填处理并说明"""
+        from backend.services.position_service import parse_positions_csv
+        rows, errors = parse_positions_csv("基金代码,持有份额,买入日期\n004011,1000,2099-01-01")
+        assert rows[0]["first_buy_date"] is None
+        assert any("晚于今天" in e for e in errors)
 
     def test_empty(self):
         from backend.services.position_service import parse_positions_csv
@@ -118,6 +141,53 @@ class TestPositionCrud:
         assert len(rows) == 1
         f1 = await db_session.get(Fund, rows[0].fund_id)
         assert f1.code == "004011" and rows[0].source == "import"
+
+    @pytest.mark.asyncio
+    async def test_first_buy_date_survives_dateless_reimport(self, db_session):
+        """再导入不带日期列的 CSV 不能抹掉手工补录的首买日（None = 不动，不是清空）"""
+        from backend.services.position_service import list_positions, upsert_position
+        await _seed_positions_db(db_session)
+        await upsert_position(db_session, "004011", 1000, 2.0, first_buy_date=date(2026, 8, 1))
+        await upsert_position(db_session, "004011", 900, 2.2)
+        items = await list_positions(db_session)
+        assert items[0]["first_buy_date"] == "2026-08-01"
+        assert items[0]["shares"] == 900
+
+    @pytest.mark.asyncio
+    async def test_first_buy_date_in_the_future_rejected(self, db_session):
+        from backend.services.position_service import upsert_position
+        await _seed_positions_db(db_session)
+        with pytest.raises(ValueError):
+            await upsert_position(db_session, "004011", 100, 2.0, first_buy_date=date(2099, 1, 1))
+
+    @pytest.mark.asyncio
+    async def test_put_distinguishes_absent_from_cleared(self, db_session):
+        """PUT 用「字段是否出现」决定改不改：不带该键 = 不动，显式 null = 清除"""
+        from backend.routers.position import PositionUpdate, update_position
+        from backend.services.position_service import upsert_position
+        await _seed_positions_db(db_session)
+        await upsert_position(db_session, "004011", 1000, 2.0, first_buy_date=date(2026, 8, 1))
+        p = (await db_session.execute(select(UserPosition))).scalars().first()
+
+        await update_position(p.id, PositionUpdate(shares=1234), db_session)
+        assert p.first_buy_date == date(2026, 8, 1) and p.shares == 1234
+
+        await update_position(p.id, PositionUpdate(first_buy_date=None), db_session)
+        assert p.first_buy_date is None
+
+    @pytest.mark.asyncio
+    async def test_put_rejects_future_first_buy_date(self, db_session):
+        """PUT 与 POST/CSV 同口径：未来首买日会把持有期算成 0 天、整张工单被拦掉"""
+        from fastapi import HTTPException
+        from backend.routers.position import PositionUpdate, update_position
+        from backend.services.position_service import upsert_position
+        await _seed_positions_db(db_session)
+        await upsert_position(db_session, "004011", 1000, 2.0, first_buy_date=date(2026, 8, 1))
+        p = (await db_session.execute(select(UserPosition))).scalars().first()
+        with pytest.raises(HTTPException):
+            await update_position(p.id, PositionUpdate(
+                first_buy_date=date.today() + timedelta(days=30)), db_session)
+        assert p.first_buy_date == date(2026, 8, 1)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -315,3 +385,203 @@ class TestAgentWiring:
         assert system_msg["role"] == "system"
         assert "sells" in system_msg["content"] and "004011" in system_msg["content"]
         assert payloads[-1]["type"] == "done"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. Q10：市值权重口径 + 持有期/阶梯赎回费
+# ═══════════════════════════════════════════════════════════════════
+
+@pytest.fixture
+def clean_nav_cache():
+    """隔离实时估值缓存：权重口径只读它，测试之间不能互相串味"""
+    import time as _t
+    from backend.services.fund_realtime_service import FundRealtimeService
+    saved = dict(FundRealtimeService._estimate_cache)
+    FundRealtimeService._estimate_cache.clear()
+    yield _t.time, FundRealtimeService
+    FundRealtimeService._estimate_cache.clear()
+    FundRealtimeService._estimate_cache.update(saved)
+
+
+def _seed_position(db, fund, shares, cost_nav=None, first_buy_date=None):
+    p = UserPosition(fund_id=fund.id, shares=shares, cost_nav=cost_nav,
+                     first_buy_date=first_buy_date)
+    db.add(p)
+    return p
+
+
+class TestFeeLadderPure:
+    def test_parse_sorts_and_keeps_none_last(self):
+        from backend.ai.holding_fee import parse_fee_ladder
+        assert parse_fee_ladder([[365, 0.5], [7, 1.5], [None, 0.25]]) == [
+            (7, 1.5), (365, 0.5), (None, 0.25)]
+
+    def test_parse_drops_dirty_rows_and_falls_back(self):
+        from backend.ai.holding_fee import DEFAULT_FEE_LADDER, parse_fee_ladder
+        # 单行脏（上界不可解析 / 上界≤0 / 费率越界）只丢那一行
+        assert parse_fee_ladder([[7, 1.5], ["x", 9], [0, 0.5], [7, 999]]) == [(7, 1.5)]
+        # 全脏 / 类型错 → 回落默认阶梯：费率算成空等于"免赎回费"，不能默认成立
+        assert parse_fee_ladder([[None, -1]]) == [(b, p) for b, p in DEFAULT_FEE_LADDER]
+        assert parse_fee_ladder("乱码") == [(b, p) for b, p in DEFAULT_FEE_LADDER]
+
+    def test_fee_pct_tiers_and_boundaries(self):
+        from backend.ai.holding_fee import fee_pct_for_holding, parse_fee_ladder
+        ladder = parse_fee_ladder(None)
+        assert fee_pct_for_holding(0, ladder) == 1.5
+        assert fee_pct_for_holding(3, ladder) == 1.5
+        assert fee_pct_for_holding(7, ladder) == 0.5      # 上界不含：满 7 天出惩罚档
+        assert fee_pct_for_holding(100, ladder) == 0.5
+        assert fee_pct_for_holding(365, ladder) == 0.25
+        assert fee_pct_for_holding(400, ladder) == 0.25
+        assert fee_pct_for_holding(None, ladder) is None   # 未知 ≠ 0 天
+
+    def test_days_to_next_tier(self):
+        from backend.ai.holding_fee import days_to_next_fee_tier, parse_fee_ladder
+        ladder = parse_fee_ladder(None)
+        assert days_to_next_fee_tier(3, ladder) == 4
+        assert days_to_next_fee_tier(100, ladder) == 265
+        assert days_to_next_fee_tier(400, ladder) == 0     # 已在最低档
+        assert days_to_next_fee_tier(None, ladder) == 0
+
+    def test_ladder_text_and_holding_days(self):
+        from backend.ai.holding_fee import holding_days_between, ladder_text, parse_fee_ladder
+        assert ladder_text(parse_fee_ladder(None)) == "<7天 1.5% / <365天 0.5% / ≥365天 0.25%"
+        assert holding_days_between(date(2026, 9, 1), date(2026, 9, 10)) == 9
+        assert holding_days_between(date(2026, 9, 10), date(2026, 9, 1)) == 0
+        assert holding_days_between(None, date(2026, 9, 10)) is None
+
+    def test_parse_date_flex(self):
+        from backend.ai.holding_fee import parse_date_flex
+        assert parse_date_flex("2026-09-01") == date(2026, 9, 1)
+        assert parse_date_flex("2026/9/1") == date(2026, 9, 1)
+        assert parse_date_flex("2026年9月1日") == date(2026, 9, 1)
+        assert parse_date_flex("20260901") == date(2026, 9, 1)
+        assert parse_date_flex("2026-13-40") is None       # 不猜：越界日期算未填
+        assert parse_date_flex("持有中") is None and parse_date_flex("") is None
+
+
+class TestPositionWeights:
+    @pytest.mark.asyncio
+    async def test_no_cache_uses_cost_market_and_flags_sentinel_gone(self, db_session, clean_nav_cache):
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000, 2.0)     # 成本市值 2000
+        _seed_position(db_session, funds["011452"], 500, 4.0)      # 成本市值 2000
+        await db_session.commit()
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        h = {x["code"]: x for x in rpt.holdings}
+        # 旧哨兵口径下漏填成本的那只会被压成 ≈0.006%；这里必须是真实市值比
+        assert h["004011"]["weight_pct"] == pytest.approx(50.0)
+        assert h["011452"]["weight_pct"] == pytest.approx(50.0)
+        assert {x["weight_basis"] for x in rpt.holdings} == {"cost"}
+        gap = next(c for c in rpt.caveats if "组合权重口径" in c)
+        assert "004011" in gap and "011452" in gap and "按成本市值" in gap
+
+    @pytest.mark.asyncio
+    async def test_cached_nav_market_wins_over_cost(self, db_session, clean_nav_cache):
+        now, frs = clean_nav_cache
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000, 2.0)     # 缓存净值 3.0 → 3000
+        _seed_position(db_session, funds["011452"], 500, 4.0)      # 无缓存 → 成本 2000
+        await db_session.commit()
+        frs._estimate_cache["004011"] = (now(), {"code": "004011", "nav": 3.0})
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        h = {x["code"]: x for x in rpt.holdings}
+        assert h["004011"]["weight_pct"] == pytest.approx(60.0)
+        assert h["011452"]["weight_pct"] == pytest.approx(40.0)
+        assert h["004011"]["weight_basis"] == "market" and h["011452"]["weight_basis"] == "cost"
+        assert "市值（实时净值）1 只" in next(c for c in rpt.caveats if "组合权重口径" in c)
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_entry_is_ignored(self, db_session, clean_nav_cache):
+        now, frs = clean_nav_cache
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000, 2.0)
+        await db_session.commit()
+        frs._estimate_cache["004011"] = (now() - 8 * 86400, {"code": "004011", "nav": 9.9})
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        assert rpt.holdings[0]["weight_basis"] == "cost"
+
+    @pytest.mark.asyncio
+    async def test_no_cost_falls_back_to_share_proportional(self, db_session, clean_nav_cache):
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000)
+        _seed_position(db_session, funds["011452"], 500)
+        await db_session.commit()
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        h = {x["code"]: x for x in rpt.holdings}
+        # 份额比 2:1，但量纲是元：不会像 1.0 哨兵那样归一后 ≈0
+        assert h["004011"]["weight_pct"] == pytest.approx(66.7)
+        assert h["011452"]["weight_pct"] == pytest.approx(33.3)
+        assert {x["weight_basis"] for x in rpt.holdings} == {"shares"}
+        assert "既无净值也未填成本" in next(c for c in rpt.caveats if "组合权重口径" in c)
+
+
+class TestFeeGateInReport:
+    @pytest.mark.asyncio
+    async def test_punitive_fee_downgrades_sell_to_watch(self, db_session, clean_nav_cache):
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000, 2.0, date.today() - timedelta(days=3))
+        await db_session.commit()
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        assert [x["code"] for x in rpt.sells] == []      # 该卖但不值得卖
+        w = next(x for x in rpt.watch if x["code"] == "004011")
+        assert w["confirm_days"] == 4                     # 再持有 4 天出 1.5% 档
+        assert "持有 3 天" in w["reason"] and "赎回费 1.5%" in w["reason"]
+        assert "另有恶化佐证" in w["reason"]              # 降级不隐瞒恶化事实
+        assert w["holding_days"] == 3 and w["estimated_fee_pct"] == 1.5
+
+    @pytest.mark.asyncio
+    async def test_nonpunitive_fee_annotates_sell_and_swap(self, db_session, clean_nav_cache):
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000, 2.0, date.today() - timedelta(days=100))
+        await db_session.commit()
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        assert [x["code"] for x in rpt.sells] == ["004011"]
+        assert rpt.sells[0]["reasons"][-1] == "持有 100 天，适用赎回费 0.5%"
+        assert rpt.sells[0]["estimated_fee_pct"] == 0.5
+        assert rpt.swaps[0]["sell_fee_pct"] == 0.5 and rpt.swaps[0]["sell_holding_days"] == 100
+        assert "赎回费阶梯：<7天 1.5%" in rpt.summary_md()
+
+    @pytest.mark.asyncio
+    async def test_missing_first_buy_date_says_unknown_not_zero(self, db_session, clean_nav_cache):
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000, 2.0)
+        await db_session.commit()
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        # 默认 0 天 = 1.5% 惩罚档 = 所有建议被拦掉，裁定明确禁止
+        assert [x["code"] for x in rpt.sells] == ["004011"]
+        assert "持有期未知" in rpt.sells[0]["reasons"][-1]
+        assert rpt.sells[0]["holding_days"] is None and rpt.sells[0]["estimated_fee_pct"] is None
+        assert "未填首次买入日" in next(c for c in rpt.caveats if "持有期" in c)
+
+    @pytest.mark.asyncio
+    async def test_rollback_switch_removes_fee_from_worklist(self, db_session, clean_nav_cache):
+        from backend.models.system_config import SystemConfig
+        db_session.add(SystemConfig(config_key="quality_filter_config",
+                                    config_value='{"redemption_fee_enabled": 0}'))
+        funds = await _seed_rebalance_pool(db_session)
+        _seed_position(db_session, funds["004011"], 1000, 2.0, date.today() - timedelta(days=3))
+        await db_session.commit()
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        assert rpt.fee_policy["enabled"] is False
+        assert [x["code"] for x in rpt.sells] == ["004011"]     # 回到旧工单
+        assert not any("赎回费" in t for t in rpt.sells[0]["reasons"])
+        assert rpt.sells[0]["holding_days"] is None
+        assert "已关闭（redemption_fee_enabled=0）" in rpt.summary_md()
+
+    @pytest.mark.asyncio
+    async def test_pool_mode_has_no_holding_period_claims(self, db_session, clean_nav_cache):
+        await _seed_rebalance_pool(db_session)
+        from backend.ai.rebalance import RebalanceService
+        rpt = await RebalanceService(db_session).analyze(window_days=30, otc_status_map={})
+        assert rpt.sells and rpt.sells[0]["holding_days"] is None
+        assert rpt.sells[0]["reasons"][1].startswith("窗口内因子分总和恶化")
+        assert not any("未填首次买入日" in c for c in rpt.caveats)

@@ -1218,6 +1218,33 @@ class FundRealtimeService:
             FundRealtimeService._snapshot_estimate(data),
         )
 
+    @classmethod
+    def peek_cached_nav(cls, codes: list[str],
+                        max_age_seconds: Optional[float] = None) -> dict[str, dict]:
+        """只读估值缓存 —— **绝不触发上游请求**（Q10 权重口径的红线）
+
+        调仓权重需要"最新净值"来反映浮盈浮亏，但为权重逐只拉净值等于给每轮分析
+        凭空加 N 次上游调用，与防封禁预算直接冲突。所以这里只取已经算好的缓存：
+        仪表盘/详情页刚看过的那只命中，没看过就落空，由调用方回退到成本市值。
+
+        Args:
+            codes: 基金代码列表
+            max_age_seconds: 新鲜度上限，None = 不限（权重不需要 180s 精度）。
+                过老的条目多半说明估值链路已断，回退成本市值更诚实。
+        Returns:
+            {code: 估值副本} — 未命中或超龄的代码不出现在结果里
+        """
+        now = time.time()
+        out: dict[str, dict] = {}
+        for code in codes:
+            hit = cls._estimate_cache.get(str(code))
+            if not hit:
+                continue
+            if max_age_seconds is not None and now - hit[0] > max_age_seconds:
+                continue
+            out[str(code)] = cls._copy_estimate(hit[1])
+        return out
+
     # ── 报告项：前十大持仓涨跌 ──────────────────────────────────────────
 
     async def get_top10_changes(self, fund_id: int) -> list[dict]:

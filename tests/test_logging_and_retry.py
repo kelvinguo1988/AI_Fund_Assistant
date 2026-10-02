@@ -652,7 +652,7 @@ class TestFillFundSizeSzse:
             captured.update(kwargs)
             return self._fake_df()
 
-        fd = FundData(code="159915")
+        fd = FundData(code="159915", close=2.0)
         with patch.object(AKShareAdapter, "_call", new=fake_call):
             await AKShareAdapter()._fill_fund_size("159915", fd)
 
@@ -667,6 +667,24 @@ class TestFillFundSizeSzse:
         # 取按日期升序的最后 4 期
         assert len(fd.fund_size_history) == 4
         assert fd.fund_size_history == sorted(fd.fund_size_history, reverse=True)
+        # Q13 量纲：接口给的是份额（份），落库必须是 份额 × 净值 = 元，
+        # 否则 calculate_size_stability 的 2e8~5e9（元）档位永远命中不了
+        assert fd.fund_size_history == [8_000_000.0, 6_000_000.0, 4_000_000.0, 2_000_000.0]
+
+    @pytest.mark.asyncio
+    async def test_no_nav_does_not_store_raw_shares(self):
+        """无净值可折算时宁可不填，也不能把"份"当"元"写进规模序列"""
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        from backend.data_sources.base import FundData
+
+        async def fake_call(*args, **kwargs):
+            return self._fake_df()
+
+        fd = FundData(code="159915")  # close 缺失
+        with patch.object(AKShareAdapter, "_call", new=fake_call):
+            await AKShareAdapter()._fill_fund_size("159915", fd)
+
+        assert fd.fund_size_history == []
 
     @pytest.mark.asyncio
     async def test_non_szse_code_skips_network(self):

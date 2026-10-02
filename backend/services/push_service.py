@@ -351,6 +351,7 @@ class PushService:
                                 top10_changes=top10_changes,
                                 top10_quote_time=top10_quote_time,
                                 fund_daily_change=realtime_map.get(r.fund_code),
+                                pool_size=r.pool_size,
                             )
 
                             success = await pusher.send_analysis_report(

@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import type { ApiResponse, AnalysisResultOut, MarketSummaryOut, MarketRegimeOut } from '../types';
+import type { ApiResponse, AnalysisResultOut, MarketSummaryOut, MarketRegimeOut, ShadowConfig, ShadowDivergence } from '../types';
 
 const BASE = '/api/analysis';
 
@@ -27,6 +27,17 @@ export const analysisApi = {
   /** 市场环境快照（估值分位/情绪/资金面，后端缓存 1 小时） */
   marketRegime: () =>
     apiClient.get<ApiResponse<MarketRegimeOut>>(`${BASE}/market-regime`, { timeout: 60000 }).then((r) => r.data),
+
+  /** 影子评分开关与变体（§3：新口径只写 shadow_* 列） */
+  shadowConfig: () =>
+    apiClient.get<ApiResponse<ShadowConfig>>(`${BASE}/shadow-config`).then((r) => r.data),
+
+  updateShadowConfig: (body: { enabled?: boolean; variant?: string }) =>
+    apiClient.put<ApiResponse<ShadowConfig>>(`${BASE}/shadow-config`, body).then((r) => r.data),
+
+  /** 近 N 个有影子数据的交易日的口径分歧报表（纯本地查询） */
+  shadowDivergence: (days: number = 10) =>
+    apiClient.get<ApiResponse<ShadowDivergence>>(`${BASE}/shadow-divergence`, { params: { days } }).then((r) => r.data),
 
   trigger: (fundIds?: number[]) =>
     apiClient.post<ApiResponse<AnalysisResultOut[]>>(`${BASE}/trigger`, {

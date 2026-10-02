@@ -68,6 +68,9 @@ class FactorOut(BaseModel):
     status: str
     sort_order: int
     weight_percentage: float = 0.0  # 计算字段
+    # 计算字段：该因子的 signal_rules 是否真的参与打分。
+    # False 时前端禁用规则编辑器并提示"由计算函数/z 分档决定"（Q13 死配置）
+    signal_rules_effective: bool = True
 
     _parse_params = field_validator("params", mode="before")(_try_parse_json)
     _parse_data_fields = field_validator("data_fields", mode="before")(_try_parse_json)

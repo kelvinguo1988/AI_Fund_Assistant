@@ -1,0 +1,70 @@
+name: CI — 测试与构建
+
+# Q14（第二批 2D）：此前本仓只有 docker-publish.yml，全仓 `run:` 出现 0 次 ——
+# 也就是说 CI 只构建镜像，从不跑测试；700+ 项测试全靠本地手动执行，
+# "注释与实现相反""前端构建被类型错误阻断"这类问题没有任何自动防线。
+# 这里只补两条最小闸门：后端 pytest、前端 tsc && vite build。
+# 静态检查（lint / 类型 / eslint）按 Q14b 单独决策，不在本闸门内。
+# 回滚路径：删掉本文件即可，不影响本地与生产。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # 与 backend/Dockerfile 的 python:3.9-slim 对齐，避免 CI 绿、生产炸
+          python-version: "3.9"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      # 测试红线：零真实上游请求（tests/conftest.py 的 autouse fixture 屏蔽重接口，
+      # 其余用例自行 mock），所以这里既不需要密钥也不需要 .env —— config.py 全有默认值。
+      - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m pytest -q
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # 与 frontend/Dockerfile 的 node:20-alpine 对齐
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # package.json scripts.build = "tsc && vite build" → 类型检查顺带一起跑
+      - name: Build
+        run: npm run build

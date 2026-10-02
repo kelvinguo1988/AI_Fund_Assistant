@@ -2,6 +2,10 @@
 
 方法论（场外基金业界通行评估，映射到本系统已落库数据）：
 - 因子层：逐日截面 RankIC / IC（vs T+h 前瞻净值收益）、IR = IC均值/IC标准差、覆盖度
+  · Q12（2026-10-02）：horizon=h 的 T+h 前瞻收益在相邻交易日重叠 h-1 天，按每日计数会把
+    IR 放大 √h 倍。因此 IC 序列默认**每 h 个交易日取一个非重叠样本**（`overlapping_ic=True`
+    回退旧行为），并额外给出 `ic_n_eff`（独立周期数）、`rank_ic_ir_annualized`、
+    双尾 p 值与同窗口多因子的 Benjamini–Hochberg q 值 —— 诊断结论必须带这三个口径。
 - 评分层：全池按 weighted_score 五分位的前瞻收益单调性（评分是否真的排序有效）
 - 信号层：buy/sell 相对同日池均值的超额胜率、平均超额、翻转(whipsaw)次数
 - 质量层：original_score vs weighted_score 修正差；有/无 quality_warnings 两组后续收益差
@@ -28,6 +32,8 @@ from backend.utils.timezone import beijing_today
 logger = logging.getLogger(__name__)
 
 MIN_CROSS_SECTION = 5      # 与截面标准化同口径：有效样本 <5 的交易日不参与 IC
+MIN_IC_PERIODS_FOR_CONCLUSION = 8   # Q12：非重叠周期少于此数 → 只出过程不出"哪个因子更好"的结论
+TRADING_DAYS_PER_YEAR = 252
 NavSeries = list[tuple[str, float]]  # [(YYYY-MM-DD, nav)] 升序
 
 # 注入式净值提供者：async (code, period_days) -> Optional[NavSeries]
@@ -86,16 +92,117 @@ def spearman(xs: list[float], ys: list[float]) -> Optional[float]:
     return pearson(list(_rank(np.asarray(xs, float))), list(_rank(np.asarray(ys, float))))
 
 
+def _betacf(a: float, b: float, x: float, itmax: int = 300, eps: float = 3e-12) -> float:
+    """不完全贝塔函数的连分式（Lentz 算法），供 t 分布双尾 p 值用"""
+    tiny = 1e-300
+    qab, qap, qam = a + b, a + 1.0, a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < tiny:
+        d = tiny
+    d = 1.0 / d
+    h = d
+    for m in range(1, itmax + 1):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < tiny:
+            d = tiny
+        c = 1.0 + aa / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < tiny:
+            d = tiny
+        c = 1.0 + aa / c
+        if abs(c) < tiny:
+            c = tiny
+        d = 1.0 / d
+        de = d * c
+        h *= de
+        if abs(de - 1.0) < eps:
+            break
+    return h
+
+
+def _betainc(a: float, b: float, x: float) -> float:
+    """正则化不完全贝塔 I_x(a,b)"""
+    import math
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    ln_front = (math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b)
+                + a * math.log(x) + b * math.log(1.0 - x))
+    front = math.exp(ln_front)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * _betacf(a, b, x) / a
+    return 1.0 - front * _betacf(b, a, 1.0 - x) / b
+
+
+def t_two_sided_p(t_stat: float, df: int) -> Optional[float]:
+    """Student-t 双尾 p 值：p = I_{df/(df+t²)}(df/2, 1/2)；df<=0 时无定义"""
+    import math
+    if df <= 0 or not math.isfinite(t_stat):
+        return None
+    x = df / (df + float(t_stat) * float(t_stat))
+    return max(0.0, min(1.0, _betainc(df / 2.0, 0.5, x)))
+
+
+def ic_p_value(ic_series: list[float]) -> Optional[float]:
+    """IC 序列均值 ≠ 0 的双尾 p 值（单样本 t 检验）；n<2 或方差为 0 → None"""
+    import math
+    n = len(ic_series)
+    if n < 2:
+        return None
+    arr = np.asarray(ic_series, float)
+    sd = float(arr.std(ddof=1))
+    if sd <= 0:
+        return None
+    return t_two_sided_p(float(arr.mean()) / (sd / math.sqrt(n)), n - 1)
+
+
+def benjamini_hochberg(pvals: list[Optional[float]]) -> list[Optional[float]]:
+    """同窗口多因子的多重比较校正（BH step-up，返回 q 值，单调且不超 1）
+
+    11 个因子在同一个 horizon 上各算一个 p，取其中"最大"的那个接近取噪声极值 ——
+    不校正就等于默许多重比较。None（样本不足）原样保留，不参与排名。
+    """
+    idx = [i for i, p in enumerate(pvals) if p is not None]
+    out: list[Optional[float]] = [None] * len(pvals)
+    m = len(idx)
+    if m == 0:
+        return out
+    order = sorted(idx, key=lambda i: pvals[i])          # 升序
+    prev = 1.0
+    for rank, i in enumerate(reversed(order), start=1):  # 从最大 p 往回，保证单调
+        k = m - rank + 1                                 # 该 p 的升序名次
+        q = min(prev, pvals[i] * m / k)
+        out[i] = round(min(1.0, q), 6)
+        prev = out[i]
+    return out
+
+
 @dataclass
 class FactorIcStats:
     factor: str
     horizon: int
     ic_mean: Optional[float] = None
     rank_ic_mean: Optional[float] = None
-    rank_ic_ir: Optional[float] = None       # rank_ic 均值 / 标准差
+    rank_ic_ir: Optional[float] = None       # rank_ic 均值 / 标准差（按**非重叠周期**计）
     rank_ic_positive_ratio: Optional[float] = None
-    days: int = 0                            # 参与计算的有效交易日数
+    days: int = 0                            # 实际用于均值/IR 的周期数（非重叠 = 独立周期数）
     avg_pairs: float = 0.0                   # 日均有效样本
+    # ── Q12 口径三件套 ──
+    n_days_valid: int = 0                    # 满足最小截面的交易日数（重叠口径下的原始长度）
+    sampling: str = "non_overlapping"        # non_overlapping | overlapping（回退开关）
+    rank_ic_ir_annualized: Optional[float] = None
+    rank_ic_p_value: Optional[float] = None  # 双尾 t 检验：IC 均值 ≠ 0
+    rank_ic_q_bh: Optional[float] = None     # 同窗口全因子 BH 校正后的 q 值（由 audit 回填）
+    significant: Optional[bool] = None       # q < 0.05；None = 样本或方差不足以检验
 
     def to_dict(self) -> dict:
         return {
@@ -104,6 +211,11 @@ class FactorIcStats:
             "rank_ic_ir": _r4(self.rank_ic_ir),
             "rank_ic_positive_ratio": _r4(self.rank_ic_positive_ratio),
             "days": self.days, "avg_pairs": round(self.avg_pairs, 1),
+            "n_days_valid": self.n_days_valid, "sampling": self.sampling,
+            "rank_ic_ir_annualized": _r4(self.rank_ic_ir_annualized),
+            "rank_ic_p_value": _r4(self.rank_ic_p_value),
+            "rank_ic_q_bh": _r4(self.rank_ic_q_bh),
+            "significant": self.significant,
         }
 
 
@@ -111,14 +223,21 @@ def _r4(v) -> Optional[float]:
     return None if v is None else round(float(v), 4)
 
 
-def daily_ic(samples_by_date: dict[str, dict[str, tuple[float, float]]],
-             factor: str, horizon: int) -> FactorIcStats:
-    """samples_by_date: {date: {factor: [(score, fwd_return), ...]}}（已过滤 None 与不足样本）"""
-    st = FactorIcStats(factor=factor, horizon=horizon)
+def daily_ic(samples_by_date: dict[str, dict[str, list[tuple[float, float]]]],
+             factor: str, horizon: int, overlapping: bool = False) -> FactorIcStats:
+    """samples_by_date: {date: {factor: [(score, fwd_return), ...]}}（已过滤 None 与不足样本）
+
+    Q12：T+h 的前瞻收益在相邻交易日重叠 h-1 天，逐日算 IC 会让序列强自相关、IR 虚高 √h 倍。
+    默认每 `horizon` 个有效交易日取一个样本（非重叠）；`overlapping=True` 回退旧的逐日口径。
+    """
+    st = FactorIcStats(
+        factor=factor, horizon=horizon,
+        sampling="overlapping" if overlapping else "non_overlapping",
+    )
     ics, rics = [], []
     pair_counts = []
-    for _, fmap in samples_by_date.items():
-        pairs = fmap.get(factor)
+    for d in sorted(samples_by_date):        # 日期升序：非重叠抽样必须是等距时间抽样
+        pairs = samples_by_date[d].get(factor)
         if not pairs or len(pairs) < MIN_CROSS_SECTION:
             continue
         xs = [p[0] for p in pairs]
@@ -128,15 +247,26 @@ def daily_ic(samples_by_date: dict[str, dict[str, tuple[float, float]]],
             ics.append(ic)
             rics.append(ric)
             pair_counts.append(len(pairs))
+    st.n_days_valid = len(rics)
+    if not overlapping and horizon > 1 and rics:
+        step = int(horizon)
+        keep = range(0, len(rics), step)
+        ics = [ics[i] for i in keep]
+        rics = [rics[i] for i in keep]
+        pair_counts = [pair_counts[i] for i in keep]
     st.days = len(rics)
     if rics:
         ra = np.asarray(rics)
         ia = np.asarray(ics)
         st.ic_mean = float(ia.mean())
         st.rank_ic_mean = float(ra.mean())
-        st.rank_ic_ir = float(ra.mean() / ra.std()) if ra.std() > 0 else None
+        if ra.std() > 0:
+            st.rank_ic_ir = float(ra.mean() / ra.std())
+            # 一个周期 = horizon 个交易日 → 年化倍率 √(252/horizon)
+            st.rank_ic_ir_annualized = st.rank_ic_ir * float(np.sqrt(TRADING_DAYS_PER_YEAR / horizon))
         st.rank_ic_positive_ratio = float((ra > 0).mean())
         st.avg_pairs = float(np.mean(pair_counts))
+        st.rank_ic_p_value = ic_p_value([float(v) for v in rics])
     return st
 
 
@@ -223,6 +353,7 @@ class FactorAuditReport:
     whipsaw_top: list[dict] = field(default_factory=list)
     quality_group_compare: Optional[dict] = None             # 警告组对照
     correction_effect: Optional[dict] = None                 # original→final 修正统计
+    ic_sampling: str = "non_overlapping"                     # Q12：IC 序列采样口径
     caveats: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -234,13 +365,29 @@ class FactorAuditReport:
             f"样本：{self.rows_total} 行 / {self.funds_total} 只（净值可用 {self.funds_with_nav} 只）",
             "",
             "## 因子 RankIC（截面，vs 前瞻净值收益）",
-            "| 因子 | 窗口(日) | RankIC均值 | IR | 为正占比 | 有效天数 | 日均样本 |",
-            "|---|---|---|---|---|---|---|",
+        ]
+        # Q12：先说清 IR 的分母，否则"IR=1.2"会被当成可下结论的强度
+        periods = {}
+        for f in self.factor_ic:
+            periods.setdefault(f["horizon"], []).append(f.get("days") or 0)
+        caliber = "，".join(
+            f"T+{h} 的 IR 基于 {max(v)} 个{'非重叠' if self.ic_sampling == 'non_overlapping' else '逐日重叠'}周期"
+            for h, v in sorted(periods.items())
+        )
+        lines.append(
+            f"> {caliber or '无非重叠周期'}；p 值为 IC 均值≠0 的双尾 t 检验，"
+            "q 为同窗口全因子 Benjamini–Hochberg 校正后的假发现率（q<0.05 才标 ✓）。"
+        )
+        lines += [
+            "| 因子 | 窗口(日) | RankIC均值 | IR | IR年化 | 独立周期 | 为正占比 | p | q(BH) | 显著 | 日均样本 |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for f in sorted(self.factor_ic, key=lambda x: -(x["rank_ic_mean"] if x["rank_ic_mean"] is not None else -9)):
+            sig = "—" if f.get("significant") is None else ("✓" if f.get("significant") else "✗")
             lines.append(
                 f"| {f['factor']} | {f['horizon']} | {f['rank_ic_mean']} | {f['rank_ic_ir']} "
-                f"| {f['rank_ic_positive_ratio']} | {f['days']} | {f['avg_pairs']} |"
+                f"| {f.get('rank_ic_ir_annualized')} | {f.get('days')} | {f['rank_ic_positive_ratio']} "
+                f"| {f.get('rank_ic_p_value')} | {f.get('rank_ic_q_bh')} | {sig} | {f['avg_pairs']} |"
             )
         for h, buckets in self.score_quintiles.items():
             lines += [f"", f"## 评分五分位前瞻收益（T+{h}，%）",
@@ -287,7 +434,9 @@ class FactorAuditService:
         days: int = 90,
         horizons: tuple[int, ...] = (5, 20),
         fund_codes: Optional[list[str]] = None,
+        overlapping_ic: bool = False,
     ) -> FactorAuditReport:
+        """overlapping_ic=True 回退 Q12 之前的逐日重叠 IC 口径（仅作对照/回滚用）"""
         start = beijing_today() - timedelta(days=int(days))
         stmt = (
             select(AnalysisResult, Fund.code)
@@ -364,8 +513,20 @@ class FactorAuditService:
             ]
             report.score_quintiles[str(h)] = quintile_returns(score_fwd[h])
             factors = sorted({f for fmap in samples[h].values() for f in fmap})
-            for f in factors:
-                report.factor_ic.append(daily_ic(samples[h], f, h).to_dict())
+            stats = [daily_ic(samples[h], f, h, overlapping=overlapping_ic) for f in factors]
+            # 同窗口 m 个因子各出一个 p 值 → 不校正等于默许多重比较
+            for st, q in zip(stats, benjamini_hochberg([s.rank_ic_p_value for s in stats])):
+                st.rank_ic_q_bh = q
+                st.significant = None if q is None else bool(q < 0.05)
+            report.factor_ic += [st.to_dict() for st in stats]
+            n_eff = max((s.days for s in stats), default=0)
+            report.ic_sampling = ("overlapping" if overlapping_ic else "non_overlapping")
+            if stats and n_eff < MIN_IC_PERIODS_FOR_CONCLUSION:
+                report.caveats.append(
+                    f"horizon={h} 在 {days} 天窗口内只有 {n_eff} 个非重叠周期"
+                    f"（< {MIN_IC_PERIODS_FOR_CONCLUSION}）：RankIC 排序接近噪声，"
+                    "不要据此调整因子权重；如需结论请把 days 拉长到 ≥ 3×horizon"
+                )
             if warn_vals[h][0] and warn_vals[h][1] and h == horizons[0]:
                 report.quality_group_compare = {
                     "horizon": h, **group_compare(warn_vals[h][0], warn_vals[h][1]),

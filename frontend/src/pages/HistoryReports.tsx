@@ -24,10 +24,11 @@ import {
   Alert,
   Checkbox,
   FormControlLabel,
+  Tooltip,
 } from '@mui/material';
 import { Visibility as ViewIcon, Download as DownloadIcon, Upload as UploadIcon } from '@mui/icons-material';
 import SignalIndicator from '../components/SignalIndicator';
-import { STRENGTH_LABELS } from '../utils/format';
+import { STRENGTH_LABELS, scoreCaliberNote } from '../utils/format';
 import { analysisApi } from '../api/analysis';
 import type { AnalysisResultOut } from '../types';
 
@@ -115,7 +116,11 @@ const HistoryReports: React.FC = () => {
               <TableCell>日期</TableCell>
               <TableCell>基金代码</TableCell>
               <TableCell>基金名称</TableCell>
-              <TableCell>评分</TableCell>
+              <TableCell>
+                <Tooltip title="同一个分值在不同日期、不同池规模下含义不同，跨期比较请看列内提示与净值涨幅">
+                  <span>评分(池内相对分)</span>
+                </Tooltip>
+              </TableCell>
               <TableCell>信号</TableCell>
               <TableCell>强度</TableCell>
               <TableCell>操作</TableCell>
@@ -127,7 +132,11 @@ const HistoryReports: React.FC = () => {
                 <TableCell>{r.analysis_date}</TableCell>
                 <TableCell>{r.fund_code}</TableCell>
                 <TableCell>{r.fund_name}</TableCell>
-                <TableCell>{r.weighted_score}</TableCell>
+                <TableCell>
+                  <Tooltip title={scoreCaliberNote(r.pool_size)}>
+                    <span>{r.weighted_score}</span>
+                  </Tooltip>
+                </TableCell>
                 <TableCell>
                   <SignalIndicator direction={r.signal_direction} size={10} showLabel />
                 </TableCell>
@@ -154,6 +163,9 @@ const HistoryReports: React.FC = () => {
             <Box sx={{ mt: 1 }}>
               <Typography variant="subtitle1" gutterBottom>
                 日期: {selectedResult.analysis_date} | 评分: {selectedResult.weighted_score}
+                <Typography component="span" variant="body2" sx={{ color: 'text.secondary', ml: 1 }}>
+                  — {scoreCaliberNote(selectedResult.pool_size)}
+                </Typography>
               </Typography>
               <Typography variant="subtitle1" gutterBottom>
                 信号: <SignalIndicator direction={selectedResult.signal_direction} size={10} /> |

@@ -39,6 +39,24 @@ class BacktestResult(Base):
     sell_effectiveness: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     effectiveness_rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # ── 2026-10-02 第二批 Q6：三条基线 / 样本下限 / 选择偏差标注 ──
+    # 三条基线与两个超额口径（excess_return 仍是对满仓持有的差值，保留兼容）
+    baseline_buy_hold: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    baseline_static_half: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    excess_vs_static_half: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 非 hold 信号天数 + 信号覆盖交易日占比
+    signal_count_non_hold: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    signal_coverage_ratio: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # 样本不足 → 只有 caveat，没有结论
+    low_sample: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    caveat: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # 回测区间真实起点（= 首次被分析的交易日）与该时点池子规模
+    coverage_start_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    coverage_days: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    pool_size_at: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # 本行结果使用的仓位口径（1=仓位延续 / 0=旧行为），便于跨轮比较时识别口径
+    carry_position: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
     # 该基金回测完成时间（逐只更新，批量页展示）
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     # 单只失败原因（成功为空）

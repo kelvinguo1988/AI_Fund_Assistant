@@ -136,3 +136,60 @@ def get_trading_days_between(start_date: date, end_date: date) -> list[date]:
             trading_days.append(current)
         current += timedelta(days=1)
     return trading_days
+
+
+def count_missing_trading_days(
+    nav_date: date,
+    today: date,
+    off_days: frozenset = frozenset(),
+    max_lookback: int = 400,
+) -> int:
+    """净值披露缺口：`(nav_date, today)` **开区间**内 A 股应开市的日子数
+
+    两端都不计：`nav_date` 当天已披露自然不算滞后；`today` 当天的净值通常晚间才发，
+    所以"最新净值 = 上一交易日"恒为 0，不会被误判成滞后一天。
+
+    口径与 `is_a_share_trading_day_async` 一致：周末一律休市（调休补班的周六股市
+    并不开市），`off_days`（holiday_calendar 里 is_off_day=True 的日期）剔除。
+    表为空时 `off_days` 为空集，退化为"周一至周五"——缺口只会算多不会算少，
+    方向上偏保守（宁可标注也不会把停披的基金放过去）。
+    """
+    if nav_date >= today:
+        return 0
+    missing = 0
+    current = nav_date + timedelta(days=1)
+    for _ in range(max_lookback):
+        if current >= today:
+            break
+        if current.weekday() < 5 and current not in off_days:
+            missing += 1
+        current += timedelta(days=1)
+    return missing
+
+
+async def load_off_day_dates(session, start: date, end: date) -> frozenset:
+    """`[start, end]` 内的休市日集合（holiday_calendar 单次查询，零上游请求）"""
+    try:
+        from sqlalchemy import select
+
+        from backend.models.holiday_calendar import HolidayCalendar
+
+        rows = (
+            await session.execute(
+                select(HolidayCalendar.holiday_date).where(
+                    HolidayCalendar.holiday_date >= start.isoformat(),
+                    HolidayCalendar.holiday_date <= end.isoformat(),
+                    HolidayCalendar.is_off_day.is_(True),
+                )
+            )
+        ).scalars().all()
+        result = set()
+        for raw in rows:
+            try:
+                result.add(date.fromisoformat(str(raw)[:10]))
+            except ValueError:
+                continue
+        return frozenset(result)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"holiday_calendar 休市日读取失败，按周一至周五计: {e}")
+        return frozenset()

@@ -102,6 +102,8 @@ export interface FactorOut {
   status: string;
   sort_order: number;
   weight_percentage: number;
+  /** false = 该因子的计算函数不读 signal_rules（得分由 z 分档/内嵌逻辑决定），规则编辑无效 */
+  signal_rules_effective?: boolean;
 }
 
 /** 因子导出载体 */
@@ -129,6 +131,9 @@ export interface BacktestPoint {
   signal_strength: string | null;
   weighted_score: number | null;
   signal_effectiveness: number | null;
+  // Q6 口径可视化：当日实际生效仓位 + 静态半仓基线
+  position_applied?: number | null;
+  baseline_static_half?: number | null;
 }
 
 export interface BacktestSummary {
@@ -137,6 +142,7 @@ export interface BacktestSummary {
   period: number;
   total_nav_return: number;
   total_strategy_return: number;
+  /** 策略 − 满仓买入持有（上涨市里主要由半仓敞口决定，不是信号能力） */
   excess_return: number;
   max_drawdown: number;
   signal_count: number;
@@ -146,6 +152,19 @@ export interface BacktestSummary {
   buy_effectiveness: number | null;
   sell_effectiveness: number | null;
   effectiveness_rate: number | null;
+  // ── Q6：三条基线 / 样本下限 / 选择偏差标注 ──
+  baseline_buy_hold?: number;
+  baseline_static_half?: number;
+  /** 头号指标：策略 − 静态半仓（"什么都不做"基准） */
+  excess_vs_static_half?: number;
+  signal_count_non_hold?: number;
+  signal_coverage_ratio?: number;
+  low_sample?: boolean;
+  caveat?: string | null;
+  coverage_start_date?: string | null;
+  coverage_days?: number;
+  pool_size_at?: number | null;
+  carry_position?: boolean;
   points: BacktestPoint[];
 }
 
@@ -256,6 +275,10 @@ export interface AnalysisResultOut {
   original_score?: number | null;
   dynamic_buy_threshold?: number | null;
   quality_warnings?: string[] | null;
+  /** Q9：本次评分依据的最新净值日期（与 analysis_date 的差 = 披露缺口；旧数据 null） */
+  nav_as_of_date?: string | null;
+  /** Q5：本轮参与截面标准化的基金数 —— weighted_score 是池内相对分，旧数据 null */
+  pool_size?: number | null;
 }
 
 /* ── AI 对话 ─────────────────────────────────────────────────────── */
@@ -612,4 +635,84 @@ export interface IndexValuation {
   zone: '低估' | '合理' | '高估' | string;
   advice: string;
   updated: string;
+}
+
+/* ── 影子评分（§3 新旧口径分歧报表）─────────────────────────────────── */
+export interface ShadowConfig {
+  enabled: boolean;
+  /** 生效的变体名（空串 = 注册表为空，即当前没有可对比的口径） */
+  variant: string;
+  requested_variant: string;
+  registered: string[];
+  /** 变体名 → 一句话口径说明（后端注册表带的，读分歧数字时要知道这列是哪套口径） */
+  variant_descriptions?: Record<string, string>;
+  /** 2C 口径自身的参数（生效值 + 默认值 + 越界标记），只影响影子列 */
+  caliber_params?: ShadowCaliberParam[];
+  divergence_threshold_pct: number;
+  stable_days_required: number;
+}
+
+export interface ShadowCaliberParam {
+  key: string;
+  label: string;
+  value: number;
+  default: number;
+  min: number;
+  max: number;
+  governs: string;
+  note?: string;
+  out_of_range: boolean;
+}
+
+export interface ShadowDailyRow {
+  date: string;
+  rows: number;
+  shadow_rows: number;
+  divergent: number;
+  divergence_pct: number;
+  /** 新口径判"覆盖率不足、本轮不落库"的行数（含义是记录消失，不是观望） */
+  skip_rows: number;
+  avg_delta: number | null;
+  max_abs_delta: number | null;
+  big_delta: number;
+  migration: Record<string, number>;
+  variants: string[];
+  pool_size: number | null;
+  coverage: number | null;
+  low_sample: boolean;
+}
+
+export interface ShadowDivergence {
+  window_days: number;
+  divergence_threshold_pct: number;
+  stable_days_required: number;
+  shadow_enabled: boolean;
+  active_variant: string;
+  registered_variants: string[];
+  daily: ShadowDailyRow[];
+  migration: Record<string, number>;
+  buckets: Record<string, {
+    label: string;
+    rows: number;
+    divergent: number;
+    divergence_pct: number;
+    avg_delta: number | null;
+    migration: Record<string, number>;
+  }>;
+  variants: Record<string, { rows: number; first_date: string; last_date: string }>;
+  summary: {
+    days_with_shadow?: number;
+    shadow_rows?: number;
+    divergent?: number;
+    divergence_pct?: number;
+    skip_rows?: number;
+    avg_divergence_pct?: number;
+    stable_days?: number;
+    migration?: Record<string, number>;
+    buy_to_other?: number;
+    sell_to_other?: number;
+  };
+  caveats: string[];
+  meets_ratio_criterion: boolean;
+  conclusion: string;
 }

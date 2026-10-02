@@ -1,5 +1,5 @@
 /**
- * 评分配置页面 — 五档阈值编辑
+ * 评分配置页面 — 五档阈值编辑 + 影子评分口径分歧卡（§3）
  */
 
 import React, { useEffect, useState } from 'react';
@@ -10,6 +10,7 @@ import {
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, Save as SaveIcon } from '@mui/icons-material';
 import { systemApi } from '../api/system';
+import ShadowScoringCard from '../components/ShadowScoringCard';
 import type { ScoringTier } from '../types';
 
 const SIGNAL_DIRECTIONS = ['buy', 'hold', 'sell'] as const;
@@ -194,6 +195,10 @@ const ScoringConfig: React.FC = () => {
           );
         })}
       </Box>
+
+      <ShadowScoringCard
+        onNotify={(message, severity) => setSnackbar({ open: true, message, severity })}
+      />
 
       <Snackbar open={snackbar.open} autoHideDuration={4000} onClose={() => setSnackbar({ ...snackbar, open: false })}>
         <Alert severity={snackbar.severity}>{snackbar.message}</Alert>

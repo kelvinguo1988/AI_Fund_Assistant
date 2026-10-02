@@ -20,11 +20,15 @@ import re
 import time
 from typing import Optional
 
+from backend.utils.stats import percentile_rank_inclusive
+
 logger = logging.getLogger(__name__)
 
-# PE 分位区间（近一年，市场通行口径）
-LOW_THRESHOLD = 30.0
-HIGH_THRESHOLD = 70.0
+# PE 分位区间。命名带"仪表盘"是有意的（Q13）：这是展示用的低/高估分位线，
+# 与 quality_filter 里的"策略极端低/高估"（extreme_low/high_valuation_pct = 0.15/0.85）
+# 是两套不同用途的分区，数值接近但不是同一件事，改一边不影响另一边。
+DASHBOARD_PE_LOW_PERCENTILE = 30.0
+DASHBOARD_PE_HIGH_PERCENTILE = 70.0
 
 # 乐咕支持的指数 → 名称关键词（基金基准/名称匹配用）
 SUPPORTED_INDEXES: dict[str, list[str]] = {
@@ -36,9 +40,9 @@ SUPPORTED_INDEXES: dict[str, list[str]] = {
 
 
 def pe_zone(percentile: float) -> str:
-    if percentile < LOW_THRESHOLD:
+    if percentile < DASHBOARD_PE_LOW_PERCENTILE:
         return "低估"
-    if percentile > HIGH_THRESHOLD:
+    if percentile > DASHBOARD_PE_HIGH_PERCENTILE:
         return "高估"
     return "合理"
 
@@ -79,8 +83,6 @@ class IndexValuationService:
         if not force and now < cls._fail_until:
             return cls._cache or []
 
-        import numpy as np
-
         def _fetch_all():
             import akshare as ak
             out = []
@@ -92,8 +94,8 @@ class IndexValuationService:
                     if pe_series.empty:
                         continue
                     current_pe = float(pe_series.iloc[-1])
-                    # 近一年分位（序列本身约一年）
-                    percentile = float((pe_series < current_pe).mean() * 100)
+                    # 近一年分位（序列本身约一年）；口径统一走 percentile_rank_inclusive
+                    percentile = float(percentile_rank_inclusive(pe_series.tolist(), current_pe) or 0.0) * 100
                     out.append({
                         "index": index_name,
                         "pe": round(current_pe, 2),
@@ -101,9 +103,9 @@ class IndexValuationService:
                         "zone": pe_zone(percentile),
                         "advice": (
                             "低估区间——适合定投加码"
-                            if percentile < LOW_THRESHOLD
+                            if percentile < DASHBOARD_PE_LOW_PERCENTILE
                             else "高估区间——注意减投/止盈"
-                            if percentile > HIGH_THRESHOLD
+                            if percentile > DASHBOARD_PE_HIGH_PERCENTILE
                             else "合理区间——正常持有/定投"
                         ),
                         "updated": str(df["日期"].iloc[-1]),

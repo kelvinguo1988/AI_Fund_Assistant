@@ -131,7 +131,6 @@ class JoinQuantAdapter(BaseDataSource):
             fund_data.date = str(last_row.get("time", last_row.get("date", "")))
 
             if "volume" in df.columns:
-                fund_data.volume_history = df["volume"].astype(float).tolist()
                 fund_data.volume = float(df.iloc[-1]["volume"])
 
         except Exception as e:

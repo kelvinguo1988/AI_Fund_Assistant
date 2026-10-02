@@ -67,7 +67,9 @@ async def t_list_fund_pool(db, status: str = "active") -> list[dict]:
 
 @tool(
     "get_latest_signals",
-    "获取基金池最新一批分析信号：评分(±8.5)/方向/强度/建议/修正前原始分/动态阈值/质量警告。",
+    "获取基金池最新一批分析信号：评分(±8.5，**池内相对分**：由截面标准化因子加权而来，"
+    "只在当日这批基金内部可比，不能跨日/跨池比较，也不是绝对质量)/方向/强度/建议/"
+    "修正前原始分/动态阈值/质量警告。每行的 pool_size 是当日参与截面标准化的只数。",
     _OBJ,
 )
 async def t_get_latest_signals(db) -> list[dict]:
@@ -89,6 +91,7 @@ async def t_get_latest_signals(db) -> list[dict]:
             "dynamic_buy_threshold": r.dynamic_buy_threshold,
             "dynamic_sell_threshold": r.dynamic_sell_threshold,
             "quality_warnings": json.loads(r.quality_warnings) if r.quality_warnings else None,
+            "pool_size": r.pool_size,
         }
         for r, f in rows
     ]
@@ -96,7 +99,8 @@ async def t_get_latest_signals(db) -> list[dict]:
 
 @tool(
     "get_signal_history",
-    "单只基金近 N 天信号序列（日期/评分/方向/强度/警告），用于趋势与翻转(whipsaw)判断。",
+    "单只基金近 N 天信号序列（日期/评分/方向/强度/警告/当日池规模），用于趋势与翻转(whipsaw)判断。"
+    "注意评分是**池内相对分**：跨日的差值里混了当日基金池构成变化的影响，pool_size 变化大的两段不可直接比较。",
     _props(code=_code_param("基金代码，如 004011"),
            days={"type": "integer", "description": "回溯天数，默认 30，上限 250"}),
 )
@@ -115,6 +119,7 @@ async def t_get_signal_history(db, code: str, days: int = 30) -> list[dict]:
             "date": str(r.analysis_date), "score": r.weighted_score,
             "direction": r.signal_direction, "strength": r.signal_strength,
             "quality_warnings": json.loads(r.quality_warnings) if r.quality_warnings else None,
+            "pool_size": r.pool_size,
         }
         for r in rows
     ]
@@ -218,7 +223,11 @@ async def t_get_analysis_stats(db, days: int = 30) -> dict:
 
 @tool(
     "get_backtest_summary",
-    "自动回测汇总（backtest_results 表）：净值/策略收益、超额、回撤、信号胜率与有效性。",
+    "自动回测汇总（backtest_results 表）：净值/策略收益、对满仓持有与对静态半仓两个超额口径、"
+    "回撤、信号胜率与有效性。excess_vs_static_half 才是信号能力的主口径；"
+    "low_sample=true 的行样本不足，不要据此下结论。"
+    "口径：净值=分红复权（场外含分红），未成交现金按 0% 计息（不计息），"
+    "基线是满仓持有与静态半仓而非沪深300。",
     _props(code={"type": "string", "description": "基金代码，可空=全池按有效性排序"},
            limit={"type": "integer", "description": "最多返回条数，默认 20"}),
 )
@@ -234,6 +243,9 @@ async def t_get_backtest_summary(db, code: str = "", limit: int = 20) -> list[di
             "total_nav_return": b.total_nav_return, "total_strategy_return": b.total_strategy_return,
             "excess_return": b.excess_return, "max_drawdown": b.max_drawdown,
             "signal_count": b.signal_count, "avg_effectiveness": b.avg_effectiveness,
+            "excess_vs_static_half": b.excess_vs_static_half,
+            "signal_count_non_hold": b.signal_count_non_hold,
+            "low_sample": b.low_sample, "caveat": b.caveat,
             "updated_at": str(b.updated_at) if getattr(b, "updated_at", None) else None,
         }
         for b, fcode, fname in rows
@@ -395,7 +407,7 @@ async def t_get_review_report(db, start_date: str, end_date: str = "") -> dict:
 
 @tool(
     "get_positions",
-    "我的真实持仓（手动/CSV 导入）：代码/份额/成本价/最新评分信号；为空表示未录入（调仓分析将走池等权近似）。",
+    "我的真实持仓（手动/CSV 导入）：代码/份额/成本价/持有天数/最新评分信号；为空表示未录入（调仓分析将走池等权近似）。",
     _OBJ,
 )
 async def t_get_positions(db) -> list[dict]:
@@ -404,6 +416,7 @@ async def t_get_positions(db) -> list[dict]:
     return [
         {"code": r["fund_code"], "name": r["fund_name"], "shares": r["shares"],
          "cost_nav": r["cost_nav"], "source": r["source"],
+         "first_buy_date": r["first_buy_date"], "holding_days": r["holding_days"],
          "latest_score": r["latest_score"], "latest_signal": r["latest_signal"],
          "fund_type": r["fund_type"]}
         for r in rows

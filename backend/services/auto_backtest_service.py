@@ -83,10 +83,13 @@ class AutoBacktestService:
             )).scalars().all())
             total = ok = failed = 0
 
-            from backend.services.backtest_service import BacktestService, load_fee_pct
+            from backend.services.backtest_service import (
+                BacktestService, load_fee_pct, load_measurement_policy,
+            )
             svc = BacktestService(self.db)
-            # 一轮一个费率口径：逐只重读会让中途改配置导致同轮结果不可比
+            # 一轮一个费率/口径：逐只重读会让中途改配置导致同轮结果不可比
             fee_pct = await load_fee_pct(self.db)
+            policy = await load_measurement_policy(self.db)
 
             for i, fund in enumerate(funds):
                 # 12 小时兜底：单轮超时则终止，已完成的逐只结果保留
@@ -99,13 +102,27 @@ class AutoBacktestService:
                     # 检查点，_running 永久锁死（后续触发全部 409/跳过）。
                     # 单只上限 10 分钟（净值拉取重试最坏 ~80s × 3 接口 + 余量）
                     summary = await asyncio.wait_for(
-                        svc.run_backtest(fund_id=fund.id, fee_pct=fee_pct), timeout=600.0
+                        svc.run_backtest(
+                            fund_id=fund.id, fee_pct=fee_pct, policy=policy
+                        ),
+                        timeout=600.0,
                     )
-                    await self._upsert_result(fund, summary)
-                    ok += 1
-                    logger.info(
-                        f"自动回测 [{i + 1}/{len(funds)}] {fund.code} 完成"
-                    )
+                    if summary is None:
+                        # run_backtest 用 None 表示"基金不存在/无净值"，
+                        # 直接落行会让前端看到 'NoneType' object has no attribute 之类的假错误。
+                        # 注意不走 continue：防封间隔（循环末尾的 sleep）必须照样执行
+                        failed += 1
+                        await self._reset_session()
+                        try:
+                            await self._upsert_error(fund, "无净值数据")
+                        except Exception as ue:
+                            logger.error(f"自动回测失败行落库失败 {fund.code}: {ue}")
+                    else:
+                        await self._upsert_result(fund, summary)
+                        ok += 1
+                        logger.info(
+                            f"自动回测 [{i + 1}/{len(funds)}] {fund.code} 完成"
+                        )
                 except asyncio.TimeoutError:
                     failed += 1
                     logger.error(f"自动回测 {fund.code} 超时(10 分钟)，记为失败")
@@ -165,6 +182,18 @@ class AutoBacktestService:
         row.buy_effectiveness = summary.buy_effectiveness
         row.sell_effectiveness = summary.sell_effectiveness
         row.effectiveness_rate = summary.effectiveness_rate
+        # Q6 度量口径：基线 / 样本下限 / 覆盖度（前端据此决定画不画结论）
+        row.baseline_buy_hold = summary.baseline_buy_hold
+        row.baseline_static_half = summary.baseline_static_half
+        row.excess_vs_static_half = summary.excess_vs_static_half
+        row.signal_count_non_hold = summary.signal_count_non_hold
+        row.signal_coverage_ratio = summary.signal_coverage_ratio
+        row.low_sample = summary.low_sample
+        row.caveat = summary.caveat
+        row.coverage_start_date = summary.coverage_start_date
+        row.coverage_days = summary.coverage_days
+        row.pool_size_at = summary.pool_size_at
+        row.carry_position = summary.carry_position
         row.finished_at = now_beijing()
         row.error = None
         row.ok = True

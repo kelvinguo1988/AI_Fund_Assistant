@@ -29,6 +29,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 import akshare as ak  # type: ignore
+from backend.utils.stats import percentile_rank_inclusive
 from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
@@ -292,8 +293,9 @@ class MarketRegimeService:
         pe_values = [p for _, p in window]
         current_date, current_pe = window[-1]
 
-        # 分位 = 历史中 <= 当前值 的占比
-        rank = sum(1 for p in pe_values if p <= current_pe) / len(pe_values)
+        # 分位 = 历史中 <= 当前值 的占比（统一走 percentile_rank_inclusive，Q13：
+        # 此前 index_valuation_service 用严格 <，同一指数两处会差 1 个点）
+        rank = percentile_rank_inclusive(pe_values, current_pe)
         snap.valuation_percentile = round(rank, 4)
         snap.valuation_current_pe = round(current_pe, 2)
         snap.valuation_date = str(current_date)[:10]

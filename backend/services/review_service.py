@@ -6,12 +6,21 @@
 计算口径（等权买入持有，期间无调仓假设）：
 - 单基金区间涨跌 = nav_end / nav_start - 1
   （nav_start = 起始日或之前最近一个净值日；nav_end 同理）
+  场外净值取**分红复权**序列（Q11-A，与因子链/回测同口径）：裸单位净值在除息日
+  一次性扣掉分红，会把有分红的基金记成一天真实下跌。ETF 分支本来就是 qfq。
+  开关 `review_nav_adjusted=0` 可切回单位净值
 - 组合收益 = mean(各基金区间涨跌)（等权）
-- 基准 = 沪深300 官方指数点位同区间涨跌（价格回报口径）
-- 信号复盘：区间首日前最近一次分析信号 vs 区间实际涨跌，统计 buy/sell 命中率
+- 基准 = 沪深300 价格指数 + 可配股息率（Q11-B，默认 2.7%/年，按区间交易日折算）。
+  基金侧含分红而基准不含，等于白记约 2.7pp/年 的"超额"
+- 信号复盘：区间首日前最近一次分析信号 vs 区间实际涨跌，绝对与超额两个同向率都出
+  （绝对口径在上涨市里近乎恒真，量的是 beta；超端口径才量得出选基能力）
+
+生效口径随报告一起返回（`report.caliber` + 三行口径头），三处消费方共用
+`caliber_service`，见 docs/QUANT_DECISIONS_2026-10.md §5.1。
 """
 
 import logging
+import math
 from datetime import date, timedelta
 from typing import Optional
 
@@ -68,11 +77,24 @@ class ReviewService:
         # 并发拉取各基金净值（复用 adapter 信号量/重试/超时链路）
         import asyncio
         from backend.data_sources.akshare_adapter import AKShareAdapter
+        from backend.services.caliber_service import caliber_head_lines, load_caliber
+
+        # 一轮复盘一个口径（Q11）：逐只重读配置会让中途改口径的同轮结果不可比
+        policy = await load_caliber(self.db)
+        caliber_lines = caliber_head_lines(
+            policy,
+            extra="组合按基金池等权买入持有",
+            cash_line="满仓假设，不涉及现金利息",
+        )
+
         adapter = AKShareAdapter()
 
         async def _fetch(fund: Fund):
             try:
-                series = await _fetch_nav_series(adapter, fund.code, fetch_days, start_date=start_date)
+                series = await _fetch_nav_series(
+                    adapter, fund.code, fetch_days,
+                    start_date=start_date, adjusted=policy["nav_adjusted"],
+                )
                 return fund, series, None
             except Exception as e:
                 logger.warning(f"复盘拉取净值失败 {fund.code}: {e}")
@@ -106,7 +128,8 @@ class ReviewService:
         for it in valid:
             it.contribution_pct = round(it.growth_pct / len(valid), 3)
 
-        benchmark = await self._benchmark_growth(start_date, end_date, fetch_days)
+        benchmark = await self._benchmark_growth(
+            start_date, end_date, policy["bench_div_yield_pct"])
         excess = (
             round(portfolio - benchmark, 2)
             if portfolio is not None and benchmark is not None
@@ -115,7 +138,7 @@ class ReviewService:
 
         best = max(valid, key=lambda x: x.growth_pct) if valid else None
         worst = min(valid, key=lambda x: x.growth_pct) if valid else None
-        signal_stats = self._signal_hit_stats(valid)
+        signal_stats = self._signal_hit_stats(valid, benchmark)
 
         report = ReviewReport(
             start_date=start_date,
@@ -128,6 +151,7 @@ class ReviewService:
             worst=worst,
             items=sorted(items, key=lambda x: (x.growth_pct is None, -(x.growth_pct or 0))),
             signal_stats=signal_stats,
+            caliber={**policy, "lines": caliber_lines},
         )
         report.summary_md = self._build_summary_md(report)
         return report
@@ -151,32 +175,58 @@ class ReviewService:
         return (ar.weighted_score, ar.signal_direction or "hold")
 
     @staticmethod
-    def _signal_hit_stats(items: list[FundReviewItem]) -> dict:
-        """区间首日前信号与实际涨跌的同向率（buy 涨为命中，sell 跌为命中）"""
+    def _signal_hit_stats(
+        items: list[FundReviewItem], benchmark_growth_pct: Optional[float] = None
+    ) -> dict:
+        """区间首日前信号与区间实际涨跌的同向率（buy 涨为命中，sell 跌为命中）
+
+        Q11：只报绝对涨跌会把上涨市里近乎恒真的命中率当成选基能力（量的是 beta）。
+        因此同时给出**超额口径**（个基区间涨跌 − 基准同区间涨跌），`hit_rate` 仍是
+        绝对口径（旧字段/旧前端语义不变），超额口径挂在 `excess` 子字典下。
+        """
         stats = {"buy_total": 0, "buy_hits": 0, "sell_total": 0, "sell_hits": 0}
+        excess = {"buy_total": 0, "buy_hits": 0, "sell_total": 0, "sell_hits": 0}
+
+        def _rate(b: dict) -> Optional[float]:
+            total = b["buy_total"] + b["sell_total"]
+            hits = b["buy_hits"] + b["sell_hits"]
+            return round(hits / total * 100, 1) if total else None
+
         for it in items:
             if it.growth_pct is None or it.signal_start is None:
                 continue
             if it.signal_start == "buy":
-                stats["buy_total"] += 1
-                if it.growth_pct > 0:
-                    stats["buy_hits"] += 1
+                bucket, sign = "buy", 1.0
             elif it.signal_start == "sell":
-                stats["sell_total"] += 1
-                if it.growth_pct < 0:
-                    stats["sell_hits"] += 1
-        total = stats["buy_total"] + stats["sell_total"]
-        hits = stats["buy_hits"] + stats["sell_hits"]
-        stats["hit_rate"] = round(hits / total * 100, 1) if total else None
+                bucket, sign = "sell", -1.0
+            else:
+                continue
+            stats[f"{bucket}_total"] += 1
+            if sign * it.growth_pct > 0:
+                stats[f"{bucket}_hits"] += 1
+            if benchmark_growth_pct is not None:
+                excess[f"{bucket}_total"] += 1
+                if sign * (it.growth_pct - benchmark_growth_pct) > 0:
+                    excess[f"{bucket}_hits"] += 1
+
+        stats["hit_rate"] = _rate(stats)
+        if benchmark_growth_pct is not None:
+            excess["hit_rate"] = _rate(excess)
+            excess["benchmark_growth_pct"] = benchmark_growth_pct
+            stats["excess"] = excess
         return stats
 
-    async def _benchmark_growth(self, start_date: str, end_date: str, fetch_days: int) -> Optional[float]:
-        """沪深300 官方指数同区间涨跌（价格回报口径）"""
+    async def _benchmark_growth(
+        self, start_date: str, end_date: str, dividend_yield_pct: float = 0.0
+    ) -> Optional[float]:
+        """沪深300 同区间涨跌（价格指数 + 按区间交易日折算的股息，Q11-B）"""
         try:
             from backend.data_sources.akshare_adapter import AKShareAdapter
+            from backend.services.caliber_service import with_dividend_carry
             adapter = AKShareAdapter()
             # 2026-09-12 复查：复用 adapter 基准缓存（原先直连绕过 1h 缓存）
-            series = await adapter.get_benchmark_series()
+            series = with_dividend_carry(
+                await adapter.get_benchmark_series(), dividend_yield_pct)
             if not series:
                 return None
             s0 = _nearest_on_or_before(series, start_date)
@@ -193,13 +243,16 @@ class ReviewService:
         lines = [
             f"## 📋 投资复盘报告（{r.start_date} → {r.end_date}）",
             "",
-            f"> 口径：基金池等权买入持有，期间无调仓假设；基准为沪深300（价格回报）。仅供参考，不构成投资建议。",
+        ]
+        # Q11-C：三行口径头固定在最前，先看尺子再看数字
+        lines += list(r.caliber.get("lines") or []) + [
+            "> 仅供参考，不构成投资建议。",
             "",
             "### 一句话总结",
         ]
         if r.portfolio_growth_pct is not None:
             vs = (
-                f"，{'跑赢' if r.excess_pct >= 0 else '跑输'}沪深300 {abs(r.excess_pct)}pp"
+                f"，{'跑赢' if r.excess_pct >= 0 else '跑输'}基准 {abs(r.excess_pct)}pp"
                 if r.excess_pct is not None else ""
             )
             lines.append(
@@ -215,8 +268,15 @@ class ReviewService:
         ss = r.signal_stats
         if ss.get("hit_rate") is not None:
             lines.append(
-                f"- 信号复盘：区间首日信号命中率 **{ss['hit_rate']}%**"
+                f"- 信号复盘（绝对口径）：区间首日信号命中率 **{ss['hit_rate']}%**"
                 f"（buy {ss['buy_hits']}/{ss['buy_total']}，sell {ss['sell_hits']}/{ss['sell_total']}）"
+            )
+        ex = ss.get("excess") or {}
+        if ex.get("hit_rate") is not None:
+            lines.append(
+                f"- 信号复盘（超额口径，基准 {ex['benchmark_growth_pct']:+.2f}%）：命中率 **{ex['hit_rate']}%**"
+                f"（buy {ex['buy_hits']}/{ex['buy_total']}，sell {ex['sell_hits']}/{ex['sell_total']}）"
+                "—— 绝对口径量的是市场方向（beta），这一行才量得出选基能力"
             )
         lines += ["", "### 区间涨跌明细", "",
                   "| 基金 | 区间涨跌 | 评分变化 | 信号(始→末) |",
@@ -259,13 +319,17 @@ def _slice_range(
 
 
 async def _fetch_nav_series(
-    adapter, code: str, days: int, start_date: Optional[str] = None
+    adapter, code: str, days: int, start_date: Optional[str] = None,
+    *, adjusted: bool = True,
 ) -> list[tuple[str, float]]:
     """按基金类型拉取日频净值/收盘序列（升序 [(date, nav)]）
 
     start_date 给定时 cutoff 锚定其前 60 天：旧实现 cutoff=today()-days 只
     覆盖"距今 days 天"，复盘任何结束日早于今天 >days 的历史区间时起点净值
     缺失，整段收益对比恒为 None。
+
+    adjusted=True（默认，Q11-A）时场外净值是**分红复权**序列，与因子链/回测
+    同源同口径；`review_nav_adjusted=0` 时调用方传 False 回到裸单位净值。
     """
     import akshare as ak
 
@@ -286,10 +350,7 @@ async def _fetch_nav_series(
             df = await adapter._get_otc_fund_nav_raw(code, period=max(int(days * 1.5), 60))
         if df is None or df.empty:
             return []
-        raw = [
-            (str(d)[:10], float(v))
-            for d, v in zip(df["净值日期"], df["单位净值"])
-        ]
+        raw = otc_nav_pairs(df, adjusted=adjusted)
 
     series = sorted(raw)
     if start_date:
@@ -297,3 +358,35 @@ async def _fetch_nav_series(
     else:
         cutoff = (beijing_today() - timedelta(days=days)).isoformat()
     return [(d, v) for d, v in series if d >= cutoff]
+
+
+def otc_nav_pairs(df, *, adjusted: bool = True) -> list[tuple[str, float]]:
+    """净值 DataFrame（净值日期 / 单位净值 [/ 日增长率]）→ [(日期, 净值)] 升序
+
+    adjusted 时按同日 日增长率 做分红复权（复用因子链同一个
+    `build_forward_adjusted_nav`）：裸单位净值在除息日一次性扣掉分红，
+    复盘/回填于是把有分红的基金记成一天暴跌（Q11-A，第一批 #56 的遗留）。
+    备源只有 DWJZ 没有 日增长率 时 helper 原样返回，不会"复权后反而更差"。
+    """
+    from backend.data_sources.akshare_adapter import build_forward_adjusted_nav
+
+    rows: list[tuple[str, float, object]] = []
+    growth_col = df["日增长率"] if "日增长率" in df.columns else [None] * len(df)
+    for d, v, g in zip(df["净值日期"], df["单位净值"], growth_col):
+        # 停牌日 DWJZ 为空/NaN：整行剔除（留在序列里会让复权链出现 0 或 NaN 值）
+        try:
+            nav = float(v)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(nav) or nav <= 0:
+            continue
+        rows.append((str(d)[:10], nav, g))
+
+    if not rows:
+        return []
+    if not adjusted:
+        return [(d, v) for d, v, _ in rows]
+    adjusted_nav = build_forward_adjusted_nav(
+        [v for _, v, _ in rows], [g for _, _, g in rows]
+    )
+    return [(d, round(v, 6)) for d, v in zip([d for d, _, _ in rows], adjusted_nav)]

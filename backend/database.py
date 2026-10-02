@@ -56,6 +56,12 @@ def _build_factor_seeds() -> list[dict]:
 
     2026-09-12 复查：原两份 150 行副本已漂移（空库副本带 data_fields、
     迁移副本没有），同参数下新库/旧库的因子行不一致。统一从此构造。
+
+    Q13：`normalization="cross_sectional_zscore"` 的因子把 raw 值直接当 pre-norm 分返回，
+    最终得分由 `zscore_thresholds` 分档决定，`signal_rules` 在打分链路里不会被读取
+    （`rules_from_params` 只在内嵌规则的因子里调用）。原先给它们写死规则是假可配项
+    （前端改了没效果），现统一置空；仍带规则的那几条（回撤修复度 / 市场环境 3 因子）
+    是 `normalization="none"` 且计算函数确实调用 `rules_from_params`，属真配置。
     """
     return [
     {
@@ -64,11 +70,7 @@ def _build_factor_seeds() -> list[dict]:
         "params": json.dumps({"window": 20}),
         "formula": "nav / shift(nav, 20) - 1",
         "window": 20, "window_unit": "day",
-        "signal_rules": json.dumps([
-            {"condition": "> 0.01", "score": 1.0},
-            {"condition": "< -0.01", "score": -1.0},
-            {"condition": "else", "score": 0.0},
-        ]),
+        "signal_rules": json.dumps([]),
         "normalization": "cross_sectional_zscore",
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
@@ -78,11 +80,7 @@ def _build_factor_seeds() -> list[dict]:
         "params": json.dumps({"window": 60}),
         "formula": "nav / shift(nav, 60) - 1",
         "window": 60, "window_unit": "day",
-        "signal_rules": json.dumps([
-            {"condition": "> 0", "score": 1.0},
-            {"condition": "< 0", "score": -1.0},
-            {"condition": "else", "score": 0.0},
-        ]),
+        "signal_rules": json.dumps([]),
         "normalization": "cross_sectional_zscore",
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
@@ -115,11 +113,7 @@ def _build_factor_seeds() -> list[dict]:
         "params": json.dumps({"window": 60, "epsilon": 0.0001}),
         "formula": "mean(returns, 60) / (std(returns, 60) + 0.0001)",
         "window": 60, "window_unit": "day",
-        "signal_rules": json.dumps([
-            {"condition": "> 0.5", "score": 1.0},
-            {"condition": "< -0.5", "score": -1.0},
-            {"condition": "else", "score": 0.0},
-        ]),
+        "signal_rules": json.dumps([]),
         "normalization": "cross_sectional_zscore",
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
@@ -129,11 +123,7 @@ def _build_factor_seeds() -> list[dict]:
         "params": json.dumps({"short_window": 20, "mid_window": 60}),
         "formula": "mom20 - mom60",
         "window": 60, "window_unit": "day",
-        "signal_rules": json.dumps([
-            {"condition": "> 0", "score": 1.0},
-            {"condition": "< 0", "score": -1.0},
-            {"condition": "else", "score": 0.0},
-        ]),
+        "signal_rules": json.dumps([]),
         "normalization": "cross_sectional_zscore",
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
@@ -143,11 +133,7 @@ def _build_factor_seeds() -> list[dict]:
         "params": json.dumps({"short_window": 20, "mid_window": 60}),
         "formula": "mean([sign(mom20), sign(mom60)])",
         "window": 60, "window_unit": "day",
-        "signal_rules": json.dumps([
-            {"condition": "> 0", "score": 1.0},
-            {"condition": "< 0", "score": -1.0},
-            {"condition": "else", "score": 0.0},
-        ]),
+        "signal_rules": json.dumps([]),
         "normalization": "cross_sectional_zscore",
         "normalization_config": json.dumps({"zscore_thresholds": [1.0, 0.5, -0.5, -1.0]}),
     },
@@ -213,6 +199,40 @@ def _build_factor_seeds() -> list[dict]:
     ]
 
 
+async def _clear_inert_signal_rules(session) -> int:
+    """Q13 幂等迁移：清空"死配置因子"的 signal_rules，返回清理条数（不 commit）
+
+    这些因子的计算函数根本不读 signal_rules（判据见
+    `factor_engine.SIGNAL_RULES_INERT_FACTORS`，测试会校验它与源码一致），
+    库里留着规则数组只会让因子页/API 看起来"能配"，改完还以为生效了 ——
+    与第一批清掉的"假可配项"是同一类问题。
+    """
+    from sqlalchemy import select
+    from backend.models.factor import Factor
+    from backend.engines.factor_engine import SIGNAL_RULES_INERT_FACTORS
+
+    result = await session.execute(
+        select(Factor).where(Factor.code.in_(sorted(SIGNAL_RULES_INERT_FACTORS)))
+    )
+    cleared = 0
+    for row in result.scalars().all():
+        if not row.signal_rules:
+            continue
+        try:
+            rules = json.loads(row.signal_rules)
+        except (TypeError, ValueError):
+            rules = None
+        if not rules:
+            continue
+        logger.info(f"清理死配置 signal_rules: {row.code}（该因子的得分不读信号规则）")
+        row.signal_rules = json.dumps([])
+        row.updated_at = now_beijing()
+        cleared += 1
+    if cleared:
+        logger.info(f"已清理 {cleared} 个死配置因子的 signal_rules")
+    return cleared
+
+
 async def init_db() -> None:
     """
     创建所有表并插入初始数据：
@@ -264,6 +284,8 @@ async def init_db() -> None:
             "ALTER TABLE analysis_results ADD COLUMN dynamic_buy_threshold FLOAT",
             "ALTER TABLE analysis_results ADD COLUMN dynamic_sell_threshold FLOAT",
             "ALTER TABLE analysis_results ADD COLUMN quality_warnings TEXT",
+            # Q9：净值 as-of 日期（诊断用；旧行 NULL = 口径改造前）
+            "ALTER TABLE analysis_results ADD COLUMN nav_as_of_date VARCHAR(10)",
         ]:
             try:
                 await conn.execute(text(col_sql))
@@ -325,6 +347,53 @@ async def init_db() -> None:
         except Exception as e:
             _migration_ok(e, "fund_manager_records.last_seen_at")
 
+        # 回测度量口径列（2026-10-02 第二批 Q6）：三条基线 / 样本下限 / 覆盖度标注。
+        # 全部可空：旧轮次结果（若有）保持 NULL，前端读不到即不画，不做回填——
+        # 用旧口径的数字冒充新口径结论比留空更糟。
+        for col_sql in [
+            "ALTER TABLE backtest_results ADD COLUMN baseline_buy_hold FLOAT",
+            "ALTER TABLE backtest_results ADD COLUMN baseline_static_half FLOAT",
+            "ALTER TABLE backtest_results ADD COLUMN excess_vs_static_half FLOAT",
+            "ALTER TABLE backtest_results ADD COLUMN signal_count_non_hold INTEGER",
+            "ALTER TABLE backtest_results ADD COLUMN signal_coverage_ratio FLOAT",
+            "ALTER TABLE backtest_results ADD COLUMN low_sample BOOLEAN",
+            "ALTER TABLE backtest_results ADD COLUMN caveat VARCHAR(200)",
+            "ALTER TABLE backtest_results ADD COLUMN coverage_start_date VARCHAR(10)",
+            "ALTER TABLE backtest_results ADD COLUMN coverage_days INTEGER",
+            "ALTER TABLE backtest_results ADD COLUMN pool_size_at INTEGER",
+            "ALTER TABLE backtest_results ADD COLUMN carry_position BOOLEAN",
+        ]:
+            try:
+                await conn.execute(text(col_sql))
+            except Exception as e:
+                _migration_ok(e, col_sql)
+
+        # 持仓首次买入日（2026-10-02 第二批 Q10-C）：持有期/阶梯赎回费约束的唯一
+        # 输入。可空且**不从 created_at 回填** —— created_at 是"入系统时间"，拿它
+        # 当首买日会把持有期算短、凭空拦掉建议；未填就由前端显示"—"并标注未做约束。
+        try:
+            await conn.execute(text(
+                "ALTER TABLE user_positions ADD COLUMN first_buy_date DATE"
+            ))
+        except Exception as e:
+            _migration_ok(e, "user_positions.first_buy_date")
+
+        # 影子评分层（2026-10-02 第二批 §3）：新口径只写 shadow_*，生产列口径不动。
+        # 全部可空且**不回填**：历史行没有并排跑过新口径，填任何东西都是假对照。
+        # pool_size / factor_coverage 是分歧解读的前提（同分不同池不是一回事）。
+        for col_sql in [
+            "ALTER TABLE analysis_results ADD COLUMN shadow_score FLOAT",
+            "ALTER TABLE analysis_results ADD COLUMN shadow_direction VARCHAR(10)",
+            "ALTER TABLE analysis_results ADD COLUMN shadow_variant VARCHAR(40)",
+            "ALTER TABLE analysis_results ADD COLUMN shadow_detail TEXT",
+            "ALTER TABLE analysis_results ADD COLUMN pool_size INTEGER",
+            "ALTER TABLE analysis_results ADD COLUMN factor_coverage FLOAT",
+        ]:
+            try:
+                await conn.execute(text(col_sql))
+            except Exception as e:
+                _migration_ok(e, col_sql)
+
         # uq_fund_date 唯一约束回填（旧库 create_all 不会补约束；并发分析曾可插重复行）
         # 索引已存在即视为回填完成：原实现在每次启动都跑一遍全表 DELETE 去重，
         # 结果只可能来自那一次脏数据窗口，重复扫描既拖慢启动又长时间持写锁
@@ -372,6 +441,11 @@ async def init_db() -> None:
                 stale.normalization = "cross_sectional_zscore"
                 stale.normalization_config = norm_conf
                 stale.signal_rules = json.dumps([]) if stale.signal_rules is None else stale.signal_rules
+        await session.commit()
+
+    # ── Q13：清掉死配置因子的 signal_rules（幂等）──
+    async with async_session_factory() as session:
+        await _clear_inert_signal_rules(session)
         await session.commit()
 
     # ── 因子表迁移：旧→新 8 因子体系（仅对已有数据库执行，空库跳过）──
@@ -464,7 +538,6 @@ async def init_db() -> None:
         now = now_beijing()
         # ── 原生 Skill 补种（组合 X 光 / 调仓自进化，2026-09-24）──
         # 无条件执行（空库/已有库都补，按 name 检查不覆盖用户改动）
-        # ── 原生 Skill 补种（组合 X 光 / 调仓自进化，2026-09-24）──
         _native_skills = [
             {
                 "name": "组合X光透视",
@@ -492,23 +565,48 @@ async def init_db() -> None:
             },
             {
                 "name": "调仓建议自进化",
-                "description": "调仓建议命中率统计与阈值校准状态查询（建议落库→30天回填→自动校准）",
+                "description": "调仓建议命中率统计与阈值校准状态查询（工单落库→满 30 个净值日回填→按超额口径校准）",
                 "system_prompt": (
                     "你是建议质量复盘助手。用户会给出调仓建议的历史命中率统计"
-                    "（sell/buy 各自总数与命中数）与当前校准参数（止盈/止损线）。\n"
+                    "（by_mode 下 excess/abs 两个口径各自的 sell/buy 总数与命中数）、"
+                    "当前口径 hit_mode 与校准参数（止盈/止损线）。\n"
                     "解读框架：\n"
-                    "1. 样本量说明（<5 条时明确'样本不足，暂不下结论'）\n"
-                    "2. sell 命中率低 = 卖出信号过于敏感，止损线应向保守收紧\n"
-                    "3. buy 命中率低 = 买入信号追高，止盈线应下调\n"
-                    "4. 引用具体数字，不做无数据支撑的断言；所有内容仅供参考。"
+                    "1. 口径优先级：结论一律以 excess（相对沪深300 同区间超额，建议日→其后第 30 个净值日）"
+                    "为准；abs（绝对涨跌）只作对照，牛市中 abs 普遍虚高，单独引用 abs 会高估选基能力\n"
+                    "2. 样本量说明（该口径 total < 30 时明确'样本不足，阈值未被校准动过'）\n"
+                    "3. excess sell 命中率低 = 卖出信号选错标的（卖掉的反而跑赢基准），止损线应收紧\n"
+                    "4. excess buy 命中率低 = 买入信号追高跑输基准，止盈线应下调\n"
+                    "5. 引用具体数字并标注口径，不做无数据支撑的断言；所有内容仅供参考。"
                 ),
                 "enabled": True,
                 "tool_spec": json.dumps({
-                    "description": "查询调仓建议的历史命中率与阈值校准状态",
+                    "description": "查询调仓建议的历史命中率（绝对/超额双口径）与阈值校准状态",
                     "parameters": {"type": "object", "properties": {}},
                 }),
             },
         ]
+        # Q7（2026-10-02）口径升级：存量库的内置提示词只在"用户从未改过"时才替换
+        # （逐字比较 v1 文案），改过的保留；新库由下方补种直接写入新文案。
+        _advice_skill = next(x for x in _native_skills if x["name"] == "调仓建议自进化")
+        _advice_prompt_v1 = (
+            "你是建议质量复盘助手。用户会给出调仓建议的历史命中率统计"
+            "（sell/buy 各自总数与命中数）与当前校准参数（止盈/止损线）。\n"
+            "解读框架：\n"
+            "1. 样本量说明（<5 条时明确'样本不足，暂不下结论'）\n"
+            "2. sell 命中率低 = 卖出信号过于敏感，止损线应向保守收紧\n"
+            "3. buy 命中率低 = 买入信号追高，止盈线应下调\n"
+            "4. 引用具体数字，不做无数据支撑的断言；所有内容仅供参考。"
+        )
+        _legacy = (await session.execute(
+            select(AISkill).where(AISkill.name == "调仓建议自进化"))).scalars().all()
+        for _sk in _legacy:
+            if _sk.system_prompt == _advice_prompt_v1:
+                _sk.system_prompt = _advice_skill["system_prompt"]
+                _sk.description = _advice_skill["description"]
+                _sk.tool_spec = _advice_skill["tool_spec"]
+                _sk.updated_at = now
+                logger.info("原生 Skill「调仓建议自进化」提示词已升级到 Q7 双口径")
+        await session.commit()
         for sk in _native_skills:
             exists = await session.execute(
                 select(AISkill).where(AISkill.name == sk["name"])

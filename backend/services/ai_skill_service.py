@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models.ai_skill import AISkill
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
+from backend.engines.scoring_engine import score_caliber_note
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ async def _render_fund_pool(db: AsyncSession) -> str:
     if not funds:
         return "（基金池为空）"
     lines = []
+    pool_sizes: list[int] = []
     for f in funds:
         ar = (await db.execute(
             select(AnalysisResult)
@@ -110,9 +112,16 @@ async def _render_fund_pool(db: AsyncSession) -> str:
                 f"- {f.name}({f.code}): 评分={ar.weighted_score}, "
                 f"方向={ar.signal_direction}, 强度={ar.signal_strength}"
             )
+            if ar.pool_size:
+                pool_sizes.append(ar.pool_size)
         else:
             lines.append(f"- {f.name}({f.code}): 暂无分析数据")
-    return "【基金池及最新分析】\n" + "\n".join(lines)
+    # Q5：不写这句，LLM 会把"评分 2.5"当成绝对质量并跨日比较
+    caliber = (
+        f"\n【评分口径】{score_caliber_note(max(pool_sizes) if pool_sizes else None)}，"
+        "跨日不可直接比较。"
+    )
+    return "【基金池及最新分析】\n" + "\n".join(lines) + caliber
 
 
 async def _render_market_regime() -> str:
@@ -150,7 +159,7 @@ async def _render_fund_detail(db: AsyncSession, fund_id: int) -> str:
 
     parts = [
         f"【{fund.name}({fund.code}) 最新分析】",
-        f"- 评分: {ar.weighted_score}",
+        f"- 评分: {ar.weighted_score}（{score_caliber_note(ar.pool_size)}）",
         f"- 信号: {ar.signal_direction}/{ar.signal_strength}",
         f"- 操作建议: {ar.operation_advice}",
     ]

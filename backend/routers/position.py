@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +23,7 @@ from backend.models.fund import Fund
 from backend.models.user_position import UserPosition
 from backend.schemas.common import ApiResponse
 from backend.services import position_service
+from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -31,11 +33,15 @@ class PositionCreate(BaseModel):
     fund_code: str = Field(..., max_length=10)
     shares: float = Field(..., gt=0)
     cost_nav: Optional[float] = Field(None, gt=0)
+    # 首次买入日 YYYY-MM-DD：持有期/阶梯赎回费约束的唯一输入（Q10-C）
+    first_buy_date: Optional[date] = None
 
 
 class PositionUpdate(BaseModel):
     shares: Optional[float] = Field(None, gt=0)
     cost_nav: Optional[float] = Field(None, gt=0)
+    # 显式传 null 视为"清除首买日"（未出现该字段则不动），见 PUT 里的 model_fields_set
+    first_buy_date: Optional[date] = None
 
 
 class PositionImportRequest(BaseModel):
@@ -53,7 +59,8 @@ async def list_positions(db: AsyncSession = Depends(get_db)):
 async def create_position(body: PositionCreate, db: AsyncSession = Depends(get_db)):
     try:
         result = await position_service.upsert_position(
-            db, body.fund_code, body.shares, body.cost_nav, source="manual",
+            db, body.fund_code, body.shares, body.cost_nav,
+            source="manual", first_buy_date=body.first_buy_date,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -73,6 +80,12 @@ async def update_position(
         p.shares = body.shares
     if body.cost_nav is not None:
         p.cost_nav = body.cost_nav
+    # 首买日允许改回空（清除 = 回到"未知，不做持有期约束"），所以看字段是否出现而不是值真假
+    if "first_buy_date" in body.model_fields_set:
+        # 与 upsert/CSV 同口径：未来的首买日会把持有期算成 0 天，整张工单被惩罚档拦掉
+        if body.first_buy_date is not None and body.first_buy_date > beijing_today():
+            raise HTTPException(status_code=400, detail=f"首次买入日不能晚于今天: {body.first_buy_date}")
+        p.first_buy_date = body.first_buy_date
     await db.commit()
     return ApiResponse(data={"id": p.id})
 
@@ -113,7 +126,8 @@ async def import_csv(body: PositionImportRequest, db: AsyncSession = Depends(get
     imported = updated = 0
     for r in valid:
         res = await position_service.upsert_position(
-            db, r["code"], r["shares"], r["cost_nav"], source="import",
+            db, r["code"], r["shares"], r["cost_nav"],
+            source="import", first_buy_date=r.get("first_buy_date"),
         )
         imported += 1 if res["created"] else 0
         updated += 0 if res["created"] else 1

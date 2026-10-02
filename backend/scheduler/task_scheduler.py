@@ -45,6 +45,7 @@ class TaskScheduler:
             asyncio.create_task(self.reload_jobs()),
             asyncio.create_task(self._register_holiday_sync()),
             asyncio.create_task(self._register_auto_backtest()),
+            asyncio.create_task(self._register_advice_backfill()),
         ]
         for t in self._startup_tasks:
             t.add_done_callback(_log_task_err)
@@ -55,7 +56,7 @@ class TaskScheduler:
         logger.info("调度器已停止")
 
     # 固定注册任务（start() 时注册，reload_jobs 不得移除）
-    _FIXED_JOB_IDS = {"auto_full_backtest", "holiday_auto_sync"}
+    _FIXED_JOB_IDS = {"auto_full_backtest", "holiday_auto_sync", "advice_weekly_backfill"}
 
     async def reload_jobs(self) -> None:
         """从数据库重新加载所有调度任务"""
@@ -508,6 +509,39 @@ class TaskScheduler:
             log_source_failure(
                 module="scheduler.auto_full_backtest",
                 message=f"自动全量回测失败: {type(e).__name__}: {e}",
+                category="other",
+            )
+
+    async def _register_advice_backfill(self) -> None:
+        """注册到期建议回填任务（每周六 01:00，与周日 00:00 的全量回测错开）
+
+        自进化闭环的样本只有被回填才能变成命中率；无到期样本时任务本身 0 请求，
+        所以不设开关，代价可控。
+        """
+        job_id = "advice_weekly_backfill"
+        self._scheduler.add_job(
+            self._run_advice_backfill,
+            trigger=CronTrigger(day_of_week="sat", hour=1, minute=0, timezone="Asia/Shanghai"),
+            id=job_id,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info("已注册到期建议回填任务（每周六 01:00 Asia/Shanghai）")
+
+    async def _run_advice_backfill(self) -> None:
+        try:
+            from backend.services.advice_learning_service import run_advice_backfill
+
+            stats = await run_advice_backfill()
+            logger.info(f"建议回填任务退出: {stats}")
+        except Exception as e:
+            logger.error(f"建议回填任务异常: {e}", exc_info=True)
+            from backend.services.error_log_service import log_source_failure
+            log_source_failure(
+                module="scheduler.advice_weekly_backfill",
+                message=f"到期建议回填失败: {type(e).__name__}: {e}",
                 category="other",
             )
 

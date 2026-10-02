@@ -40,6 +40,9 @@ QUALITY_CONFIG = {
     "coffin_nail_recovery_days": 60,          # 棺材钉：此后N日内未恢复
     "coffin_nail_recovery_pct": 0.90,         # 棺材钉：未恢复到高点的90%
     "coffin_nail_reenter_recovery": 0.85,     # 棺材钉重新准入：回撤修复度 > 0.85
+    # Q8：1=恢复窗口（recovery_days）未完整观测到的形态不判定、只标注待确认（默认）；
+    # 0=回旧行为（昨天刚暴跌也按"60日未恢复"否决）
+    "coffin_nail_require_full_recovery_window": 1,
 
     "ecg_range_low": 0.95,                    # 心电图：净值区间下限
     "ecg_range_high": 1.05,                   # 心电图：净值区间上限
@@ -50,6 +53,13 @@ QUALITY_CONFIG = {
 
     "liquidation_shrink_pct": 0.30,           # 清盘风险：单季规模缩减 > 30%
     "liquidation_min_size": 5e7,              # 清盘风险：最新规模 < 5000万元
+
+    # Q9：净值新鲜度门槛 —— 最新净值落后 N 个**交易日**（按交易日历，非自然日）
+    # max>0 才启用整个门槛（0=关闭，回滚键）；落后 > max 否决，> warn 只标注
+    "nav_staleness_max_trading_days": 10,
+    "nav_staleness_warn_trading_days": 5,
+    # QDII/跨境/港澳互认基金 T+2 甚至更久才披露，两档各放宽 N 个交易日再判
+    "nav_staleness_slow_disclosure_extra_days": 5,
 
     # ── 因子修正 ──
     "momentum_stability_weeks": 4,            # 动量稳定性：统计周数
@@ -95,13 +105,37 @@ QUALITY_CONFIG = {
     "insider_growth_bonus": 0.2,              # 内部人增持：额外加分
     "insider_growth_pct": 0.20,               # 内部人增持：增长 > 20%
 
+    # ── 影子口径 2C（`shadow_variants.caliber_2c`）──
+    # 这组键**只被影子变体读取**，生产信号完全不认它们：改这些数不会动今天的买卖信号，
+    # 只会改变 `analysis_results.shadow_*` 里的对照结果。簇上限的基准权重与
+    # `threshold_ref_total_weight` 故意解耦（详见 shadow_variants 模块文档：ref 会随
+    # Q2 市场因子清零一起下移，若上限跟着缩，等于让"去掉市场因子"顺手动了动量一刀）。
+    "shadow_2c_cluster_cap_pct": 35.0,        # 每簇权重上限占基准总权重的百分比（0=关闭）
+    "shadow_2c_cluster_cap_base_weight": 8.3,  # 簇上限的基准总权重（35% × 8.3 ≈ 2.9）
+    "shadow_2c_trend_disagree_factor": 0.8,    # 趋势一正一负时动量部分乘数（≥1 或 0=关闭）
+    "shadow_2c_min_coverage": 0.6,             # 有效权重覆盖率下限，低于则影子不出方向（0=关闭）
+
     # ── 市场环境阈值调节（估值分位来自 MarketRegimeSnapshot）──
+    # 注意这组是「策略极端低/高估」分区，和仪表盘指数卡片的
+    # index_valuation_service.DASHBOARD_PE_{LOW,HIGH}_PERCENTILE（30/70，给人看的
+    # 低估/合理/高估三档）是两回事：这里 0.15/0.85 只用来挪动买入阈值。
+    # 两边分位口径已统一为 percentile_rank_inclusive（含当前值），Q13。
     # 极端高估：买入阈值上调（泡沫期谨慎加仓）
     "extreme_high_valuation_pct": 0.85,        # 高估警戒线：估值分位 ≥ 此值触发
     "extreme_high_valuation_buy_increment": 1.0,  # 高估时买入阈值上调量
     # 极端低估：买入阈值下调（便宜时更易触发买入）
     "extreme_low_valuation_pct": 0.15,         # 低估机会线：估值分位 ≤ 此值触发
     "extreme_low_valuation_buy_decrement": 0.5,   # 低估时买入阈值下调量
+
+    # ── 持有期与赎回费（Q10-C，只作用于调仓工单，不参与评分/信号）──
+    # 1=卖出与换仓建议带持有期/阶梯赎回费标注，费率进惩罚档则降级观望；0=关闭
+    "redemption_fee_enabled": 1,
+    # 惩罚档：适用费率 ≥ 此值(%) 时不把"短期高成本卖出"写成建议
+    "redemption_fee_penalize_pct": 1.0,
+    # 阶梯 [持有自然日上界(不含), 费率%]，None 上界 = 长期基础费率。
+    # list 值不会被 /api/system/quality-config 渲染，需要改口径时写进
+    # system_config 的 quality_filter_config JSON 覆盖即可（merge_quality_config 收 list）
+    "redemption_fee_ladder": [[7, 1.5], [365, 0.5], [None, 0.25]],
 }
 
 
@@ -116,6 +150,8 @@ PARAM_META: dict[str, tuple[str, str]] = {
     "coffin_nail_recovery_days":          ("棺材钉：此后N日内未恢复",             "前置否决-棺材钉"),
     "coffin_nail_recovery_pct":           ("棺材钉：未恢复到高点的比例",         "前置否决-棺材钉"),
     "coffin_nail_reenter_recovery":       ("棺材钉重新准入：回撤修复度阈值", "前置否决-棺材钉"),
+    "coffin_nail_require_full_recovery_window":
+                                          ("棺材钉：恢复期未走完则暂不判定（0=旧行为）", "前置否决-棺材钉"),
     "ecg_range_low":                      ("心电图：净值区间下限",               "前置否决-心电图"),
     "ecg_range_high":                     ("心电图：净值区间上限",               "前置否决-心电图"),
     "ecg_annual_vol_pct":                 ("心电图：年化波动率阈值",           "前置否决-心电图"),
@@ -124,6 +160,11 @@ PARAM_META: dict[str, tuple[str, str]] = {
     "ecg_spike_min_count":                ("心电图：最小脉冲发生次数",         "前置否决-心电图"),
     "liquidation_shrink_pct":             ("清盘风险：单季规模缩减阈值",       "前置否决-清盘"),
     "liquidation_min_size":               ("清盘风险：最新规模下限（元）",   "前置否决-清盘"),
+    "nav_staleness_max_trading_days":
+                                          ("净值新鲜度：落后N个交易日否决（0=关闭门槛）", "净值新鲜度"),
+    "nav_staleness_warn_trading_days":    ("净值新鲜度：落后N个交易日开始标注", "净值新鲜度"),
+    "nav_staleness_slow_disclosure_extra_days":
+                                          ("净值新鲜度：QDII/互认基金两档各放宽N个交易日", "净值新鲜度"),
     "momentum_stability_weeks":           ("动量稳定性：统计周数",             "因子修正"),
     "momentum_stability_days_per_week":   ("动量稳定性：每周交易日数",         "因子修正"),
     "excess_windows_days":                ("超额收益：1月/3月/6月窗口",         "因子修正"),
@@ -150,6 +191,14 @@ PARAM_META: dict[str, tuple[str, str]] = {
     "extreme_high_valuation_buy_increment": ("市场环境：高估时买入阈值上调量",     "市场环境阈值"),
     "extreme_low_valuation_pct":         ("市场环境：低估机会线（估值分位≤此值触发）", "市场环境阈值"),
     "extreme_low_valuation_buy_decrement":  ("市场环境：低估时买入阈值下调量",     "市场环境阈值"),
+    "redemption_fee_enabled":            ("持有期与赎回费：卖出/换仓建议是否做费用约束（0=关闭）", "持有期与赎回费"),
+    "redemption_fee_penalize_pct":       ("持有期与赎回费：适用费率≥此值(%) 的卖出降级为观望", "持有期与赎回费"),
+    "redemption_fee_ladder":             ("持有期与赎回费：阶梯 [[天数,费率%]…]（配置页不渲染，见文档）", "持有期与赎回费"),
+    # ── 影子口径 2C：只改 `analysis_results.shadow_*` 的对照结果，生产信号完全不读 ──
+    "shadow_2c_cluster_cap_pct":          ("影子2C：每簇权重上限 %（0=关闭簇上限，不影响生产信号）", "影子口径2C"),
+    "shadow_2c_cluster_cap_base_weight":  ("影子2C：簇上限基准总权重（与阈值参考权重解耦）", "影子口径2C"),
+    "shadow_2c_trend_disagree_factor":    ("影子2C：趋势一正一负时动量部分乘数（≥1=关闭乘性位）", "影子口径2C"),
+    "shadow_2c_min_coverage":             ("影子2C：有效权重覆盖率下限，低于则影子不出方向 skip（0=关闭）", "影子口径2C"),
 }
 
 
@@ -189,27 +238,32 @@ class QualityFilterResult:
 # 1. 前置否决检测函数
 # ═══════════════════════════════════════════════════════════════════════
 
-def check_coffin_nail_pattern(
-    fund_data: FundData,
-    cfg: dict = QUALITY_CONFIG,
-) -> bool:
-    """检测"棺材钉"形态
+def _scan_coffin_nail(fund_data: FundData, cfg: dict) -> tuple[bool, str]:
+    """棺材钉判定内核 —— 一次扫描同时给出「否决」与「待确认」
 
-    定义：近一年内，存在任意连续20个交易日，期间最大回撤 ≥ 20%，
-    且此后60个交易日内净值从未恢复到该高点净值的90%以上。
+    Returns: `(vetoed, pending_warning)`
+    - vetoed：存在**恢复窗口已完整观测**且未恢复到高点 90% 的形态；
+    - pending_warning：最近一次暴跌的恢复期还没走完（`recovery_days` 日还没观测满）时的
+      提示文案，空串表示没有。
 
-    Returns: True = 触发否决（应剔除）
+    为什么要 pending（Q8，2026-10-02）：旧实现 `end_idx = min(recovery_start + 60, n)`
+    在 `start` 接近序列末尾时可能只观测到 1~几天，却仍按"60 日未恢复"否决 ——
+    昨天刚暴跌的基金（可能正是最便宜的候选）被整体剔除，而日志理由看着是"充分"的。
+    现在这类样本只标注不否决；`coffin_nail_require_full_recovery_window=0` 回旧行为。
     """
     if not fund_data.close_history or len(fund_data.close_history) < 80:
-        return False
+        return False, ""
 
     prices = np.array(fund_data.close_history[-252:])  # 近一年
     consec = cfg["coffin_nail_consecutive_days"]
     mdd_thresh = cfg["coffin_nail_max_drawdown_pct"]
     recovery_days = cfg["coffin_nail_recovery_days"]
     recovery_pct = cfg["coffin_nail_recovery_pct"]
+    require_full = bool(cfg.get("coffin_nail_require_full_recovery_window", 1))
 
     n = len(prices)
+    pending_days = 0
+    pending_dd = 0.0
     # 遍历所有可能的连续20日起点
     for start in range(n - consec):
         window = prices[start:start + consec]
@@ -225,6 +279,11 @@ def check_coffin_nail_pattern(
             # 检查崩溃窗口结束后 recovery_days 日内是否恢复
             # 恢复期从20日崩溃窗口结束开始计算（而非从峰值开始）
             recovery_start = start + consec
+            observed = n - recovery_start
+            if require_full and observed < recovery_days:
+                # 恢复期未走完 → 不判定，只记最近一次（start 越大越新，直接覆盖）
+                pending_days, pending_dd = observed, max_dd
+                continue
             end_idx = min(recovery_start + recovery_days, n)
             if end_idx <= recovery_start:
                 continue
@@ -238,9 +297,76 @@ def check_coffin_nail_pattern(
                     f"起点={start}, 回撤={max_dd:.2%}, "
                     f"高点={peak_price:.4f}, 恢复最高={max_future:.4f}"
                 )
-                return True
+                return True, ""
 
-    return False
+    if pending_days:
+        return False, (
+            f"棺材钉形态待确认：最近一次回撤 {pending_dd:.0%} 之后仅观测 {pending_days} 个交易日"
+            f"（判定需 {recovery_days} 日恢复期），本轮暂不否决"
+        )
+    return False, ""
+
+
+def check_coffin_nail_pattern(
+    fund_data: FundData,
+    cfg: dict = QUALITY_CONFIG,
+) -> bool:
+    """检测"棺材钉"形态
+
+    定义：近一年内，存在任意连续20个交易日，期间最大回撤 ≥ 20%，
+    且此后60个交易日内净值从未恢复到该高点净值的90%以上。
+    Q8：恢复窗口未完整观测到的形态不参与判定（只标注），见 `_scan_coffin_nail`。
+
+    Returns: True = 触发否决（应剔除）
+    """
+    return _scan_coffin_nail(fund_data, cfg)[0]
+
+
+def coffin_nail_pending_warning(
+    fund_data: FundData,
+    cfg: dict = QUALITY_CONFIG,
+) -> str:
+    """恢复期未走完的棺材钉提示（不否决，供 quality_warnings 展示）；无则空串"""
+    return _scan_coffin_nail(fund_data, cfg)[1]
+
+
+def eval_nav_staleness(
+    missing_days: Optional[int],
+    cfg: dict = QUALITY_CONFIG,
+    slow_disclosure: bool = False,
+    nav_date: str = "",
+) -> tuple[str, str]:
+    """净值新鲜度判档（Q9，2026-10-02）
+
+    Args:
+        missing_days: 最新净值落后的**交易日**数（调用方按交易日历算，本函数不碰日历/DB）；
+            None = 无法判定（净值无日期/日期解析失败）→ 不判，避免把取数成功当陈旧
+        slow_disclosure: QDII/跨境/港澳互认基金 —— T+2 之后才披露是常态，两档各放宽
+        nav_date: 展示用的 as-of 日期字符串
+
+    Returns: `(level, detail)`，level ∈ {"off", "ok", "warn", "veto"}；
+        detail 是给人看的成因短语（否决时进 `analysis.data_missing` 埋点，
+        标注时进 `quality_warnings`），off/ok 时为空串。
+    """
+    max_days = int(cfg.get("nav_staleness_max_trading_days", 10) or 0)
+    if max_days <= 0 or missing_days is None:
+        return "off", ""
+
+    extra = 0
+    if slow_disclosure:
+        extra = int(cfg.get("nav_staleness_slow_disclosure_extra_days", 5) or 0)
+    veto_at = max_days + extra
+    warn_at = int(cfg.get("nav_staleness_warn_trading_days", 5) or 0) + extra
+    as_of = f"（最新净值 {nav_date}）" if nav_date else ""
+
+    if missing_days > veto_at:
+        return "veto", f"净值陈旧{as_of}：落后 {missing_days} 个交易日 > 否决阈值 {veto_at}"
+    if warn_at > 0 and missing_days > warn_at:
+        return "warn", (
+            f"净值新鲜度{as_of}：落后 {missing_days} 个交易日（标注阈值 {warn_at}），"
+            "以下信号基于旧净值"
+        )
+    return "ok", ""
 
 
 def check_ecg_pattern(
@@ -979,6 +1105,11 @@ class QualityFilter:
             result.veto_reason = reason
             weights = [f.get("weight", 1.0) for f in active_factors]
             return result, factor_scores, weights
+
+        # Q8：未被否决但恢复期还没走完的棺材钉形态 → 只标注，让观望位能看到原因
+        pending = coffin_nail_pending_warning(fund_data, self.cfg)
+        if pending:
+            result.warnings.append(pending)
 
         # Step 2: 衍生因子
         result.momentum_stability = self.calc_momentum_stability(fund_data)

@@ -88,13 +88,18 @@ async def run_agent(
 
 
 @router.get("/factor-audit")
-async def factor_audit_direct(days: int = 90):
-    """因子诊断的纯 Python 结果（不经 LLM，AI 关闭时也可用；前端表格/导出直接消费）"""
+async def factor_audit_direct(days: int = 90, overlapping_ic: bool = False):
+    """因子诊断的纯 Python 结果（不经 LLM，AI 关闭时也可用；前端表格/导出直接消费）
+
+    overlapping_ic=true 回退 Q12 之前的逐日重叠 IC（IR 会虚高 √horizon），仅对照用。
+    """
     from backend.database import async_session_factory
     from backend.ai.factor_audit import FactorAuditService
 
     async with async_session_factory() as session:
-        report = await FactorAuditService(session).audit(days=max(min(days, 365), 15))
+        report = await FactorAuditService(session).audit(
+            days=max(min(days, 365), 15), overlapping_ic=overlapping_ic,
+        )
         return {"ok": True, "data": report.to_dict(), "summary_md": report.summary_md()}
 
 

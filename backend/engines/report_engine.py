@@ -25,7 +25,7 @@ from datetime import date
 from typing import Optional
 
 from backend.engines.factor_engine import FactorScoreResult
-from backend.engines.scoring_engine import SignalResult
+from backend.engines.scoring_engine import SignalResult, score_caliber_note
 from backend.schemas.market import MarketSummaryOut
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ class ReportEngine:
         top10_changes: list[dict] | None = None,
         top10_quote_time: str | None = None,
         fund_daily_change: dict | None = None,
+        pool_size: int | None = None,
     ) -> str:
         """生成 Markdown 格式报告
 
@@ -59,6 +60,7 @@ class ReportEngine:
                            （top10_change 报告项启用时由调用方传入）
             fund_daily_change: 基金当日实时涨跌 {growth_pct, source, est_model,
                               coverage, quote_time}（fund_daily_change 项启用时传入）
+            pool_size: 本轮参与截面标准化的基金数（Q5：评分是池内相对分，标注样本规模）
 
         Returns:
             Markdown 文本
@@ -106,7 +108,10 @@ class ReportEngine:
             lines.append("## 加权评分")
             lines.append("")
             score_bar = self._score_bar(signal.weighted_score)
-            lines.append(f"**综合评分**: {score_bar} {signal.weighted_score}（钳位范围 -8.5 ~ +8.5）")
+            lines.append(
+                f"**综合评分**: {score_bar} {signal.weighted_score}"
+                f"（钳位范围 -8.5 ~ +8.5；{score_caliber_note(pool_size)}）"
+            )
             lines.append(f"**建议权益仓位**: {int(signal.equity_ratio * 100)}%")
             lines.append("")
 
@@ -321,6 +326,9 @@ class ReportEngine:
 
         # ── TOP10 买卖信号 ──
         if "top_buy_sell" in enabled_items:
+            # 表里的评分同样是当日池内相对分：概览的"总计 N 只"就是截面样本数
+            lines.append(f"> {score_caliber_note(ms.signals.total)}，下表评分只在当日池内可比")
+            lines.append("")
             lines.append("## 🔴 TOP10 买入信号")
             lines.append("")
             if ms.signals.top_buy:

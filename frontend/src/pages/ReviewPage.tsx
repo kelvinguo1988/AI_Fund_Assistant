@@ -1,5 +1,8 @@
 /**
- * 投资复盘页面 — 组合区间收益 vs 沪深300 + 信号命中率
+ * 投资复盘页面 — 组合区间收益 vs 含息基准 + 信号同向率（绝对/超额双口径）
+ *
+ * 口径头三行（净值/基准/计息）由后端 caliber_service 生成并随报告返回（Q11），
+ * 前端只负责显示；未运行复盘时用 GET /caliber 的当前生效值占位，避免注释骗人。
  */
 
 import React, { useEffect, useState } from 'react';
@@ -22,12 +25,19 @@ import {
   Alert,
   Snackbar,
   Chip,
+  Collapse,
+  Switch,
+  FormControlLabel,
 } from '@mui/material';
 import {
   Insights as ReviewIcon,
   AutoAwesome as AiIcon,
+  Tune as CaliberIcon,
 } from '@mui/icons-material';
-import { reviewApi, type ReviewReport } from '../api/review';
+import {
+  reviewApi, caliberApi,
+  type ReviewReport, type CaliberState,
+} from '../api/review';
 import { compareApi, type CompareReport, type FundCompareItem } from '../api/compare';
 import { fundApi, overlapApi, type HoldingOverlap } from '../api/fund';
 import {
@@ -61,6 +71,65 @@ const ReviewPage: React.FC = () => {
   const [pkLoading, setPkLoading] = useState(false);
   const [pkReport, setPkReport] = useState<CompareReport | null>(null);
   const [overlap, setOverlap] = useState<HoldingOverlap | null>(null);
+
+  // ── 收益口径（Q11）：当前生效值 + 回滚开关 ──
+  const [caliber, setCaliber] = useState<CaliberState | null>(null);
+  const [caliberOpen, setCaliberOpen] = useState(false);
+  const [caliberDraft, setCaliberDraft] = useState({ nav_adjusted: true, bench_div_yield_pct: 2.7 });
+  const [caliberSaving, setCaliberSaving] = useState(false);
+
+  useEffect(() => {
+    caliberApi.get()
+      .then((r) => {
+        const c = r.data;
+        if (!c) return;
+        setCaliber(c);
+        setCaliberDraft({
+          nav_adjusted: c.nav_adjusted,
+          bench_div_yield_pct: c.bench_div_yield_pct,
+        });
+      })
+      .catch(() => { /* 静默：口径头退化为报告自带文案 */ });
+  }, []);
+
+  const saveCaliber = async () => {
+    setCaliberSaving(true);
+    try {
+      const res = await caliberApi.update({
+        review_nav_adjusted: caliberDraft.nav_adjusted,
+        benchmark_dividend_yield_pct: Number(caliberDraft.bench_div_yield_pct),
+      });
+      if (res.data) {
+        setCaliber(res.data);
+        setCaliberDraft({
+          nav_adjusted: res.data.nav_adjusted,
+          bench_div_yield_pct: res.data.bench_div_yield_pct,
+        });
+      }
+      setSnackbar({
+        open: true,
+        message: `口径已更新（净值${res.data?.nav_adjusted ? '复权' : '未复权'} / 股息 ${res.data?.bench_div_yield_pct ?? 0}%/年）：改口径后历史报告与新报告不可比`,
+        severity: 'success',
+      });
+    } catch (err: any) {
+      setSnackbar({ open: true, message: err?.message || '口径保存失败', severity: 'error' });
+    } finally {
+      setCaliberSaving(false);
+    }
+  };
+
+  /** 三行口径头：优先用报告自带的（与报告数字同源），否则按当前生效值组一句占位 */
+  const caliberLines = (cashLine = '满仓假设，不涉及现金利息', extra = ''): string[] => {
+    const nav = caliber?.nav_adjusted;
+    const div = caliber?.bench_div_yield_pct ?? 0;
+    if (nav == null) return [];
+    return [
+      `净值口径：${nav ? '场外基金分红复权、场内 ETF 前复权' : '单位净值（未复权，除息日会记成下跌）'}`
+        + (extra ? `；${extra}` : ''),
+      `基准口径：沪深300 价格指数${div > 0 ? ` + 股息 ${div}%/年（按区间交易日折算）` : '（不含股息）'}`,
+      `计息口径：${cashLine}`,
+    ];
+  };
 
   useEffect(() => {
     fundApi.list('active')
@@ -189,9 +258,72 @@ const ReviewPage: React.FC = () => {
               </Button>
             </Grid>
           </Grid>
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-            口径：基金池等权买入持有（期间无调仓假设）；基准为沪深300 官方指数点位。覆盖全部活跃基金，区间最长 2 年。
-          </Typography>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="caption" color="text.secondary" component="div">
+              {(() => {
+                const raw = report?.caliber?.lines;
+                const lines = raw && raw.length
+                  ? raw.map((l) => l.replace(/^>\s*/, ''))
+                  : caliberLines('满仓假设，不涉及现金利息', '组合按基金池等权买入持有（期间无调仓假设）');
+                return lines.length
+                  ? `${lines.join('　·　')}　覆盖全部活跃基金，区间最长 2 年。`
+                  : '口径：基金池等权买入持有（期间无调仓假设）。覆盖全部活跃基金，区间最长 2 年。';
+              })()}
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={caliberOpen}
+                  onChange={(e) => setCaliberOpen(e.target.checked)}
+                />
+              }
+              label={
+                <Typography variant="caption" color="text.secondary">
+                  口径设置（净值复权 / 基准股息率）
+                </Typography>
+              }
+              sx={{ mt: 0.25 }}
+            />
+            <Collapse in={caliberOpen}>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', pl: 1 }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      size="small"
+                      checked={caliberDraft.nav_adjusted}
+                      onChange={(e) => setCaliberDraft((d) => ({ ...d, nav_adjusted: e.target.checked }))}
+                    />
+                  }
+                  label={
+                    <Typography variant="caption">
+                      场外净值分红复权（关掉回到裸单位净值旧口径）
+                    </Typography>
+                  }
+                />
+                <TextField
+                  label="基准股息率 %/年"
+                  type="number" size="small" sx={{ width: 150 }}
+                  value={caliberDraft.bench_div_yield_pct}
+                  onChange={(e) => setCaliberDraft((d) => ({
+                    ...d,
+                    bench_div_yield_pct: Math.max(0, Math.min(10, Number(e.target.value) || 0)),
+                  }))}
+                  inputProps={{ min: 0, max: 10, step: 0.1 }}
+                  helperText={caliber ? `上限 ${caliber.bench_div_yield_max}，0 = 纯价格指数` : ''}
+                />
+                <Button
+                  size="small" variant="outlined" startIcon={<CaliberIcon />}
+                  onClick={saveCaliber} disabled={caliberSaving || !caliber}
+                >
+                  {caliberSaving ? '保存中…' : '保存口径'}
+                </Button>
+                <Typography variant="caption" color="warning.main">
+                  只影响此后生成的复盘/PK/建议回填，历史报告不可比
+                </Typography>
+              </Box>
+            </Collapse>
+          </Box>
         </CardContent>
       </Card>
 
@@ -212,7 +344,10 @@ const ReviewPage: React.FC = () => {
             </Grid>
             <Grid item xs={12} sm={4}>
               <SummaryCard
-                title="沪深300 同期"
+                title={(() => {
+                  const div = report.caliber?.bench_div_yield_pct ?? caliber?.bench_div_yield_pct ?? 0;
+                  return div > 0 ? `基准同期（沪深300+股息 ${div}%/年）` : '基准同期（沪深300 价格指数）';
+                })()}
                 value={pct(report.benchmark_growth_pct)}
                 color={growthColor(report.benchmark_growth_pct)}
                 sub={report.excess_pct != null
@@ -221,12 +356,27 @@ const ReviewPage: React.FC = () => {
               />
             </Grid>
             <Grid item xs={12} sm={4}>
-              <SummaryCard
-                title="信号命中率"
-                value={ss?.hit_rate != null ? `${ss.hit_rate}%` : '—'}
-                color="inherit"
-                sub={`buy ${ss?.buy_hits ?? 0}/${ss?.buy_total ?? 0} · sell ${ss?.sell_hits ?? 0}/${ss?.sell_total ?? 0}`}
-              />
+              {(() => {
+                const ex = ss?.excess;
+                if (ex?.hit_rate != null) {
+                  return (
+                    <SummaryCard
+                      title="信号同向率（超额口径）"
+                      value={`${ex.hit_rate}%`}
+                      color="inherit"
+                      sub={`跑赢基准 buy ${ex.buy_hits ?? 0}/${ex.buy_total ?? 0} · sell ${ex.sell_hits ?? 0}/${ex.sell_total ?? 0}｜绝对口径 ${ss?.hit_rate ?? '—'}%`}
+                    />
+                  );
+                }
+                return (
+                  <SummaryCard
+                    title="信号命中率（绝对口径）"
+                    value={ss?.hit_rate != null ? `${ss.hit_rate}%` : '—'}
+                    color="inherit"
+                    sub={`buy ${ss?.buy_hits ?? 0}/${ss?.buy_total ?? 0} · sell ${ss?.sell_hits ?? 0}/${ss?.sell_total ?? 0}（只量市场方向 beta，选基能力看超额口径）`}
+                  />
+                );
+              })()}
             </Grid>
           </Grid>
 
@@ -301,9 +451,21 @@ const ReviewPage: React.FC = () => {
         <CardContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
             选 2~10 只基金对比：双窗口（近 N 年 / 成立以来）年化收益、最大回撤、夏普，
-            基准归因 Beta/Alpha/信息比率（默认沪深300），规模变化倍数与机构占比（季报）。
+            基准归因 Beta/Alpha/信息比率（默认沪深300+股息），规模变化倍数与机构占比（季报）。
             无风险利率 2%，仅供参考。
           </Typography>
+          {(() => {
+            const raw = pkReport?.caliber?.lines;
+            const lines = raw && raw.length
+              ? raw.map((l) => l.replace(/^>\s*/, ''))
+              : caliberLines('夏普/Alpha 扣减无风险利率 2%/年，净值不另计利息');
+            if (!lines.length) return null;
+            return (
+              <Typography variant="caption" color="text.secondary" sx={{ mb: 1.5, display: 'block' }}>
+                {lines.join('　·　')}
+              </Typography>
+            );
+          })()}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 2 }}>
             {allFunds.map((f) => (
               <Chip

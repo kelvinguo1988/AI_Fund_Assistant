@@ -3,7 +3,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { formatBeijingTime as formatRefreshTime, STRENGTH_CHIP_COLOR, GROWTH_UP, GROWTH_DOWN, growthColor, growthColorOrFlat } from '../utils/format';
+import { formatBeijingTime as formatRefreshTime, STRENGTH_CHIP_COLOR, GROWTH_UP, GROWTH_DOWN, growthColor, growthColorOrFlat, scoreCaliberNote } from '../utils/format';
 import {
   Box,
   Grid,
@@ -262,6 +262,10 @@ const Dashboard: React.FC = () => {
   const buyCount = results.filter((r) => r.signal_direction === 'buy').length;
   const sellCount = results.filter((r) => r.signal_direction === 'sell').length;
   const holdCount = results.filter((r) => r.signal_direction === 'hold').length;
+
+  // Q5：同一天所有行共享同一个截面池，取最大值即当日参与标准化的只数
+  const poolSizes = results.map((r) => r.pool_size).filter((p): p is number => !!p);
+  const scoreCaliber = scoreCaliberNote(poolSizes.length ? Math.max(...poolSizes) : null);
 
   // 板块排行
   const sectorRankings = summary?.sector_flow || [];
@@ -547,7 +551,9 @@ const Dashboard: React.FC = () => {
         <Grid item xs={6}>
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="subtitle2" sx={{ color: GROWTH_UP, mb: 1 }}>TOP10 买入信号</Typography>
+              <Typography variant="subtitle2" sx={{ color: GROWTH_UP, mb: 1 }}>
+                <Tooltip title={scoreCaliber}><span>TOP10 买入信号</span></Tooltip>
+              </Typography>
               {summary?.signals?.top_buy?.length ? (
                 <Table size="small">
                   <TableHead>
@@ -580,7 +586,9 @@ const Dashboard: React.FC = () => {
         <Grid item xs={6}>
           <Card variant="outlined">
             <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-              <Typography variant="subtitle2" sx={{ color: GROWTH_DOWN, mb: 1 }}>TOP10 卖出信号</Typography>
+              <Typography variant="subtitle2" sx={{ color: GROWTH_DOWN, mb: 1 }}>
+                <Tooltip title={scoreCaliber}><span>TOP10 卖出信号</span></Tooltip>
+              </Typography>
               {summary?.signals?.top_sell?.length ? (
                 <Table size="small">
                   <TableHead>
@@ -718,7 +726,11 @@ const Dashboard: React.FC = () => {
                   <TableCell>基金代码</TableCell>
                   <TableCell>基金名称</TableCell>
                   <TableCell>实时估值</TableCell>
-                  <TableCell>评分(-8.5~+8.5)</TableCell>
+                  <TableCell>
+                    <Tooltip title={`${scoreCaliber}；钳位范围 -8.5 ~ +8.5（因子总权重 8.3）`}>
+                      <span>评分(池内相对分)</span>
+                    </Tooltip>
+                  </TableCell>
                   <TableCell>权益仓位</TableCell>
                   <TableCell>信号</TableCell>
                   <TableCell>强度</TableCell>
@@ -798,6 +810,9 @@ const Dashboard: React.FC = () => {
                   {selectedFund.fund_name} ({selectedFund.fund_code})
                 </Typography>
                 <ScoreGauge score={selectedFund.weighted_score} height={180} />
+                <Typography variant="caption" display="block" sx={{ color: 'text.secondary', mt: -1 }}>
+                  {scoreCaliberNote(selectedFund.pool_size)}
+                </Typography>
 
                 {/* ── 第零层质量过滤信息 ── */}
                 {selectedFund.original_score != null &&

@@ -1,19 +1,25 @@
-"""P2 因子诊断引擎测试：纯统计黄金用例 + 注入净值源的服务级回算"""
+"""P2 因子诊断引擎测试：纯统计黄金用例 + Q12 IC 口径 + 注入净值源的服务级回算"""
 
 import json
+import math
 from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import select
 
 from backend.ai.factor_audit import (
+    MIN_IC_PERIODS_FOR_CONCLUSION,
+    TRADING_DAYS_PER_YEAR,
     FactorAuditService,
+    benjamini_hochberg,
     daily_ic,
     forward_return,
     group_compare,
+    ic_p_value,
     quintile_returns,
     signal_stats,
     spearman,
+    t_two_sided_p,
     whipsaw_counts,
 )
 
@@ -185,3 +191,211 @@ class TestFactorAuditService:
 
 async def _noop(code, period):  # noqa: D401
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Q12 IC 统计口径：非重叠抽样 / 年化 IR / 双尾 p / BH 多重校正
+# 背景：T+h 的前瞻收益在相邻交易日重叠 h-1 天，逐日算 IC 会让序列强自相关，
+# IR = mean/std 虚高约 √h 倍 —— 下面的用例就是把"抽样方式"钉死，而不是只看均值。
+# ═══════════════════════════════════════════════════════════════════
+
+FACTOR = "f"
+
+
+def _cross_section(n: int = 6, up: bool = True) -> list[tuple[float, float]]:
+    """n 只基金的截面：因子分与 T+h 收益完全同序（up=True → RankIC=+1）"""
+    xs = [float(i) for i in range(1, n + 1)]
+    ys = xs if up else list(reversed(xs))
+    return list(zip(xs, ys))
+
+
+def _samples(days: list[int], factor: str = FACTOR, n: int = 6) -> dict:
+    """{date: {factor: pairs}}；days 里的整数决定正/反相关（奇偶交替）"""
+    out = {}
+    for i in days:
+        d = (date(2026, 1, 1) + timedelta(days=i)).isoformat()
+        out[d] = {factor: _cross_section(n, up=(i % 2 == 0))}
+    return out
+
+
+class TestTwoSidedP:
+    """双尾 t 检验用正则化不完全贝塔实现，必须对上教科书数值"""
+
+    def test_known_textbook_values(self):
+        assert t_two_sided_p(0.0, 8) == pytest.approx(1.0, abs=1e-9)
+        # t(8) 的 97.5% 分位 = 2.306 → 双尾 p = 0.05
+        assert t_two_sided_p(2.306, 8) == pytest.approx(0.05, abs=1e-3)
+        assert t_two_sided_p(-2.306, 8) == pytest.approx(0.05, abs=1e-3)  # 双尾对称
+        # df=1 是柯西分布：p = 1 - 2·atan(t)/π
+        assert t_two_sided_p(1.0, 1) == pytest.approx(1.0 - 2 * math.atan(1.0) / math.pi, abs=1e-9)
+        assert t_two_sided_p(12.706, 1) == pytest.approx(0.05, abs=1e-3)
+
+    def test_undefined_inputs_return_none(self):
+        assert t_two_sided_p(1.0, 0) is None
+        assert t_two_sided_p(1.0, -3) is None
+        assert t_two_sided_p(float("inf"), 8) is None
+        assert t_two_sided_p(float("nan"), 8) is None
+
+    def test_monotone_decreasing_in_abs_t(self):
+        ps = [t_two_sided_p(t, 12) for t in (0.5, 1.0, 2.0, 4.0)]
+        assert ps == sorted(ps, reverse=True)   # |t| 越大 p 越小
+        assert all(0.0 <= p <= 1.0 for p in ps)
+
+
+class TestIcPValue:
+    def test_needs_two_periods(self):
+        assert ic_p_value([]) is None
+        assert ic_p_value([0.2]) is None
+
+    def test_zero_variance_is_not_significant(self):
+        """逐日常数 IC → IR 无定义，也绝不能报成「显著」（旧口径下 IR=inf 最容易骗人）"""
+        assert ic_p_value([0.3, 0.3, 0.3, 0.3]) is None
+
+    def test_stable_positive_signal_reaches_significance(self):
+        series = [0.05 + 0.01 * (i % 3) for i in range(24)]
+        p = ic_p_value(series)
+        assert p is not None and p < 0.05
+
+    def test_zero_mean_series_is_not_significant(self):
+        p = ic_p_value([0.1, -0.1] * 12)
+        assert p is not None and p > 0.9
+
+
+class TestBenjaminiHochberg:
+    def test_step_up_values(self):
+        got = benjamini_hochberg([0.001, 0.01, 0.04, 0.2, 0.5])
+        assert got == [0.005, 0.025, pytest.approx(0.066667), 0.25, 0.5]
+
+    def test_none_kept_out_of_ranking(self):
+        assert benjamini_hochberg([None, 0.01, 0.2]) == [None, 0.02, 0.2]
+        assert benjamini_hochberg([None, None]) == [None, None]
+
+    def test_monotone_and_capped_at_one(self):
+        got = benjamini_hochberg([0.6, 0.61])
+        assert got == [0.61, 0.61]          # 单调不降：小的 p 不会大过大的 p
+        assert all(q is not None and q <= 1.0 for q in got)
+
+    def test_single_factor_degenerates_to_p(self):
+        assert benjamini_hochberg([0.03]) == [0.03]
+
+
+class TestDailyIcSampling:
+    """非重叠抽样的核心断言：抽样方式必须改变 IR，而不是只改个字段名"""
+
+    def test_horizon_2_alternating_pattern(self):
+        # 20 个交易日：偶数日完全正相关、奇数日完全反相关
+        samples = _samples(list(range(20)))
+        st = daily_ic(samples, FACTOR, horizon=2)
+        assert st.n_days_valid == 20                    # 重叠口径下本来有 20 个点
+        assert st.days == 10                            # 每 2 日取 1 → 独立周期减半
+        assert st.rank_ic_mean == pytest.approx(1.0)    # 取到的恰好全是正相关那些
+        assert st.sampling == "non_overlapping"
+        # 全是 +1 → 方差 0 → IR/p 无定义（旧口径混着 -1 会算出 IR=0 的假"无效"）
+        assert st.rank_ic_ir is None
+        assert st.rank_ic_p_value is None
+        assert st.rank_ic_positive_ratio == pytest.approx(1.0)
+
+    def test_overlapping_rollback_restores_old_numbers(self):
+        samples = _samples(list(range(20)))
+        st = daily_ic(samples, FACTOR, horizon=2, overlapping=True)
+        assert st.days == 20
+        assert st.sampling == "overlapping"
+        assert st.rank_ic_mean == pytest.approx(0.0)
+        assert st.rank_ic_ir is not None and abs(st.rank_ic_ir) < 0.15
+
+    def test_horizon_1_identical_in_both_modes(self):
+        samples = _samples(list(range(12)))
+        a = daily_ic(samples, FACTOR, horizon=1)
+        b = daily_ic(samples, FACTOR, horizon=1, overlapping=True)
+        assert a.days == b.days == 12
+        assert a.rank_ic_mean == pytest.approx(b.rank_ic_mean) == pytest.approx(0.0)
+
+    def test_insertion_order_does_not_matter(self):
+        """抽样按时间等距，不是按 dict 插入顺序"""
+        days = list(range(20))
+        asc = daily_ic(_samples(days), FACTOR, horizon=2)
+        desc = daily_ic(_samples(list(reversed(days))), FACTOR, horizon=2)
+        assert asc.days == desc.days == 10
+        assert asc.rank_ic_mean == pytest.approx(1.0)
+        assert desc.rank_ic_mean == pytest.approx(1.0)
+
+    def test_thin_days_are_skipped_not_sampled(self):
+        """截面不足 MIN_CROSS_SECTION 的交易日既不进序列，也不占抽样槽位"""
+        from backend.ai.factor_audit import MIN_CROSS_SECTION
+
+        samples = _samples(list(range(10)))
+        thin = (date(2026, 1, 3)).isoformat()
+        samples[thin] = {FACTOR: _cross_section(n=MIN_CROSS_SECTION - 1)}
+        st = daily_ic(samples, FACTOR, horizon=2)
+        assert st.n_days_valid == 9
+        assert st.days == 5
+
+    def test_ir_annualization_uses_sqrt_of_periods_per_year(self):
+        # 让 IC 有方差：截面里混入反相关日，且保证抽样后仍拿到混合序列
+        samples = {}
+        for i in range(24):
+            d = (date(2026, 1, 1) + timedelta(days=i)).isoformat()
+            n = 6 if i % 4 < 2 else 7
+            samples[d] = {FACTOR: _cross_section(n=n, up=(i % 3 != 0))}
+        st = daily_ic(samples, FACTOR, horizon=5)
+        assert st.rank_ic_ir is not None
+        assert st.rank_ic_ir_annualized == pytest.approx(
+            st.rank_ic_ir * math.sqrt(TRADING_DAYS_PER_YEAR / 5), rel=1e-6
+        )
+        assert st.avg_pairs > 0
+
+    def test_to_dict_carries_every_caliber_field(self):
+        d = daily_ic(_samples(list(range(8))), FACTOR, horizon=2).to_dict()
+        for key in ("days", "n_days_valid", "sampling", "rank_ic_ir_annualized",
+                    "rank_ic_p_value", "rank_ic_q_bh", "significant"):
+            assert key in d
+
+
+class TestAuditExposesQ12:
+    @pytest.mark.asyncio
+    async def test_service_marks_sampling_and_bh(self, db_session):
+        codes = await _seed_pool(db_session)
+        nav = await _fake_nav_factory({c: 0.0005 * i for i, c in enumerate(codes)})
+        report = await FactorAuditService(db_session, nav_provider=nav).audit(days=40, horizons=(3,))
+        assert report.ic_sampling == "non_overlapping"
+
+        ideal = next(f for f in report.factor_ic if f["factor"] == "f_ideal")
+        assert ideal["sampling"] == "non_overlapping"
+        assert ideal["days"] < ideal["n_days_valid"]        # 确实抽稀过
+        # 完美因子 → 方差 0 → 不可检验，q 与 significant 必须是 None 而不是"✓"
+        assert ideal["rank_ic_q_bh"] is None
+        assert ideal["significant"] is None
+
+        md = report.summary_md()
+        assert "非重叠周期" in md and "Benjamini" in md and "q(BH)" in md
+        assert "IR年化" in md and "独立周期" in md
+
+    @pytest.mark.asyncio
+    async def test_overlapping_flag_is_the_rollback_switch(self, db_session):
+        codes = await _seed_pool(db_session)
+        nav = await _fake_nav_factory({c: 0.0005 * i for i, c in enumerate(codes)})
+        report = await FactorAuditService(db_session, nav_provider=nav).audit(
+            days=40, horizons=(3,), overlapping_ic=True)
+        assert report.ic_sampling == "overlapping"
+        ideal = next(f for f in report.factor_ic if f["factor"] == "f_ideal")
+        assert ideal["days"] == ideal["n_days_valid"]
+        assert "逐日重叠周期" in report.summary_md()
+
+    @pytest.mark.asyncio
+    async def test_few_independent_periods_forbids_conclusion(self, db_session):
+        """独立周期 < 门槛时必须出现"不要据此调权重"的告警行"""
+        codes = await _seed_pool(db_session)
+        nav = await _fake_nav_factory({c: 0.0005 * i for i, c in enumerate(codes)})
+        report = await FactorAuditService(db_session, nav_provider=nav).audit(days=30, horizons=(20,))
+        ideal = next((f for f in report.factor_ic if f["factor"] == "f_ideal"), None)
+        if ideal is not None:
+            assert ideal["days"] < MIN_IC_PERIODS_FOR_CONCLUSION
+        assert any("不要据此调整因子权重" in c for c in report.caveats)
+
+    def test_llm_prompt_holds_the_same_numbers(self):
+        from backend.ai.presets import PRESET_TASKS
+
+        prompt = PRESET_TASKS["factor_audit"]["default_prompt"]
+        assert "非重叠周期" in prompt and "rank_ic_q_bh" in prompt
+        assert str(MIN_IC_PERIODS_FOR_CONCLUSION) in prompt
+        assert "rank_ic_ir_annualized" in prompt

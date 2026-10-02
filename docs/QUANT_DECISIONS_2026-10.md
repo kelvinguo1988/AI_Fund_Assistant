@@ -27,13 +27,30 @@
 | Q9 | 无净值新鲜度门槛，陈旧净值可拿到今天的信号（§3.7 P2） | **超 N 个交易日硬否决 + 落库 as-of 日期** | 是 | 是（详情页显示 as-of） | ✅ |
 | Q10 | 调仓权重用成本价 + `1.0` 哨兵（§3.7 P2）；无持有期/赎回费约束（§3.5） | **市值权重 + 去哨兵 + min_holding_days 阶梯赎回费** | 是（四清单权重与卖出建议） | 是（持仓表单加首次买入日） | ✅ |
 | Q11 | 复盘基准是价格指数；场外复盘/回填仍用未复权净值（§3.7 P2 + 第一批 #56 遗留） | **三条链路统一复权口径 + 基准加回股息或用全收益** | 是（复盘数字变小） | 是（口径说明头） | ✅ |
-| Q12 | factor_audit：重叠前瞻收益 + IR 未年化 + 无多重比较校正 + 无样本外（§3.7 P2） | **非重叠采样 + IR 年化标注 + Bonferroni 提示** | 否（只影响诊断结论） | 是（诊断表加口径列） | ⬜ |
-| Q13 | P3 死配置与口径不一致打包（§3.7 P3） | **一次清扫**：signal_rules 死配置、MACD 文档、两种分位定义、size_stability 量纲、`pb` 字段 | 否 | 是（因子页禁编辑死字段） | ⬜ |
-| Q14 | 工程闸门：CI 无一条 `run:`、无 ruff/mypy/eslint/pre-commit（§体检基线） | **先补"测试+构建"两条 job**，再考虑 lint | 否 | 否 | ⬜ |
+| Q12 | factor_audit：重叠前瞻收益 + IR 未年化 + 无多重比较校正 + 无样本外（§3.7 P2） | **非重叠采样 + IR 年化标注 + Bonferroni 提示** | 否（只影响诊断结论） | 是（诊断表加口径列） | ✅ |
+| Q13 | P3 死配置与口径不一致打包（§3.7 P3） | **一次清扫**：signal_rules 死配置、MACD 文档、两种分位定义、size_stability 量纲、`pb` 字段 | 否 | 是（因子页禁编辑死字段） | ✅ |
+| Q14 | 工程闸门：CI 无一条 `run:`、无 ruff/mypy/eslint/pre-commit（§体检基线） | **先补"测试+构建"两条 job**，再考虑 lint | 否 | 否 | ✅ |
 
 推荐实施顺序：**Q6 → Q7 → Q8 → Q9 → Q10 → Q11 → Q4 → Q1 → Q2 → Q3 → Q5 → Q12 → Q13 → Q14**。
 理由：Q6–Q11 属于"验证口径自身有问题"，先把尺子校准，再调因子（Q1–Q4），否则调参结论
 建立在被污染的指标上；Q5/Q12–Q14 是标注与卫生项，随时可做。
+
+### 0.1 实施进度（开发时同步）
+
+| 条目 | 状态 | 落点 | 回滚键 |
+|---|---|---|---|
+| Q6 回测口径（2A-1） | ✅ 已开发并浏览器实测 | `backtest_service` 仓位状态机 + 三基线 + `_sample_gate`；`/backtest` 页三条曲线与「样本不足」Chip；`GET|PUT /api/backtest/config/measurement` | `backtest_carry_position` / `backtest_min_signals` / `backtest_min_coverage_pct`（置 0 即回旧口径） |
+| Q7 命中率口径（2A-2） | ✅ 已开发并浏览器实测 | `advice_learning_service` 双口径 + 固定 30 净值日窗口 + `run_advice_backfill`；工单入账（`presets` 投递路径）；每周六 01:00 调度；持仓页「建议命中率与阈值校准」卡 | `system_config.advice_hit_mode='abs'`（整链回旧判定，`hit_abs/hit_excess` 两列历史都在） |
+| Q11 复盘统一复权（2A-3） | ✅ 已开发并浏览器实测 | `caliber_service`（唯一口径源：读/写/股息累乘/三行口径头）；`review_service.otc_nav_pairs` 复权 + `_signal_hit_stats` 双口径；`fund_compare_service` 与 `advice_learning_service.run_advice_backfill` 同源消费；`GET|PUT /api/analysis/caliber`；复盘页三行口径 + 「口径设置」开关、PK 页与回测页口径头、AI 简报 payload `caliber` + 照抄约束 | `system_config.review_nav_adjusted='0'`（回裸单位净值）/ `benchmark_dividend_yield_pct='0'`（回纯价格指数）；两键都可从 UI 改，互不耦合 |
+| Q8 棺材钉恢复窗口（2B-1） | ✅ 已开发并 UI 实测 | `quality_filter._scan_coffin_nail()` 一次扫描返回 `(vetoed, pending)`；恢复期未观测满 `recovery_days` 则不判定，只经 `coffin_nail_pending_warning` → `build_result.warnings` → `signal.quality_warnings` 落库并在观望位/AI 调仓清单展示 | `quality_filter_config.coffin_nail_require_full_recovery_window=0`（回"昨天暴跌也否决"；int 键，自动出现在质量过滤页 ⚰️ 分组） |
+| Q9 净值新鲜度（2B-2） | ✅ 已开发并 UI/真实跑实测 | `trading_calendar.count_missing_trading_days` + `load_off_day_dates`（库内日历，零上游）；`quality_filter.eval_nav_staleness` 三档判定；`analysis_service._nav_freshness` 接 `_score_and_store`（veto→`analysis.data_missing` 埋点并跳过评分，warn→`quality_warnings`）；`analysis_results.nav_as_of_date` 新列 + 透出；「质量过滤」页 🕒 净值新鲜度 分组 | `quality_filter_config.nav_staleness_max_trading_days=0`（整个门槛关闭，as-of 列仍照常落库） |
+| Q10 权重与持有期（2B-3） | ✅ 已开发并浏览器实测 | `ai/holding_fee.py`（阶梯解析/费率档/下一档天数/宽松日期，纯函数零请求）；`rebalance._position_valuations()` 市值→成本→份额三档 + 逐只 `weight_basis` + `_data_gaps` 说话；`_fee_gate()` 惩罚档降级观望；`FundRealtimeService.peek_cached_nav()`（只读缓存窥探）；`user_positions.first_buy_date` 新列 + 建仓/编辑表单 + CSV 日期列别名；工单/前端/`get_positions` 工具透出持有期与费率；「质量过滤」页 💸 持有期与赎回费 分组（42→44 参数、8→9 组） | `quality_filter_config.redemption_fee_enabled=0`（整段撤掉，工单回到只有评分+恶化佐证的旧样子）；`redemption_fee_penalize_pct` 调惩罚档松紧（0=只标注不拦）；`redemption_fee_ladder` 是 list 值、配置页不渲染，只能经 `quality_filter_config` JSON 覆盖（脏值回落默认阶梯）|
+| §3 影子评分层 | ✅ 已开发并浏览器实测 | `analysis_results` 6 个可空新列（`shadow_score/shadow_direction/shadow_variant/shadow_detail` + `pool_size/factor_coverage`，启动迁移、不回填历史）；`backend/engines/shadow_scoring.py` 变体注册表 + `compute_shadow`（三类失败收敛成 `(None,None)`）；`analysis_service._score_and_store` 用质量过滤修正后的同一份输入算影子；`backend/services/shadow_report_service.py` 分歧报表（2 条本地 SQL）；`GET|PUT /api/analysis/shadow-config`、`GET /api/analysis/shadow-divergence`；「评分配置」页影子口径卡 | `system_config.shadow_scoring_enabled=0`（关闭时影子列显式写 NULL，不留旧对照）；换口径只改 `shadow_variant`，生产列不受影响 |
+| 2C 评分结构新口径（Q2+Q3+Q4+Q1，**只入影子**） | ✅ 已开发并浏览器实测（注册为 `caliber_2c`，生产未切） | `backend/engines/shadow_variants.py`：市场三因子退出加权和（Q2）+ 动量簇权重上限与趋势乘性位（Q3）+ 覆盖率折算门槛（Q4）+ 五档只渲染文案（Q1）；`register_variant("caliber_2c")` 挂进 §3 注册表，分析链零改动；4 个口径参数进 `QUALITY_CONFIG`（44→48 参数、9→10 组「影子口径2C」），经 `GET|PUT /api/system/quality-config` 读写、越界钳位；`GET /api/analysis/shadow-config` 新增 `variant_descriptions` / `caliber_params`；分歧报表与卡片新增 `skip_rows`（低覆盖率不出记录）| 影子层整体回滚 = `shadow_scoring_enabled=0`（生产信号从未依赖本口径）；单项回滚 = 把对应参数调回中性（`shadow_2c_cluster_cap_pct=0` 关簇上限、`shadow_2c_trend_disagree_factor=1` 关乘性位、`shadow_2c_min_coverage=0` 关覆盖率折算）；**生产 `threshold_ref_total_weight` 仍是 8.3，未跟着改成 6.0** |
+| Q5 池内相对分标注（2D） | ✅ 已开发并浏览器实测 | 单一文案源 `scoring_engine.score_caliber_note(pool_size)`（`scoring_engine.py:285-299`）+ 前端同值常量 `utils/format.ts::scoreCaliberNote` / `THIN_POOL_SIZE=20`（由 `tests/test_score_caliber.py` 断言两边同值）；证据是 `analysis_results.pool_size`（截面标准化后回填，批量与流式两条路径都记；**旧行 NULL → 文案改为"样本数未记录，不能跨期/跨池比较"**，`<20` 追加"池子偏薄"）；消费面全覆盖：仪表盘评分表头 tooltip 与详情行、历史报告表头与详情、报告引擎总分行与市场段（`report_engine.py:113/330`）、AI 简报 payload 与逐基金明细、Skill 上下文、Agent 工具描述与 `signal_overview` 预设任务 caveat、`AnalysisResultOut.pool_size` 透出；持仓页「分差」列头 tooltip 写明"适合给候选配对排序，不适合当绝对刻度" | 无配置键（纯文案 + 只增一个可空列，该列与 §3 影子元数据共用）；要去掉标注即 revert 这一组调用点 |
+| Q12 因子诊断 IC 口径（2D） | ✅ 已开发并回归实测 | `backend/ai/factor_audit.py`：`daily_ic(..., overlapping=False)` 按 horizon 每 h 个有效交易日取一个**非重叠**样本（重叠时 `IR=mean/std` 被自相关放大 ≈√h）；`days`（独立周期数）与 `n_days_valid`（重叠口径原始长度）并存、`sampling` 标注口径；`rank_ic_ir_annualized = IR × √(252/h)`；`t_two_sided_p` / `ic_p_value` 用正则化不完全贝塔函数算双侧 Student-t；`benjamini_hochberg` 对同窗口全因子做多重比较校正 → `rank_ic_q_bh` + `significant`（**实现选 BH 而非 §0 建议的 Bonferroni**：一次审计要同时看 11 个因子 × 多个 horizon，Bonferroni 在真信号弱时会把结论全压成"不显著"，等于没有结论）；`MIN_IC_PERIODS_FOR_CONCLUSION=8` 以下只出过程数字、不出"哪个因子更好"的结论并写进 caveats；`summary_md` 扩到 11 列且口径行随采样模式变化；诊断 Agent 预设任务提示词同步要求引用非重叠周期 / BH q / 年化 IR；**全部在已落库样本上做纯 Python 统计，零上游请求** | `FactorAuditService.audit(overlapping_ic=True)` 回退逐日重叠旧口径（报表会明确标"逐日重叠周期"）；IC 序列零方差时 IR/p/q/significant 一律 None，绝不显示"✓" |
+| Q13 死配置与口径清扫（2D） | ✅ 已开发 | `factor_engine.SIGNAL_RULES_INERT_FACTORS`（10 个计算函数从不读 DB `signal_rules` 的因子，判据可机检：源码不含 `rules_from_params`）+ `signal_rules_effective()`；`calculate_all` 注入规则前先查该表，死配置不再无谓注入；`database._clear_inert_signal_rules()` 启动幂等迁移清掉存量规则数组 + 5 个种子因子的 seed 置 `[]`；`FactorOut.signal_rules_effective` 经 `/api/factors` 透出，因子页对无效因子打「规则不适用」chip 并说明得分来源；`backend/utils/stats.py::percentile_rank_inclusive` 统一分位定义（含当前值；此前 `index_valuation_service` 用严格 `<`、`market_regime_service` 用 `<=`，同一指数两处差 1 个点）；仪表盘分位线与策略极端档**改名并注释为两套不同分区**（`DASHBOARD_PE_LOW/HIGH_PERCENTILE` 30/70 vs `extreme_*_valuation_pct` 0.15/0.85），改一边不影响另一边；MACD 文档删掉从未实现的"放量"档；`size_stability` 文档写明量纲（深交所"基金份额"是份，需 × 最新净值换成元才匹配 2 亿~50 亿档）与**当前未启用**，适配器改为落元序列；删除无人消费且标注错误的 `FundData.pb`（实为 csindex 市盈率2）与 `volume_history` | 纯文档 / 死字段 / 未启用因子，**生产信号零变化**；迁移幂等且只清死配置因子，4 个真读规则的因子（`drawdown_recovery` + 3 个 market）有反向用例保护；回滚 = revert |
+| Q14 CI 工程闸门（2D） | ✅ 已开发 | 新增 `.github/workflows/ci.yml`：`backend-tests`（python 3.9 对齐后端 Dockerfile，`pip install -r backend/requirements.txt`，`PYTHONPATH=.` 跑 `pytest -q`）+ `frontend-build`（node 20 对齐前端 Dockerfile，`npm ci && npm run build`）；此前 `.github/workflows/` 只有 `docker-publish.yml` 且**0 条 `run:`** —— 从未拦过任何东西；测试本身零上游请求、无需 .env，所以 CI 不会撞限流红线；lint / type-check（ruff、mypy、eslint）有意留到 **Q14b**，不与本次功能改动混在一个闸门里 | 删掉该文件即回滚；`tests/test_dead_config.py::TestCiActuallyGates` 断言两条 job 的 `run:` 里确实有 pytest 与 `npm run build`、工具链版本与 Dockerfile 一致，防止再次退化成"看起来有 CI"的纸面配置 |
 
 ---
 
@@ -427,6 +444,26 @@ B 是本条的核心——把"超额收益"从半仓噪声里解放出来。
 
 **回滚路径**：`quality_filter` 键 `coffin_nail_require_full_recovery_window`（0=旧行为），默认 1。
 
+**落地（2B-1，2026-10-02 已开发并 UI 实测）**
+
+- 判据按 **A**：`_scan_coffin_nail()` 里 `observed = n - recovery_start`，`observed < recovery_days`
+  且开关为 1 时 `continue` 不参与判定；标注按 **B**：同一次扫描记 `pending`，
+  文案 `棺材钉形态待确认：最近一次回撤 {x%} 之后仅观测 {observed} 个交易日（判定需 60 日恢复期），本轮暂不否决`。
+- pending 取"最近一次"（循环里 `start` 越大越新，直接覆盖），不会把一年内每个未走完的窗口都念一遍。
+- `check_coffin_nail_pattern()` / `coffin_nail_pending_warning()` 是内核的两个薄包装，
+  `pre_filter()` 保持 2 元组合约（`vetoed, reason = qf.pre_filter(...)` 的既有调用与测试不破）。
+  标注挂在 `build_result()` Step 1 的非否决分支，经 `signal.quality_warnings` 落库并上仪表盘/AI 清单。
+- 上游预算：**0 新增请求**（纯本地序列判定）。回滚键是 int，`GET|PUT /api/system/quality-config`
+  与「质量过滤」页 ⚰️ 分组自动出现，无需前端改动；UI 保存走加法合并，不会抹掉该列既有的其他覆盖键（实测）。
+- 原计划"上线前跑一遍只读统计给出命中清单"**未能执行**：被否决基金不落 `analysis_results`（无 veto 列），
+  `fund_data_caches` 只有阶段涨幅没有净值序列 → 复现判定必须为 57 只池重取净值，与防封禁红线冲突。
+  改为随下一轮正常分析自然观察：`select * from analysis_results where quality_warnings like '%棺材钉形态待确认%'`。
+  2026-10-02 单只真实跑（007491 南方信息创新混合C，1 次上游请求）已命中并落库：
+  `棺材钉形态待确认：最近一次回撤 20% 之后仅观测 30 个交易日（判定需 60 日恢复期），本轮暂不否决`
+  —— 旧口径下这一只会被直接否决。
+- 测试：`TestCoffinNailPendingWindow` 6 例（观测 10 日不否决 / 观测 80 日仍否决 / 文案含实际天数 /
+  干净基金无标注 / 回滚键复现旧行为 / `build_result` 带上标注）；全量 578 passed。
+
 ---
 
 ### Q9【P2】净值新鲜度门槛（陈旧净值不得拿到今天的信号）
@@ -456,6 +493,31 @@ B 是本条的核心——把"超额收益"从半仓噪声里解放出来。
 - `analysis_results` 建议同时落 `nav_as_of_date` 列（字段新增，向后兼容）。
 
 **回滚路径**：`quality_filter` 键 `nav_staleness_max_trading_days=0`（0=关闭）。
+
+**落地（2B-2，2026-10-02 已开发，UI + 真实单只跑实测）**
+
+- 缺口按**交易日**且**两端都不计**：`count_missing_trading_days(nav_date, today, off_days)` 数的是
+  `(nav_date, today)` 开区间内的开市日，所以"最新净值 = 上一交易日"恒为 0，不会把正常披露节奏当滞后；
+  周末一律休市（调休补班的周六股市不开市，与 `is_a_share_trading_day_async` 同口径），
+  法定节假日从库内 `holiday_calendar`（`is_off_day=True`）读，**一轮一次 DB 查询、零上游请求**。
+  表为空时退化为"周一至周五"，只会把缺口算多（偏保守），不会放过停披基金。
+- 判档 `eval_nav_staleness(missing_days, cfg, slow_disclosure, nav_date)` → `off/ok/warn/veto`：
+  `>5` 标注、`>10` 否决，QDII/跨境/96 开头互认基金两档各 +5（`nav_staleness_slow_disclosure_extra_days`）。
+  `missing_days is None` 或净值日期解析失败 → `off`（不判）：取数格式变化应当表现为"防线缺失"，
+  而不是把整池当陈旧否决。
+- 接线在 `_score_and_store`（批量与流式共用）：veto 走既有 `_log_missing_nav` →
+  `analysis.data_missing` 埋点 + 跳过评分（流式路径自动进 `complete.failed`），warn 追加到
+  `qf_result.warnings` → `signal.quality_warnings` → 落库与仪表盘/AI 清单同一出口。
+- `analysis_results.nav_as_of_date`（YYYY-MM-DD，可空，启动迁移）：与 `analysis_date` 的差就是披露缺口，
+  §3 影子层的 `nav_as_of_date` 依赖同一列；回滚开关只关判定，不影响这一列继续落库。
+- 前端：「质量过滤」页新增 🕒 净值新鲜度 分组（3 个 int 键自动进 `GET|PUT /api/system/quality-config`，
+  42 参数 / 8 组），`AnalysisResult` 类型补 `nav_as_of_date`。
+- 实测：单只真实跑（007491）落库 `nav_as_of_date=2026-09-30`、`analysis_date=2026-10-02`（10-01 国庆休市，
+  缺口 0 → 不标注，符合预期）；否决/标注两档由单测覆盖真实 `_score_and_store` 路径。
+  `tests/test_nav_freshness.py` 25 例（缺口计数含长假与补班周六、库内休市日读取、三档判定与回滚键、
+  QDII 放宽、慢披露识别、跳过评分 + 埋点、标注与 as-of 落库、门槛关闭时不查日历）；全量 603 passed。
+- **信号漂移影响**：`analysis_results` 行数在披露停摆期下降（QDII/停牌基金不再产出建议），
+  与 Q6-C 样本下限叠加会让"样本不足"更常见 —— 这是预期收益，不是回归。
 
 ---
 
@@ -504,6 +566,52 @@ B 是本条的核心——把"超额收益"从半仓噪声里解放出来。
 
 **回滚路径**：`redemption_fee_enabled=0` 关闭 C；A/B 属单函数改动，git revert 单提交即可。
 
+**落地（2B-3，2026-10-02 已开发，B+A+C 同批，C 的两步合成一次上线）**
+
+- **B（去哨兵）**：`_position_valuations()` 三档链 **实时净值市值 → 成本市值 → 份额×组合平均单位价值**。
+  末档不直接用 `shares/Σshares`：那样量纲会从元掉成比例，与其余持仓不同源；用
+  `shares × avg_unit`（`avg_unit = Σ已知市值 / Σ已知份额`）既保留裁定 B 的份额比例，
+  又不把整只持仓挤出归一结果。缺档逐只 `weight_basis` 标注 + `_data_gaps()` 列代码说话（旧实现只在
+  **全部**缺成本时才提示）。
+- **A（市值口径）红线兑现**：净值**只读** `FundRealtimeService.peek_cached_nav(codes, 7天)`
+  （本批新增的只读窥探：命中 `_estimate_cache` 才返回，未命中**不回退拉取**），
+  `_position_valuations` 外层 try/except 包住 —— 缓存不可用只让口径退到成本/份额档，不该炸整张工单。
+  实测（开发库，两只真实持仓、无缓存命中）：`weight_basis=cost` × 2，权重 35.6% / 64.4%
+  = 8960:16200，与旧口径相同；差别在漏填成本的那只不再掉到 0.006%，以及仪表盘刚看过的基金会自动升到 market 档。
+- **C（持有期与赎回费）**：`holding_days` 按**自然日**（基金合同"持续持有期少于 7 日"量的就是自然日），
+  唯一输入是 `user_positions.first_buy_date`（可空新列，启动迁移且**不从 `created_at` 回填**）。
+  新纯函数模块 `backend/ai/holding_fee.py`：`parse_fee_ladder` 逐行校验（上界≤0、费率越界、形状错都丢行），
+  全脏回落 `DEFAULT_FEE_LADDER` 并 `logger.warning` —— 配置写错可以关掉约束，但不能表现为"免赎回费"。
+- **惩罚档的诚实映射**：裁定原文的"`fee_pct > 预期收益改善`"在本仓没有可信数值来源
+  （校准只动阈值，`weighted_score` 不是收益率，换算等于编一个系数），故实现为可配的
+  `redemption_fee_penalize_pct`（默认 1.0 ⇒ 只有 7 日 1.5% 这档拦人，0.5%/0.25% 两档只标注），
+  落惩罚档的卖出**降级为观望**且 `confirm_days = days_to_next_fee_tier()`（再持有几天出档），
+  理由里保留恶化佐证 —— "该卖 vs 值得卖"分开，但分数恶化不能因费率被抹掉。
+- **未填首买日 = 未知**：`holding_days=None` → 不做费用约束、卖出理由写"持有期未知（未填首次买入日），
+  未做赎回费约束"，caveat 列出代码并点名"不默认 0 天"。等权近似模式（无真实持仓）压根不产持有期字段。
+- **回滚保真**：`redemption_fee_enabled=0` 时 `_fee_gate()` 提前返回全空结果（无 `holding_days`、
+  无 notes、不降级），工单文本与改动前逐字一致（`test_rollback_switch_removes_fee_from_worklist` 断言
+  理由里不出现"赎回费"）。阶梯是 list 值 ⇒ 配置页只渲染数值参数，故 💸 分组只出现 2 个 int 键，
+  阶梯经 `quality_filter_config` JSON 覆盖（`merge_quality_config` 自 2026-08-22 起接受 list/str）。
+- **输入面**：建仓/编辑对话框 `type=date`；PUT 用 `model_fields_set` 区分"键未出现=不动"与
+  "显式 null=清除"；未来日期 400（否则持有期被 clamp 成 0 天 → 全池建议按惩罚档拦掉）；
+  `upsert_position(first_buy_date=None)` 语义是**不改**，所以不带日期列的 CSV 再导入不会抹掉手工补录；
+  CSV 认「首次买入日期/买入日期/买入时间/确认日期/交易日期」，`2026/9/3`、`2026年9月3日`、`20260903` 都吃，
+  解析不出或晚于今天 → 当未填 + 逐行报错，不拦整份导入。
+- **前端**：Tab1「持有期」列（日期 + `持有 N 天` / `持有 —`）与缺首买日补录提示条；Tab2 阶梯文案行
+  （`赎回费阶梯 <7天 1.5% / <365天 0.5% / ≥365天 0.25%，≥1% 降级观望`）、卖出行费率 chips、
+  同赛道换仓表「卖侧持有/费率」列、持仓 chips tooltip `权重口径 成本市值（净值未命中）｜持有 34 天`。
+- **测试污染修复**：调仓 Agent 任务的 SSE 测试带 `record_advice=True`，而 `AdviceLearningStore`
+  用同步 sqlite 直连 `settings` 的库路径 ⇒ 测试基金（004011/011452/006751）写进了真实命中率样本表。
+  conftest 增 autouse `_isolate_advice_store`（与 `_isolate_error_log_store` 同预案：改 settings 路径 +
+  重建单例），存量 3 条测试行已删（`advice_outcomes` 为空，无孤儿）。
+- 实测：持仓页补录 2026-06-18 → `持有 106 天` + 提示条计数下降 → 编辑清除回 NULL（往返后开发库复原）；
+  Tab2 用 `window_days=120`（开发库最新分析停在 2026-07-22）看到阶梯文案/两条口径 caveat/权重 chips；
+  质量过滤页 💸 分组 2 参数（44 参数 / 9 组）；控制台无新增报错。
+  `tests/test_positions_rebalance.py` 16→37 例；全量 624 passed，`tsc --noEmit` + `vite build` 通过。
+- **待你补录**：013149 / 162719 两只真实持仓的 `first_buy_date` 目前为空（工单显示"持有 —"）——
+  补录后赎回费约束与惩罚档降级才生效；没有它，这一半防线按设计是"未知即不约束"。
+
 ---
 
 ### Q11【P1，第一批遗留】三条链路的收益口径必须统一（含基准全收益）
@@ -549,6 +657,31 @@ B 是本条的核心——把"超额收益"从半仓噪声里解放出来。
 
 **回滚路径**：`benchmark_dividend_yield_pct=0` 即回到价格指数口径；
 A 属正确性修复，不建议回滚（若必须，用配置 `review_nav_adjusted=0` 切回单位净值）。
+
+**落地（2A-3，2026-10-02 已开发并浏览器实测）**
+
+- 新增 `backend/services/caliber_service.py` 为唯一口径源：`load_caliber/save_caliber`
+  （一轮只读一次，脏值回落默认，股息率夹在 0~10）、`with_dividend_carry`
+  （价格指数点位 → 含息序列：逐交易日累乘 `1+y/252` 的**前缀因子**，任意子区间求比值时
+  公共前缀自动约掉，剩下的正好是"区间交易日数 × 单日股息"，因此调用方无需再传日期）、
+  `caliber_head_lines`（三行口径头）。
+- A：`review_service.otc_nav_pairs` 用因子链同一个 `build_forward_adjusted_nav` 做前复权
+  （日增长率缺失日退回净值比、整段缺失原样返回，故 f10/lsjz 兜底源不会"复权后更差"；
+  停牌/NaN/≤0 整行剔除）；`_fetch_nav_series(..., adjusted=)` 由 `review_nav_adjusted` 驱动，
+  ETF 分支保持 qfq。PK（`fund_compare_service`）与建议回填（`run_advice_backfill`）共用同一条链。
+- B②：基准股息率默认 2.7，三处消费方（复盘/ PK / 回填）都从 `get_benchmark_series()` 的
+  类级 1h 缓存序列上做变换 → **上游预算 0 新增请求**。
+- C：`report.caliber.lines` 随复盘与 PK 报告返回，前端只渲染不再硬编码；AI 每日简报 payload
+  增加 `caliber` 并在提示词里要求"引用区间收益/超额/回测数字必须单独一行照抄三行口径"；
+  回测页头部改为净值口径/基线口径/现金不计息三行。
+- 双口径同向率（复盘侧的 Q7 对应物）：`signal_stats.excess` 为主、绝对口径降为对照。
+  实测 2026-09-02→10-02（基准 -3.99%）：绝对 **27.3%**（buy 1/9, sell 2/2）
+  vs 超额 **63.6%**（buy 6/9, sell 1/2）—— 印证"绝对口径量的是市场方向 beta"。
+- 实测附带发现（**非本条改动引入**）：复盘页 7 只场内 ETF 全部取数失败
+  `ak.fund_etf_hist_em` → `ConnectionError/RemoteDisconnected`，冷却 20s 后单只复现同样失败，
+  说明是东财 K 线接口对本机 IP 的连通性问题（错误日志按 `rate_limit` 归类，同波只记 1 条）。
+  场外 49 只正常。属既有 `_get_etf_data` 的上游依赖，不新增请求，等冷却即恢复；
+  若要加固可让 ETF 分支优先读库内净值/行情缓存，留给 2B 之后的数据源专项。
 
 ---
 
@@ -632,6 +765,91 @@ lint 作为 Q14b 单独决策。
 配套需要落库的元数据（Q5/Q6/Q9/Q12 都要用到）：`pool_size`、`nav_as_of_date`、
 `factor_coverage`（有效权重和 / 总权重）。属**新增列**，向后兼容。
 
+**落地（§3，2026-10-02 已开发，浏览器实测 + 真实单只跑验证）**
+
+- 字段按**新增列**方案（不建 `analysis_shadow` 表）：`analysis_results.shadow_score /
+  shadow_direction / shadow_variant / shadow_detail` 四列 + 元数据 `pool_size / factor_coverage`，
+  全部可空、启动迁移、**不回填历史**（旧轮没跑过影子，回填出来的数会伪装成对照样本）。
+  `nav_as_of_date` 已由 2B-2 落库，本批复用。
+- 生产隔离是**测出来不是写出来的**：同一组评分输入分别在影子关/开下落库，
+  `weighted_score / signal_direction / operation_advice / quality_warnings` 逐字段相等，
+  只有影子列不同；变体内部抛异常时生产行照常写入（`compute_shadow` 三类失败模式
+  —— 开关关闭 / 注册表空 / 变体抛错 —— 一律收敛成 `(None, None)` + `logger.warning`）。
+- 口径接线在 `_score_and_store` 末尾、`_save_result` 之前，拿到的是**质量过滤修正后**的
+  `corrected_scores / corrected_weights`，与生产同一份输入，因此分差只反映加权口径差异而不是取数差异。
+  `factor_coverage` 必须按 `active_factors` 导出的 `corrected_weights` 算（权重来自因子配置，
+  不是评分项个数），这是 2C-Q4 的分子分母。
+- **每轮写全六个键**，无影子时显式 NULL：否则关掉开关或换变体后重跑，页面上的影子还是上一轮的旧对照。
+- 变体以注册表挂载（`backend/engines/shadow_scoring.py::register_variant`），2C 只需新增一个
+  `caliber_2c` 变体文件并注册，不必再改分析链 —— 这就是"先影子，达标再切"里"切"的成本控制。
+  开关与变体名落在 `system_config.shadow_scoring_enabled / shadow_variant`，回滚只需把 enabled 置 0。
+- 分歧报表（`backend/services/shadow_report_service.py`，纯本地 3 条 SQL，**零上游请求**）：
+  只统计 `shadow_direction` 非 NULL 的行；`stable_days` = 最近**连续**达标天数（判据一是"连续 5 日"，
+  整窗平均会把刚破线的日子洗掉）；**"日"按 A 股交易日历数**（2026-10-02 加固：`_stable_trading_days` 读库内
+  `holiday_calendar`，与 Q9 同表同口径 —— 周末/节假日手点一轮也会落一行，按"有数据的日期"倒序数可以把判据一
+  刷成五个周六；反之漏跑一个真实交易日必须打断连续。休市轮次仍在日表展示并标 `trading_day=false`，
+  汇总给 `non_trading_rounds`，连续达标顶到 `days` 窗口边界时出"可能被截断"caveat）；迁移矩阵 +
+  `buy_to_other/sell_to_other`；分档用修正前 `original_score` 对 `dynamic_buy/sell_threshold`（与仪表盘五档同口径）；
+  按变体分行（变体切换打断可比性）。
+- **判据二本表不自动判定**：影子口径没有独立回测曲线，要拿它跟 Q6 新基线比就得为影子重跑一遍回测，
+  那是 2C 之后的独立决策；报表里只写"需人工评估"，不给编出来的数字。
+- 上游预算：**0 新增请求**。影子配置一轮读一次 DB，加权纯 Python，报表只读本地表。
+- UI：「评分配置」页「影子评分口径」卡（开关/变体选择/窗口 5·10·20·40/日分歧表/分档表/结论 Alert/解读注意）；
+  注册表为空时明确显示"内置的 2C 新口径没被注册进来 —— 这不是故障而是还没有可对比的口径"，不出全零表。
+- 开关默认 **开**（`DEFAULT_SHADOW_ENABLED=True`）：2C 已注册，判据一要连续 5 个交易日的对照样本，
+  默认关就等于把取证排到"记得去点一下"那一天；而开着是零上游请求、零生产信号影响，
+  代价只有每轮多一次纯 Python 加权和 6 个可空列。不想要就 `PUT /api/analysis/shadow-config {"enabled": false}`。
+- 判据一常量 `DIVERGENCE_THRESHOLD_PCT=15.0` / `STABLE_DAYS_REQUIRED=5` 由
+  `GET /api/analysis/shadow-config` 返回给前端，文案与判定同源，不在前端另写一份。
+
+**落地（2C 注册为 `caliber_2c`，2026-10-02 已开发并浏览器实测；生产未切）**
+
+- 新口径四项（Q2+Q3+Q4+Q1）整体落在 `backend/engines/shadow_variants.py` 一个文件里，
+  以 `@register_variant("caliber_2c", DESCRIPTION)` 挂进 §3 注册表 —— 分析链只多一行
+  `from backend.engines.shadow_variants import caliber_2c  # noqa: F401`（模块顶部导入即注册）。
+  **"切"的成本就是这次验证过的**：换口径不改 `_score_and_store`、不改落库、不改报表。
+- **成对原则（Q2 裁定的实现约束）**：每一分被移出加权和的权重，都必须同步从
+  `threshold_ref_total_weight` 里扣掉。市场 1.8 + 趋势 0.5 ⇒ 影子侧参考权重 **8.3 → 6.0**。
+  只清权重不改 ref 会让 `scale = total/ref` 掉到 0.78，等于把买卖门槛一起缩，
+  市场顺风从"加分"变成"降门槛"，绕了个后门进来。本变体靠
+  `threshold_factor = 结构项 × 覆盖率项` 实现：结构项对"因子齐全、未触簇上限"的基金恰为 **1.0**，
+  于是**影子门槛唯一会动的来源是 Q4 覆盖率**，分歧报表里的分差才归得清因。
+  推导用的是 `compute_dynamic_thresholds` 对 `scale` 的**齐次性**（base、各 increment、低估下限都乘 scale），
+  所以影子阈值 = 生产阈值 × 比例即可，不需要也拿不到市场环境快照 —— 生产自己的
+  size_shock / drift / regime 调整被原样继承。
+- **簇上限与 ref 故意解耦**：上限 = `shadow_2c_cluster_cap_pct`% × `shadow_2c_cluster_cap_base_weight`
+  （默认 35 × 8.3 ≈ **2.905**）。若基准跟着 ref 走，"去掉市场因子"会顺带把动量上限从 2.9 压到 2.275。
+  压线事实：**趋势移出后动量簇只剩 2.9 ≤ 2.905，默认参数下簇上限不触发** —— 它是留给"以后把 accel
+  加回动量簇/重新配权"的结构护栏，不是当前可调旋钮；报表里 `cluster_cap.applied` 为空即正常。
+- **乘性位只收动量簇**：`trend_consistency.raw_value == 0`（mom20 与 mom60 反号）时只把
+  short/mid/accel 三项之和 × `shadow_2c_trend_disagree_factor`，波动率与绝对分不受牵连；
+  且**先查 `data_valid`** —— 缺数据的基金 raw 同样是 0.0，不查就等于惩罚新基金。
+  `momentum_sum` 落进 `detail.trend_gate`，收了多少分看得见。
+- **skip 是一个方向而不是 NULL**：覆盖率 < `shadow_2c_min_coverage`（默认 0.6）时
+  `shadow_direction = "skip"`，语义是"新口径下这只基金本轮不落库"。不洗成 hold，因为
+  "没有记录"和"观望"是两件事，洗掉会系统性低估这批改动的影响面；也不留 NULL，NULL 在报表里
+  表示"当日没跑影子"。判据一把 skip 计入分歧（保守：新口径要剔除的基金当然算差异）。
+  报表与卡片单列 `skip_rows`（日表「其中 skip」列 + 汇总 chip + caveat）。
+- **可执行性同口径**：影子侧复用 `apply_otc_trade_constraint`（暂停申购/封闭期 → 买入降观望），
+  结果记 `detail.otc_downgraded`。不套这一步会把"新口径也喊买但场外买不到"记成一致，
+  把真实分歧留到明天。
+- **Q1 只出措辞**：方向以上面的动态阈值为准，五档只提供文案与权益仓位；
+  `detail.tier.conflict_with_dynamic` 记录"档位说加仓但动态阈值判观望"这类冲突，
+  这批就是切换时必须给五档标"仅供参考"的数量。
+- 4 个参数进 `QUALITY_CONFIG`（44→48 数值参数、9→10 组，组名「影子口径2C」），因此
+  `GET|PUT /api/system/quality-config` 与「质量过滤」页自动渲染，无需新端点；越界在变体内部
+  钳位并留 `detail.params_clamped` + `logger.warning`（那条 PUT 链只校验"是数字"，
+  写成 500 会静默把整个口径改掉 —— 影子报表的全零分歧会被读成"两口径一致"，比崩溃更坏）。
+  `GET /api/analysis/shadow-config` 另透出 `variant_descriptions` 与 `caliber_params`
+  （含 value/default/out_of_range），卡片直接转述，不在前端重复一份区间。
+- 生产隔离的**实测**取证（不是读代码相信的）：在开发库副本上把真 2C 变体挂上跑两只基金，
+  再把 `shadow_scoring_enabled` 置 0 重跑同一轮 —— 12 个生产列 × 2 行逐字段相等，
+  影子列变回 NULL；`TestProductionIsolation` 用真实 11 因子权重表把这条锁进测试。
+  上游请求数 **0**（净值/行情/估值全部复用生产本轮已取到的输入）。
+- 已知遗留（不影响影子运行，影响"能不能据此切生产"）：判据二仍需人工另跑一套影子回测；
+  库里 6 个信号日 / 123 行的样本量下，判据一要连续 5 个交易日达标才有结论，
+  且默认参数下 2C 的分差主要来自 Q4 覆盖率与 Q2 的 1.8 分下移，池子只有 2 只时截面标准化本身不稳。
+
 ## 4. 批次划分（确认后按批开发，每批独立可回滚）
 
 - **批次 2A（尺子先准）**：Q6 回测 + Q7 命中率 + Q11 口径统一（含 #56 遗留的复盘未复权）。
@@ -643,6 +861,18 @@ lint 作为 Q14b 单独决策。
   （`threshold_ref_total_weight` 与有效权重折算互相依赖）。
 - **批次 2D（卫生）**：Q5 标注 + Q12 诊断口径 + Q13 死配置 + Q14 CI。
 
+**开发状态（2026-10-02 收尾）**：2A / 2B / §3 / 2C / 2D 五批**全部开发完成**，逐条落点与回滚键见 §0.1。
+唯一未闭环的是 **2C 尚未切生产**：新口径目前只写 `shadow_*` 列，生产 `weighted_score` 与
+`threshold_ref_total_weight=8.3` 保持旧口径，等 §3 判据（分歧连续 5 个交易日 <15%，或影子在 Q6
+新基线上的超额不劣于旧口径）达标后再切。
+
+**攒样本的现实起点（2026-10-02 核）**：判据一现在**一个样本都没有** —— 开发库最近的分析日是 2026-07-22、
+`shadow_*` 全库 0 行，`schedules` 表也是空的（开发机不会自己攒）；生产镜像还没有 `shadow_*` 这段代码，
+所以要攒就得先部署。日历上 10-01~10-07 国庆、09-25~09-27 中秋休市，**10-02 跑任何一轮都不产生有效对照**
+（净值停在 9/30，那一轮与 9/30 那轮完全同质，且按新口径标 `trading_day=false` 不进连续）；
+最早可攒的 5 个连续交易日是 **10-08 / 10-09 / 10-12 / 10-13 / 10-14**（10-10 是补班周六，股市不开），
+判据一的最早可能结论因此落在 10-14 当天收盘后 —— 在此之前任何"分歧已经达标"的说法都不成立。
+
 ## 5. 需要你明确回答的 6 个问题（2026-10-02 已全部裁定）
 
 1. **Q2**：市场三因子是否退出加权和？（这会让全池分数下移最多 1.8，近期 4 个 buy 信号很可能归 0）
@@ -650,6 +880,8 @@ lint 作为 Q14b 单独决策。
 3. **Q11-B**：基准股息用可配常数（默认 2.7%/年）还是尝试接全收益指数（需新增一个上游接口）？
 4. **Q9**：净值陈旧否决的天数 N（建议 >5 标注 / >10 否决，QDII 需要宽松档）。
 5. **Q10-C**：`user_positions` 是否加 `first_buy_date` 并由你补录 2 条现有持仓？没有它，阶梯赎回费只能显示"未知"。
+   → 列已加（2B-3 上线），**013149 / 162719 两只持仓的日期仍为空**，需你在「我的持仓」行尾编辑里补录，
+   补录前赎回费约束与惩罚档降级对这两只按设计不生效（显示"持有 —"）。
 6. **§3**：是否先做影子评分再切生产？（若否，2C 将直接改变推送与页面的信号，需你接受不可比区间）
 
 ### 5.1 裁定结果（用户 2026-10-02 逐项选定，均为推荐档）
@@ -663,15 +895,27 @@ lint 作为 Q14b 单独决策。
 | Q11 | **复盘统一复权 + 基准加回股息常数 2.7%（A+B②+C）** | `review_service._fetch_nav_series` 场外分支改消费复权序列（ETF 保持 qfq），回填链路 `routers/analysis.py:461` 同步；新增 `benchmark_dividend_yield_pct=2.7` 按区间天数折算，与 Q7 的 bench 同源一起改；复盘/对比/推送/回测头部固定三行口径（净值口径 / 基准口径 / 是否计息）；不接全收益指数（新增上游接口 riskier） |
 | §3 | **先影子评分，达标再切生产** | 新增 `analysis_results.shadow_score/shadow_direction/shadow_variant`（或 `analysis_shadow` 表），同轮两套口径各算一次，生产 `weighted_score/signal_direction` 切换前保持旧口径；每日差异报表（分歧 N 只、旧 buy→新 hold M 只，按已落库的 `original_score/dynamic_buy_threshold` 分档）；切换判据写死：分歧连续 5 个交易日 <15%，**或**影子口径在 Q6 新基线上的超额不劣于旧口径；配套落 `pool_size` / `nav_as_of_date` / `factor_coverage` 三个元数据列 |
 
+**2C 落地后对裁定的两处数值更正（勿按原表数字"改回来"）**
+
+1. Q2 行写的是 `threshold_ref_total_weight` 8.3 → **6.5**（只扣市场 1.8）。实际成对原则要求扣的是
+   **全部移出加权和的配置权重**：Q3 把 `trend_consistency` 0.5 也移出去了，所以影子侧是 8.3 → **6.0**。
+   按 6.5 算会让影子门槛紧 7.7%，分歧报表就分不清是口径变的还是门槛变的。
+   **生产 `threshold_ref_total_weight` 仍是 8.3** —— 2C 只写在影子层，切换时才动生产配置。
+2. Q3 的簇上限默认 35% × 8.3 ≈ 2.905，而趋势移出后动量簇只有 2.9 ⇒ **默认参数下簇上限不触发**。
+   它按裁定原文"上限 35%（≈2.9）"实现为结构护栏，当前不是调参旋钮；报表里
+   `shadow_detail.cluster_cap.applied` 为空属正常，不是没生效。
+
 **未单独提问但随批执行的默认（按本文建议档，如需改动请提出）**：
 Q1 五档阈值只驱动 advice/equity 文本（方向仍由动态阈值决定）并修 `ai_service.py` 提示词来源；
 Q3 动量族保留 short/mid、accel/trend 正交化 + 簇权重上限 35%（≈2.9）；Q4 阈值按有效权重折算 + 覆盖率 <60% 不评分；
 Q5 显式标注"池内相对分"并落池规模；Q7 命中率改超额口径 + 固定 30 交易日窗口；Q8 恢复期未走完则暂不判定；
 Q12/Q13/Q14 按 §2 建议（诊断口径、死配置清扫、CI 只补 pytest + build 两条 job）。
+其中 Q12 的多重比较校正**实现为 Benjamini–Hochberg 而不是 §0 表里写的 Bonferroni**，理由见 §0.1 Q12 行。
 
 **开发顺序不变**：2A 度量（Q6 → Q7 → Q11）→ 2B 防御（Q8 → Q9 → Q10）→ 2C 评分结构（先 §3 影子，达标后 Q2+Q3+Q4+Q1 同批切）→ 2D 卫生（Q5/Q12/Q13/Q14）。
 2A/2B 不改生产买卖信号，可先行开发；2C 必须等影子列与差异报表就位。
 
 ---
 
-*取证方式：只读 SQL（`sqlite3 -readonly data/fund_quant.db`）+ 逐行读码；本文不含任何代码改动。*
+*取证方式：只读 SQL（`sqlite3 -readonly data/fund_quant.db`）+ 逐行读码。本文 §1–§5 为纯设计与取证，
+不含代码改动；§0.1 与各批次"开发状态"是开发完成后回填的落点/回滚键索引，与代码一一对应。*

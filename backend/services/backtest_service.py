@@ -1,12 +1,22 @@
-"""信号回测服务 — 将历史信号与净值对齐，模拟仓位策略累计收益"""
+"""信号回测服务 — 将历史信号与净值对齐，模拟仓位策略累计收益
+
+口径要点（2026-10-02 第二批 Q6 固化，详见 docs/QUANT_DECISIONS_2026-10.md §5.1）：
+- 三条基线：满仓买入持有（= 基金净值曲线）、静态半仓（恒 50%、零调仓、不计费）、
+  策略曲线；**头号指标是 excess_vs_static_half**，excess_return 只是对满仓持有的差值，
+  在上涨市里主要由"半仓敞口"决定而非信号能力。
+- 仓位状态机默认「延续最近一次信号」，漏跑一天分析不再等于被动回半仓 + 白扣一次换仓费。
+- 未平仓的现金部分按 **0% 计息（不计息）**，与 fund_compare 的 RF_ANNUAL=2.0 口径不同，
+  展示文案必须写明"不计息"。
+- 样本下限（非 hold 信号数 / 信号覆盖交易日占比）不足时只出 caveat，不给出策略结论。
+"""
 from backend.utils.timezone import now_beijing
 
 import logging
-from datetime import date
+from datetime import date, datetime, time
 from typing import Optional
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.analysis_result import AnalysisResult
@@ -32,6 +42,17 @@ DEFAULT_ROUND_TRIP_FEE_PCT = 0.6
 # 实际生效值走 load_fee_pct()，可在回测页调整
 FEE_CONFIG_KEY = "backtest_fee_pct"
 FEE_MIN, FEE_MAX = 0.0, 5.0
+
+# ── 回测度量口径（Q6）：三条 system_config 键即回滚路径 ────────────────
+# 仓位延续：1=沿用最近一次信号的仓位（默认）；0=旧行为，无信号日回落半仓
+CARRY_CONFIG_KEY = "backtest_carry_position"
+DEFAULT_CARRY_POSITION = True
+# 样本下限：非 hold 信号数低于此值 → 只出 caveat。0 = 不拦（回到今日行为）
+MIN_SIGNALS_CONFIG_KEY = "backtest_min_signals"
+DEFAULT_MIN_SIGNALS = 8
+# 信号覆盖交易日占比下限（%）。0 = 不拦
+MIN_COVERAGE_CONFIG_KEY = "backtest_min_coverage_pct"
+DEFAULT_MIN_COVERAGE_PCT = 30.0
 
 # 净值窗口起点之前的信号，最多容忍顺延多少自然日（见
 # _align_signals_to_trading_days）：周末 2 天、元旦/清明 3~4 天、
@@ -60,8 +81,6 @@ async def load_fee_pct(db: AsyncSession) -> float:
 
 async def save_fee_pct(db: AsyncSession, fee_pct: float) -> float:
     """写入回测调仓费率（夹在 [FEE_MIN, FEE_MAX]）"""
-    from datetime import datetime
-
     from backend.models.system_config import SystemConfig
 
     value = min(max(float(fee_pct), FEE_MIN), FEE_MAX)
@@ -80,6 +99,72 @@ async def save_fee_pct(db: AsyncSession, fee_pct: float) -> float:
         ))
     await db.commit()
     return value
+
+
+async def load_measurement_policy(db: AsyncSession) -> dict:
+    """读取回测度量口径（仓位延续 / 样本下限）
+
+    批量回测应像费率一样在一轮开始时读一次、逐只复用：中途改口径会让
+    同一轮结果内部不可比。
+    """
+    from backend.models.system_config import SystemConfig
+
+    rows = (await db.execute(select(SystemConfig))).scalars().all()
+    kv = {r.config_key: (r.config_value or "").strip() for r in rows}
+
+    def _flag(key: str, default: bool) -> bool:
+        raw = kv.get(key)
+        if raw in (None, ""):
+            return default
+        # 兼容 true/false 与 1/0 两种写法（配置文件常被手工编辑）
+        return raw not in ("0", "false", "False")
+
+    def _num(key: str, default: float) -> float:
+        try:
+            return float(kv.get(key) or default)
+        except (TypeError, ValueError):
+            logger.warning(f"回测口径配置无法解析（{key}={kv.get(key)!r}），用默认 {default}")
+            return default
+
+    return {
+        "carry_position": _flag(CARRY_CONFIG_KEY, DEFAULT_CARRY_POSITION),
+        "min_signals": max(0, int(_num(MIN_SIGNALS_CONFIG_KEY, DEFAULT_MIN_SIGNALS))),
+        "min_coverage_pct": max(
+            0.0, min(100.0, _num(MIN_COVERAGE_CONFIG_KEY, DEFAULT_MIN_COVERAGE_PCT))
+        ),
+    }
+
+
+async def save_measurement_policy(
+    db: AsyncSession,
+    carry_position: Optional[bool] = None,
+    min_signals: Optional[int] = None,
+    min_coverage_pct: Optional[float] = None,
+) -> dict:
+    """写入回测度量口径（None 表示不动该项），返回落库后的生效值"""
+    from backend.models.system_config import SystemConfig
+
+    updates: dict[str, str] = {}
+    if carry_position is not None:
+        updates[CARRY_CONFIG_KEY] = "1" if carry_position else "0"
+    if min_signals is not None:
+        updates[MIN_SIGNALS_CONFIG_KEY] = str(max(0, int(min_signals)))
+    if min_coverage_pct is not None:
+        updates[MIN_COVERAGE_CONFIG_KEY] = str(
+            max(0.0, min(100.0, float(min_coverage_pct)))
+        )
+
+    for key, value in updates.items():
+        row = (await db.execute(
+            select(SystemConfig).where(SystemConfig.config_key == key)
+        )).scalars().first()
+        if row:
+            row.config_value = value
+            row.updated_at = now_beijing()
+        else:
+            db.add(SystemConfig(config_key=key, config_value=value, updated_at=now_beijing()))
+    await db.commit()
+    return await load_measurement_policy(db)
 
 
 class BacktestService:
@@ -125,6 +210,7 @@ class BacktestService:
         period: int = 365,
         effectiveness_window: int = 5,
         fee_pct: Optional[float] = None,
+        policy: Optional[dict] = None,
     ) -> Optional[BacktestSummary]:
         """运行信号回测
 
@@ -135,6 +221,8 @@ class BacktestService:
             fee_pct: 单次调仓综合费率（%）；None 时读 system_config 配置
                      批量回测应在轮次开始时 load_fee_pct 一次，逐只复用同一口径
                      （费率中途被改会让同轮结果不可比）
+            policy: 度量口径（load_measurement_policy 的返回）；None 时现读
+                    与 fee_pct 同理，批量回测一轮只读一次
 
         Returns:
             BacktestSummary 或 None（基金不存在 / 无净值数据）
@@ -161,21 +249,46 @@ class BacktestService:
         # 3. 获取该基金的历史信号
         signal_map = await self._get_signal_map(fund_id)
 
-        # 4. 未显式传费率时读配置
+        # 4. 未显式传费率/口径时读配置
         if fee_pct is None:
             fee_pct = await load_fee_pct(self.db)
+        if policy is None:
+            policy = await load_measurement_policy(self.db)
 
         # 5. 按日期对齐 + 计算累计收益
         points = self._build_points(
-            dates, navs, signal_map, effectiveness_window, fee_pct=fee_pct
+            dates, navs, signal_map, effectiveness_window,
+            fee_pct=fee_pct, carry_position=policy["carry_position"],
         )
 
-        # 6. 计算统计指标
+        # 6. 计算统计指标（三条基线 + 两个超额口径）
         total_nav_return = points[-1].nav_return if points else 0.0
         total_strategy_return = points[-1].strategy_return if points else 0.0
-        excess_return = round(total_strategy_return - total_nav_return, 4)
+        baseline_buy_hold = total_nav_return
+        baseline_static_half = points[-1].baseline_static_half if points else 0.0
+        excess_return = round(total_strategy_return - baseline_buy_hold, 4)
+        excess_vs_static_half = round(total_strategy_return - baseline_static_half, 4)
         max_drawdown = self._calc_max_drawdown(points)
-        signal_count = sum(1 for p in points if p.signal_direction is not None)
+
+        signal_idx = [i for i, p in enumerate(points) if p.signal_direction is not None]
+        signal_count = len(signal_idx)
+        signal_count_non_hold = sum(
+            1 for p in points if p.signal_direction in ("buy", "sell")
+        )
+        coverage_ratio = round(signal_count / len(points), 4) if points else 0.0
+
+        # 回测区间的真实起点 = 该基金首次被分析的交易日；池子规模取该时点入池数，
+        # 用于标注"样本由入池时点决定"的选择偏差（代码无法消除，只能显示）
+        coverage_start = points[signal_idx[0]].date if signal_idx else None
+        coverage_days = (signal_idx[-1] - signal_idx[0] + 1) if signal_idx else 0
+        pool_size_at = await self._pool_size_at(coverage_start)
+
+        low_sample, caveat = self._sample_gate(
+            signal_count_non_hold=signal_count_non_hold,
+            coverage_ratio=coverage_ratio,
+            min_signals=policy["min_signals"],
+            min_coverage_pct=policy["min_coverage_pct"],
+        )
 
         # 7. 信号有效性统计
         eff_stats = self._calc_effectiveness_stats(points)
@@ -195,10 +308,44 @@ class BacktestService:
             buy_effectiveness=eff_stats["buy"],
             sell_effectiveness=eff_stats["sell"],
             effectiveness_rate=eff_stats["rate"],
+            baseline_buy_hold=baseline_buy_hold,
+            baseline_static_half=round(baseline_static_half, 4),
+            excess_vs_static_half=excess_vs_static_half,
+            signal_count_non_hold=signal_count_non_hold,
+            signal_coverage_ratio=coverage_ratio,
+            low_sample=low_sample,
+            caveat=caveat,
+            coverage_start_date=coverage_start,
+            coverage_days=coverage_days,
+            pool_size_at=pool_size_at,
+            carry_position=policy["carry_position"],
             points=points,
         )
 
     # ── 内部方法 ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sample_gate(
+        signal_count_non_hold: int,
+        coverage_ratio: float,
+        min_signals: int,
+        min_coverage_pct: float,
+    ) -> tuple[bool, Optional[str]]:
+        """样本量下限：不足则只出警告，不出策略结论（Q6-C）
+
+        两项阈值任一配 0 即该项不拦（回滚路径）。当前库里多数基金只有个位数
+        信号日，命中此项是预期行为，不是错误。
+        """
+        reasons: list[str] = []
+        if min_signals > 0 and signal_count_non_hold < min_signals:
+            reasons.append(f"非 hold 信号仅 {signal_count_non_hold} 个（下限 {min_signals}）")
+        if min_coverage_pct > 0 and coverage_ratio * 100.0 < min_coverage_pct:
+            reasons.append(
+                f"信号仅覆盖 {coverage_ratio * 100:.0f}% 的交易日（下限 {min_coverage_pct:.0f}%）"
+            )
+        if not reasons:
+            return False, None
+        return True, "样本不足：" + "；".join(reasons) + "。曲线仅作过程展示，不构成策略结论"
 
     async def _get_fund(self, fund_id: int) -> Optional[Fund]:
         """查询基金"""
@@ -224,6 +371,19 @@ class BacktestService:
                 "score": r.weighted_score,
             }
         return signal_map
+
+    async def _pool_size_at(self, on_date: Optional[str]) -> Optional[int]:
+        """该回测区间起点时已入池的基金数（含此后移出的：池子规模按入池时点算，不看当前状态）"""
+        if not on_date:
+            return None
+        try:
+            day_end = datetime.combine(date.fromisoformat(on_date[:10]), time.max)
+        except ValueError:
+            logger.warning(f"无法解析覆盖起点日期: {on_date!r}")
+            return None
+        return (await self.db.execute(
+            select(func.count()).select_from(Fund).where(Fund.created_at <= day_end)
+        )).scalar()
 
     @staticmethod
     def _align_signals_to_trading_days(
@@ -268,6 +428,7 @@ class BacktestService:
         signal_map: dict[str, dict],
         effectiveness_window: int = 5,
         fee_pct: Optional[float] = None,
+        carry_position: bool = DEFAULT_CARRY_POSITION,
     ) -> list[BacktestPoint]:
         """构建回测数据点序列
 
@@ -275,20 +436,29 @@ class BacktestService:
         - 当日信号在收盘后生成（默认 15:10 后），记录在当日点；
         - 但仓位由「前一日信号」决定，作用于当日涨跌；
         - 即 T 日信号 → T+1 日仓位 → 作用于 T+1 日收益。
-        无信号日默认 hold（50% 仓位）。
+
+        仓位状态机（Q6-A）：
+        - carry_position=True（默认）：无信号日**延续**最近一次信号决定的仓位，
+          直到出现新信号（含显式 hold → 回到 50%）。分析漏跑一天不再等于
+          被动砍回半仓并白扣一次换仓费。
+        - carry_position=False（旧行为/回滚档）：无信号日回落默认 50% 仓位。
+        - 尚无任何信号时（序列开头）从 50% 起步。
 
         收益累计：几何复利（非加法），strategy_nav 维护策略净值。
         成本：仓位变动日扣减 |Δ仓位| × 调仓费率（默认 DEFAULT_ROUND_TRIP_FEE_PCT，
         实际由 system_config.backtest_fee_pct 决定，0 表示不计成本）。
+        基线：同一循环内并行累计 `baseline_static_half`（恒 50%、零调仓、不计费）；
+        满仓买入持有基线就是 nav_return 本身。未平仓现金部分按 0% 计（不计息）。
         """
         # 非交易日信号（周末/节假日运行分析）前向对齐到下一交易日
         aligned_signal_map = self._align_signals_to_trading_days(dates, signal_map)
 
         points: list[BacktestPoint] = []
-        # 默认仓位（无信号时）
+        # 默认仓位（尚无任何信号时的起点；旧口径也是无信号日的回落目标）
         default_position = 0.5
         # 策略净值（几何复利），初始 1.0
         strategy_nav = 1.0
+        static_half_nav = 1.0
         initial_nav = navs[0] if navs else 1.0
 
         # 生效费率（None → 默认值，保持单测与无库场景可用）
@@ -312,6 +482,9 @@ class BacktestService:
 
             # 累计净值收益（几何复利：用 nav 比值直接算区间收益，非加法累计）
             nav_cum_return = round((nav / initial_nav - 1) * 100, 4) if initial_nav > 0 else 0.0
+            # 静态半仓基线：恒 50% 敞口、不调仓所以无换手成本
+            static_half_nav *= (1 + daily_return * default_position / 100)
+            static_half_cum = round((static_half_nav - 1) * 100, 4)
 
             # 查找当日信号（记录在当日点，但仓位作用于下一日）
             # 日期格式可能是 "2025-06-13 00:00:00" 或 "2025-06-13"
@@ -322,14 +495,18 @@ class BacktestService:
                 direction = sig["direction"]
                 strength = sig["strength"]
                 score = sig["score"]
-                current_position = POSITION_MAP.get(strength, default_position)
+                # 未知强度按"不动"处理：延续当前仓位（旧口径回落半仓）
+                current_position = POSITION_MAP.get(
+                    strength, prev_position if carry_position else default_position
+                )
             else:
                 direction = None
                 strength = None
                 score = None
-                current_position = default_position
+                current_position = prev_position if carry_position else default_position
 
             # 策略收益 = 当日涨跌 × 仓位（仓位由前一日信号决定，避免前视偏差）
+            # 现金部分 (1 - position) 不计息
             position = prev_position
             strategy_daily = daily_return * position
             # 调仓成本：|仓位变动| × 单次综合费率，在变化当日扣减
@@ -350,6 +527,8 @@ class BacktestService:
                 signal_direction=direction,
                 signal_strength=strength,
                 weighted_score=score,
+                position_applied=round(position, 4),
+                baseline_static_half=static_half_cum,
             ))
 
         # 后处理：计算信号有效性评分

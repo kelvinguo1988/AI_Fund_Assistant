@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, AsyncGenerator, Optional
 
 from sqlalchemy import select
@@ -21,7 +21,17 @@ from backend.engines.quality_filter import (
     merge_quality_config,
     build_quality_filter,
     apply_otc_trade_constraint,
+    eval_nav_staleness,
 )
+from backend.data_sources.trading_calendar import (
+    count_missing_trading_days,
+    load_off_day_dates,
+)
+from backend.engines.shadow_scoring import (
+    ShadowContext, compute_shadow, factor_coverage,
+)
+# 只为了触发内置变体注册（caliber_2c）；影子层本身不认识任何具体口径
+from backend.engines.shadow_variants import caliber_2c  # noqa: F401
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.models.fund_quarterly import FundQuarterly
@@ -65,6 +75,16 @@ def _log_missing_nav(fund: Fund, reason: str) -> None:
     )
 
 
+def _is_slow_nav_disclosure(fund: Fund) -> bool:
+    """披露节奏天然慢的基金：QDII/跨境 + 96 开头（港澳互认）
+
+    与 `ai/rebalance._is_qdii`（组合约束用，只认 QDII 字样）口径不同：这里问的是
+    "净值什么时候能到"，互认基金同样 T+2 起，所以多带一个代码前缀判据。
+    """
+    blob = f"{fund.name or ''} {fund.tags or ''} {fund.fund_type_official or ''}".upper()
+    return "QDII" in blob or str(fund.code or "").startswith("96")
+
+
 def _inject_regime_params(params_json, snapshot) -> dict:
     """把市场环境快照注入因子 params（_ 前缀 = 引擎内部字段，不落库）
 
@@ -93,6 +113,12 @@ class _AnalysisConfig:
     regime_factors: list[dict]
     # 场外申购/赎回状态 {code: {"purchase","redeem","fee"}}；空 = 不可用时跳过约束
     otc_status_map: dict = field(default_factory=dict)
+    # Q9：净值新鲜度用的休市日集合（一轮一次 DB 查询，零上游请求；空=退化为周一至周五）
+    off_days: frozenset = frozenset()
+    # §3 影子评分：开关与变体一轮读一次库（零上游请求）；pool_size 在截面标准化后回填
+    shadow_enabled: bool = True
+    shadow_variant: Optional[str] = None
+    pool_size: Optional[int] = None
 
 
 class AnalysisService:
@@ -272,6 +298,8 @@ class AnalysisService:
         all_factor_results = await asyncio.to_thread(
             factor_engine.normalize_cross_sectional, all_factor_results, cfg.regime_factors
         )
+        # Q5/§3：截面样本数随结果落库 —— 同一个 2.5 分，50 只池和 8 只池不是一回事
+        cfg.pool_size = len(all_factor_results)
 
         # 7. 逐只基金评分 + 存储（与流式路径共用 _score_and_store）
         results: list[AnalysisResultOut] = []
@@ -398,6 +426,7 @@ class AnalysisService:
         all_factor_results = await asyncio.to_thread(
             factor_engine.normalize_cross_sectional, all_factor_results, cfg.regime_factors
         )
+        cfg.pool_size = len(all_factor_results)   # 同批量路径：截面样本数随结果落库
 
         # ── Phase 2: 分块评分 + 存储 + 推送结果（与批量路径共用 _score_and_store） ──
         results: list[AnalysisResultOut] = []
@@ -517,6 +546,14 @@ class AnalysisService:
             otc_status_map = await OtcTradeStatusService.get_status_map()
         except Exception as e:
             logger.warning(f"场外申购状态获取失败，跳过买入可执行性约束: {e}")
+        # 影子评分开关（§3）：一轮一次 DB 读取；读失败按"关掉"处理最稳妥 ——
+        # 宁可这轮没有影子对照，也不要拿一份不明的口径配置去写列
+        shadow_cfg = {"enabled": False, "variant": ""}
+        try:
+            from backend.engines.shadow_scoring import load_shadow_config
+            shadow_cfg = await load_shadow_config(self.db)
+        except Exception as e:
+            logger.warning(f"影子评分配置读取失败，本轮不写 shadow_* 列: {e}")
         return _AnalysisConfig(
             active_factors=active_factors,
             thresholds_json=thresholds_json,
@@ -524,7 +561,43 @@ class AnalysisService:
             regime_snapshot=regime_snapshot,
             regime_factors=regime_factors,
             otc_status_map=otc_status_map,
+            off_days=await self._load_off_days(qf.cfg),
+            shadow_enabled=bool(shadow_cfg.get("enabled")),
+            shadow_variant=(shadow_cfg.get("variant") or None),
         )
+
+    async def _load_off_days(self, qf_cfg: dict) -> frozenset:
+        """Q9 休市日集合：只在门槛启用时查一次库（90 自然日窗口，零上游请求）
+
+        90 天 ≫ 否决阈值 10 个交易日；更早的净值缺口只会更大，按窗口外
+        "周一至周五"计即偏向保守判定，不会因此漏掉停披基金。
+        """
+        if int(qf_cfg.get("nav_staleness_max_trading_days", 10) or 0) <= 0:
+            return frozenset()
+        today = beijing_today()
+        return await load_off_day_dates(self.db, today - timedelta(days=90), today)
+
+    def _nav_freshness(
+        self, fund: Fund, fd: FundData, cfg: _AnalysisConfig
+    ) -> tuple[str, str, str]:
+        """Q9 净值新鲜度：返回 `(as_of, level, detail)`
+
+        level ∈ off/ok/warn/veto；as_of 空串 = 净值无日期。日期解析失败一律 off ——
+        取数字段格式变了应当表现为"没有防线"，而不是把整池基金当陈旧否决。
+        """
+        raw = (fd.date or "").strip()[:10]
+        try:
+            nav_date = date.fromisoformat(raw)
+        except ValueError:
+            return "", "off", ""
+        missing = count_missing_trading_days(nav_date, beijing_today(), cfg.off_days)
+        level, detail = eval_nav_staleness(
+            missing,
+            cfg.qf.cfg,
+            slow_disclosure=_is_slow_nav_disclosure(fund),
+            nav_date=raw,
+        )
+        return raw, level, detail
 
     async def _score_and_store(
         self,
@@ -539,6 +612,13 @@ class AnalysisService:
         返回 None = 被前置否决。报告正文在查询/推送时按需生成，
         分析路径不再计算（原两份 generate_markdown 结果从未落库，纯耗 CPU）。
         """
+        # Q9：陈旧净值不配拿今天的信号（先于因子链，省掉必然作废的计算）
+        nav_as_of, stale_level, stale_detail = self._nav_freshness(fund, fund_data, cfg)
+        if stale_level == "veto":
+            _log_missing_nav(fund, stale_detail)
+            logger.info(f"基金 {fund.code} {stale_detail}，跳过评分")
+            return None
+
         qf_result, corrected_scores, corrected_weights = cfg.qf.build_result(
             regime_snapshot=cfg.regime_snapshot,
             fund_code=fund.code,
@@ -550,6 +630,9 @@ class AnalysisService:
         if qf_result.vetoed:
             logger.info(f"基金 {fund.code} 被前置否决: {qf_result.veto_reason}")
             return None
+
+        if stale_level == "warn":
+            qf_result.warnings.append(stale_detail)
 
         signal = compute_with_quality_filter(
             factor_scores=corrected_scores,
@@ -563,8 +646,48 @@ class AnalysisService:
             cfg.otc_status_map.get(fund.code),
             cfg.qf.cfg,
         )
+
+        # §3 影子评分：再算一次新口径，只写 shadow_* 列。纯 Python 加权、零上游请求，
+        # 且 compute_shadow 内部收敛所有异常 —— 影子层永远不能改动或打断生产信号。
+        coverage = factor_coverage(corrected_scores, corrected_weights)
+        shadow_name, shadow_sig = compute_shadow(
+            ShadowContext(
+                fund_code=fund.code,
+                factor_scores=corrected_scores,
+                factor_weights=corrected_weights,
+                active_factors=cfg.active_factors,
+                qf_result=qf_result,
+                thresholds_json=cfg.thresholds_json,
+                quality_cfg=cfg.qf.cfg,
+                signal=signal,
+                pool_size=cfg.pool_size,
+                otc_status=cfg.otc_status_map.get(fund.code),
+            ),
+            enabled=cfg.shadow_enabled,
+            variant=cfg.shadow_variant,
+        )
+        shadow_fields: dict = {
+            "pool_size": cfg.pool_size,
+            "factor_coverage": coverage,
+            # 无影子时显式写 NULL：关掉开关/换变体后重跑，不能留着上一轮的影子冒充本轮对照
+            "shadow_variant": None,
+            "shadow_score": None,
+            "shadow_direction": None,
+            "shadow_detail": None,
+        }
+        if shadow_sig is not None:
+            shadow_fields.update({
+                "shadow_variant": shadow_name,
+                "shadow_score": shadow_sig.score,
+                "shadow_direction": shadow_sig.direction,
+                "shadow_detail": json.dumps(shadow_sig.detail, ensure_ascii=False)
+                if shadow_sig.detail else None,
+            })
+
         return await self._save_result(
             fund, signal, corrected_scores, qf_result=qf_result,
+            nav_as_of_date=nav_as_of or None,
+            extra_fields=shadow_fields,
         )
 
     async def _save_result(
@@ -573,6 +696,8 @@ class AnalysisService:
         signal: SignalResult,
         factor_scores: list[FactorScoreResult],
         qf_result: Optional[QualityFilterResult] = None,
+        nav_as_of_date: Optional[str] = None,
+        extra_fields: Optional[dict] = None,
     ) -> Optional[AnalysisResultOut]:
         """存储分析结果到数据库"""
         factor_scores_json = json.dumps({
@@ -593,7 +718,11 @@ class AnalysisService:
             "dynamic_sell_threshold": signal.dynamic_sell_threshold,
             "quality_warnings": json.dumps(signal.quality_warnings, ensure_ascii=False)
             if signal.quality_warnings else None,
+            "nav_as_of_date": nav_as_of_date,
         }
+        # 影子层与截面元数据列（§3/Q4/Q5）：与诊断字段同一条写入路径，缺项写 NULL
+        if extra_fields:
+            diag_fields.update(extra_fields)
 
         existing_result = await self.db.execute(
             select(AnalysisResult).where(
@@ -658,6 +787,7 @@ class AnalysisService:
             dynamic_buy_threshold=signal.dynamic_buy_threshold,
             dynamic_sell_threshold=signal.dynamic_sell_threshold,
             quality_warnings=signal.quality_warnings or None,
+            nav_as_of_date=nav_as_of_date,
         )
 
     async def _get_config_map(self) -> dict[str, str]:

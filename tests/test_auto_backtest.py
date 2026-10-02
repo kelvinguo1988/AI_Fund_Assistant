@@ -21,7 +21,7 @@ def _fund(id, code, name=""):
 
 
 class _FakeSummary:
-    """模拟 BacktestService.run_backtest 的返回"""
+    """模拟 BacktestService.run_backtest 的返回（含 Q6 度量口径字段）"""
     period = 365
     effectiveness_window = 5
     total_nav_return = 10.0
@@ -33,6 +33,17 @@ class _FakeSummary:
     buy_effectiveness = 70.0
     sell_effectiveness = 60.0
     effectiveness_rate = 75.0
+    baseline_buy_hold = 10.0
+    baseline_static_half = 4.0
+    excess_vs_static_half = 11.0
+    signal_count_non_hold = 9
+    signal_coverage_ratio = 0.04
+    low_sample = True
+    caveat = "样本不足：信号仅覆盖 4% 的交易日（下限 30%）。曲线仅作过程展示，不构成策略结论"
+    coverage_start_date = "2026-05-23"
+    coverage_days = 60
+    pool_size_at = 41
+    carry_position = True
 
 
 @pytest.mark.asyncio
@@ -70,6 +81,15 @@ async def test_upsert_overwrites_per_fund(db_session):
     assert rows[0].total_strategy_return == 15.0
     assert rows[0].ok is True
     assert rows[0].finished_at is not None
+
+    # Q6 度量口径列同样逐只覆盖落库（前端据此画基线与样本警告）
+    assert rows[0].baseline_static_half == 4.0
+    assert rows[0].excess_vs_static_half == 11.0
+    assert rows[0].signal_count_non_hold == 9
+    assert rows[0].low_sample is True and "样本不足" in rows[0].caveat
+    assert (rows[0].coverage_start_date, rows[0].coverage_days, rows[0].pool_size_at) \
+        == ("2026-05-23", 60, 41)
+    assert rows[0].carry_position is True
 
 
 @pytest.mark.asyncio
@@ -144,3 +164,81 @@ async def test_run_full_end_to_end(db_session, monkeypatch):
 
 async def _noop_sleep(*a, **k):
     return None
+
+
+@pytest.mark.asyncio
+async def test_run_full_no_nav_row_says_no_data(db_session, monkeypatch):
+    """run_backtest 返回 None（无净值）→ 落"无净值数据"失败行，而不是 NoneType 属性错误
+
+    同时确认防封 sleep 不因此跳过：走 continue 会让下一只基金紧接着被打出去。
+    """
+    db_session.add_all([_fund(7, "020001"), _fund(8, "020002")])
+    await db_session.commit()
+
+    sleeps = []
+
+    class _FakeBacktestSvc:
+        def __init__(self, db):
+            pass
+        async def run_backtest(self, fund_id, **kw):
+            return _FakeSummary() if fund_id == 7 else None
+
+    import backend.services.auto_backtest_service as ab_mod
+    import backend.services.backtest_service as bs_mod
+    monkeypatch.setattr(bs_mod, "BacktestService", _FakeBacktestSvc)
+
+    async def _counting_sleep(*a, **k):
+        sleeps.append(1)
+
+    monkeypatch.setattr(ab_mod.asyncio, "sleep", _counting_sleep)
+
+    svc = AutoBacktestService(db_session)
+    stats = await svc.run_full_backtest()
+    assert stats == {"total": 2, "ok": 1, "failed": 1, "skipped": 0}
+    assert len(sleeps) == 1, "两只基金之间仍等待一次"
+
+    rows = list((await db_session.execute(
+        __import__("sqlalchemy").select(BacktestResult).order_by(BacktestResult.fund_id)
+    )).scalars().all())
+    assert rows[1].ok is False and rows[1].error == "无净值数据"
+
+
+@pytest.mark.asyncio
+async def test_run_full_uses_one_policy_for_the_round(db_session, monkeypatch):
+    """一轮一个费率/口径：policy 在轮次开始时读一次并逐只透传"""
+    db_session.add(_fund(9, "020003"))
+    await db_session.commit()
+
+    seen = {}
+
+    class _FakeBacktestSvc:
+        def __init__(self, db):
+            pass
+        async def run_backtest(self, fund_id, fee_pct=None, policy=None):
+            seen["fee_pct"] = fee_pct
+            seen["policy"] = policy
+            return _FakeSummary()
+
+    import backend.services.backtest_service as bs_mod
+    import backend.services.auto_backtest_service as ab_mod
+    monkeypatch.setattr(bs_mod, "BacktestService", _FakeBacktestSvc)
+    monkeypatch.setattr(ab_mod.asyncio, "sleep", _noop_sleep)
+    monkeypatch.setattr(bs_mod, "load_fee_pct", lambda db: _const_fee())
+    monkeypatch.setattr(
+        bs_mod, "load_measurement_policy",
+        lambda db: _const_policy(),
+    )
+
+    svc = AutoBacktestService(db_session)
+    await svc.run_full_backtest()
+
+    assert seen["fee_pct"] == 1.5
+    assert seen["policy"]["carry_position"] is False
+
+
+async def _const_fee():
+    return 1.5
+
+
+async def _const_policy():
+    return {"carry_position": False, "min_signals": 0, "min_coverage_pct": 0.0}

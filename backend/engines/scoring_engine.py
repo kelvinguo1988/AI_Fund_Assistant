@@ -277,3 +277,23 @@ def compute_with_quality_filter(
         dynamic_sell_threshold=quality_result.dynamic_sell_threshold,
         quality_warnings=warnings,
     )
+
+
+# ── Q5：评分口径标注 ──────────────────────────────────────────────
+
+# 截面标准化在这个样本量以下本身就不稳定（z 分/分位数的抽样误差大于因子区分度）
+THIN_POOL_SIZE = 20
+
+
+def score_caliber_note(pool_size: Optional[int] = None) -> str:
+    """`weighted_score` 的口径标注（Q5）：它是**池内相对分**，不是基金的绝对质量
+
+    6 个截面 z 因子（权重 5.2）在当日池内均值恒为 0，池子构成一变分数就变，
+    所以同一个 2.5 分在 57 只池和 8 只池不是一回事，也不能跨期比较。
+    落库的 `analysis_results.pool_size` 就是这句话的证据，各展示面统一走本函数，
+    避免每个页面各写一份口径文案（然后其中一份忘了改）。
+    """
+    if not pool_size:
+        return "池内相对分（当日截面样本数未记录，不能跨期/跨池比较）"
+    thin = "，池子偏薄、截面标准化本身不稳定" if pool_size < THIN_POOL_SIZE else ""
+    return f"池内相对分（当日 {pool_size} 只参与截面标准化{thin}）"

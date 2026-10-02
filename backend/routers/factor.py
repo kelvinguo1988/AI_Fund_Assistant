@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
+from backend.engines.factor_engine import signal_rules_effective
 from backend.schemas.common import ApiResponse
 from backend.schemas.factor import (
     FactorCreate, FactorUpdate, FactorOut,
@@ -33,6 +34,8 @@ def _enrich_factor_out(f: "Factor", total_weight: float) -> FactorOut:
             except (json.JSONDecodeError, TypeError):
                 pass
     out.weight_percentage = round(f.weight / total_weight * 100, 2) if total_weight > 0 else 0.0
+    # Q13：告诉前端这份 signal_rules 到底有没有用（死配置因子编辑了也不生效）
+    out.signal_rules_effective = signal_rules_effective(f.code)
     return out
 
 

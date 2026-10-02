@@ -118,6 +118,8 @@ def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResul
         dynamic_buy_threshold=getattr(r, "dynamic_buy_threshold", None),
         dynamic_sell_threshold=getattr(r, "dynamic_sell_threshold", None),
         quality_warnings=_parse_warnings_json(getattr(r, "quality_warnings", None)),
+        nav_as_of_date=getattr(r, "nav_as_of_date", None),
+        pool_size=getattr(r, "pool_size", None),
     )
 
 
@@ -401,7 +403,10 @@ async def review_portfolio(
     fund_ids: Optional[str] = Query(None, description="逗号分隔基金 ID，空=全部活跃基金"),
     db: AsyncSession = Depends(get_db),
 ):
-    """投资复盘 — 组合区间收益 vs 沪深300 + 信号命中率（等权买入持有口径）"""
+    """投资复盘 — 组合区间收益 vs 基准（沪深300+股息）+ 信号同向率（等权买入持有口径）
+
+    净值走分红复权、基准含股息折算，口径头随 `report.caliber` 返回（Q11）。
+    """
     from backend.services.review_service import ReviewService
 
     ids = (
@@ -436,41 +441,160 @@ async def compare_funds(
     return ApiResponse(data=report)
 
 
+# ── 收益口径（Q11：净值复权 / 基准股息，两个键即两条回滚路径）───────────
+
+def _caliber_state(policy: dict) -> dict:
+    from backend.services import caliber_service as cs
+
+    return {
+        **policy,
+        "keys": {
+            "nav_adjusted": cs.NAV_ADJUSTED_CONFIG_KEY,
+            "bench_div_yield_pct": cs.BENCH_DIV_YIELD_CONFIG_KEY,
+        },
+        "defaults": {
+            "nav_adjusted": cs.DEFAULT_NAV_ADJUSTED,
+            "bench_div_yield_pct": cs.DEFAULT_BENCH_DIV_YIELD_PCT,
+        },
+        "bench_div_yield_max": cs.BENCH_DIV_YIELD_MAX,
+    }
+
+
+@router.get("/caliber")
+async def get_return_caliber(db: AsyncSession = Depends(get_db)):
+    """复盘/PK/建议回填当前生效的收益口径
+
+    `review_nav_adjusted=0` 回到裸单位净值；`benchmark_dividend_yield_pct=0`
+    回到纯价格指数。股息率是常数、复权只在已取回的序列上做变换 —— 零上游请求。
+    """
+    from backend.services import caliber_service as cs
+
+    return ApiResponse(data=_caliber_state(await cs.load_caliber(db)))
+
+
+@router.put("/caliber")
+async def update_return_caliber(
+    body: dict, db: AsyncSession = Depends(get_db)
+):
+    """修改生效收益口径（下一轮复盘/PK/回填即生效，历史报告不可比）"""
+    from backend.services import caliber_service as cs
+
+    raw_div = body.get("benchmark_dividend_yield_pct")
+    raw_nav = body.get("review_nav_adjusted")
+    try:
+        div = float(raw_div) if raw_div is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="benchmark_dividend_yield_pct 需为数字")
+    nav = None
+    if raw_nav is not None:
+        nav = not str(raw_nav).strip().lower() in ("0", "false", "off", "no", "")
+    saved = await cs.save_caliber(db, nav_adjusted=nav, bench_div_yield_pct=div)
+    return ApiResponse(data=_caliber_state(saved))
+
+
 # ── 调仓建议自进化（2026-09-24）──────────────────────────────────────
 
 @router.get("/advice-stats")
 async def advice_stats():
-    """调仓建议命中率统计与阈值校准状态"""
+    """调仓建议命中率统计与阈值校准状态（by_mode 里 abs/excess 两个口径并存）"""
     from backend.services.advice_learning_service import AdviceLearningStore
     store = AdviceLearningStore()
     return ApiResponse(data=store.stats())
 
 
+@router.get("/advice-hit-mode")
+async def get_advice_hit_mode():
+    """调仓建议命中口径（excess=相对沪深300超额 / abs=绝对涨跌旧口径，回滚用）"""
+    from backend.services.advice_learning_service import (
+        AdviceLearningStore, DEFAULT_HIT_MODE, HIT_MODES)
+    store = AdviceLearningStore()
+    return ApiResponse(data={
+        "hit_mode": store.get_hit_mode(),
+        "options": list(HIT_MODES),
+        "default": DEFAULT_HIT_MODE,
+    })
+
+
+@router.put("/advice-hit-mode")
+async def update_advice_hit_mode(body: dict):
+    """切换命中口径（只影响此后回填的样本与校准，历史双口径两列都已在库）"""
+    from backend.services.advice_learning_service import AdviceLearningStore
+    mode = str(body.get("hit_mode") or "")
+    try:
+        saved = AdviceLearningStore().set_hit_mode(mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ApiResponse(data={"hit_mode": saved})
+
+
 @router.post("/advice-eval")
 async def advice_evaluate():
-    """回填到期建议的实际表现并尝试校准（调度/手动触发）"""
-    from backend.services.advice_learning_service import AdviceLearningStore
-    from backend.data_sources.akshare_adapter import AKShareAdapter
-    from backend.services.review_service import _fetch_nav_series
+    """回填到期建议的实际表现并尝试校准（调度/手动触发）
 
-    store = AdviceLearningStore()
-    adapter = AKShareAdapter()
-    evaluated = 0
-    for item in store.pending_evaluations():
-        try:
-            series = await _fetch_nav_series(adapter, item["fund_code"], 90)
-            if not series or len(series) < 2:
-                continue
-            # 评估窗口：建议落库日 → +30 天内的实际涨跌
-            from datetime import datetime as dt
-            base = dt.strptime(item["ts"][:10], "%Y-%m-%d")
-            in_window = [(d, v) for d, v in series if d >= item["ts"][:10]]
-            if len(in_window) < 2:
-                continue
-            fund_chg = (in_window[-1][1] / in_window[0][1] - 1) * 100
-            store.record_outcome(item["advice_id"], item["action"], fund_chg, 0.0)
-            evaluated += 1
-        except Exception as e:
-            logger.warning(f"建议回填失败 {item['fund_code']}: {e}")
-    cal = store.calibrate()
-    return ApiResponse(data={"evaluated": evaluated, "calibration": cal})
+    口径与上游预算都在 `run_advice_backfill` 里（Q7，2026-10-02）：
+    窗口固定为「建议日 → 其后第 30 个净值日」，未走完的样本跳过留到下一轮；
+    基准走 `adapter.get_benchmark_series()` 的类级 1h 缓存，净值按基金去重后
+    每只取一次 —— 不新增上游请求。
+    """
+    from backend.services.advice_learning_service import run_advice_backfill
+    return ApiResponse(data=await run_advice_backfill())
+
+
+# ── 影子评分（§3：新口径先只写 shadow_* 列，分歧达标再切生产）────────
+
+@router.get("/shadow-config")
+async def get_shadow_config(db: AsyncSession = Depends(get_db)):
+    """影子开关/变体与判据常量（判据写死在代码里，不做成可配置项以免事后凑数）
+
+    附带内置变体的口径说明与 2C 的生效参数：读分歧数字的人需要知道"这一列是按
+    哪套口径、哪些参数算出来的"，参数写错越界时 `out_of_range` 会直接标出来。
+    """
+    from backend.engines.shadow_scoring import (
+        DIVERGENCE_THRESHOLD_PCT, STABLE_DAYS_REQUIRED, load_shadow_config,
+        variant_descriptions)
+    # 只为了触发内置变体注册：本端点可能是进程里第一个碰到影子层的地方，
+    # 不导入就会把"已实现的口径"报成"注册表为空"
+    from backend.engines import shadow_variants  # noqa: F401
+    from backend.engines.quality_filter import merge_quality_config
+
+    cfg = await load_shadow_config(db)
+    cfg["divergence_threshold_pct"] = DIVERGENCE_THRESHOLD_PCT
+    cfg["stable_days_required"] = STABLE_DAYS_REQUIRED
+    cfg["variant_descriptions"] = variant_descriptions()
+    cfg["caliber_params"] = shadow_variants.effective_params(await merge_quality_config(db))
+    return ApiResponse(data=cfg)
+
+
+@router.put("/shadow-config")
+async def update_shadow_config(body: dict, db: AsyncSession = Depends(get_db)):
+    """开关影子评分 / 指定变体；未注册的变体名 400（写错就静默停摆最坏）"""
+    from backend.engines.shadow_scoring import load_shadow_config, save_shadow_config
+
+    enabled = None
+    if "enabled" in body:
+        raw = body.get("enabled")
+        enabled = not str(raw).strip().lower() in ("0", "false", "off", "no", "")
+    variant = None
+    if "variant" in body:
+        variant = str(body.get("variant") or "").strip()
+    try:
+        saved = await save_shadow_config(db, enabled=enabled, variant=variant)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ApiResponse(data=saved)
+
+
+@router.get("/shadow-divergence")
+async def get_shadow_divergence(
+    days: int = Query(
+        10, ge=1, le=60,
+        description="回看最近 N 个有影子数据的日期（休市轮次仍展示，但不计入判据一的连续交易日）",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """新旧口径每日分歧比例 + 方向迁移矩阵 + 切换判据进度（纯本地 3 条 SQL，零上游请求）"""
+    from backend.engines import shadow_variants  # noqa: F401
+    # ↑ 只为触发内置变体注册：直接打开分歧卡（没先读 /shadow-config）时，
+    #   不导入会把"已实现的 2C 口径"报成"注册表为空"，读数字的人以为口径没上线
+    from backend.services.shadow_report_service import get_divergence_report
+    return ApiResponse(data=await get_divergence_report(db, days=days))

@@ -43,13 +43,19 @@ def test_signal_applies_next_bar_not_same_day(service):
 
 
 def test_geometric_compounding_not_additive(service):
-    """验证复利而非加法：两次 +10% 应得 +21% 而非 +20%"""
+    """验证复利而非加法：两次 +10% 应得 +21% 而非 +20%
+
+    carry_position=False 走旧口径（无信号日回落半仓），用于锁定复利/成本数学本身；
+    Q6 默认口径（仓位延续）见 tests/test_backtest_measurement.py。
+    """
     navs = [1.0, 1.1, 1.21]
     dates = ["2026-01-01", "2026-01-02", "2026-01-03"]
     signal_map = {
         "2026-01-01": {"direction": "buy", "strength": "heavy_buy", "score": 5.0},
     }
-    points = service._build_points(dates, navs, signal_map, effectiveness_window=5)
+    points = service._build_points(
+        dates, navs, signal_map, effectiveness_window=5, carry_position=False
+    )
 
     # 01-01 信号 → 01-02 应用 0.9 仓位：毛 +9% 但当日调仓 0.5→0.9 扣 0.24pp → +8.76；
     # 01-03 无信号回落 0.5：毛 +5% 扣 |0.9-0.5|×0.6=0.24pp → +4.76，复利串联
@@ -83,7 +89,11 @@ def test_datetime_string_dates(service):
 
 
 def test_turnover_fee_charged_on_position_change(service):
-    """调仓成本：净值走平时只暴露费用，每次仓位变动按 |Δ仓位|×ROUND_TRIP_FEE_PCT 扣减"""
+    """调仓成本：净值走平时只暴露费用，每次仓位变动按 |Δ仓位|×ROUND_TRIP_FEE_PCT 扣减
+
+    carry_position=False（旧口径）才有"末回落回半仓"那一次调仓；
+    延续口径下少一次换手见 test_backtest_measurement.py。
+    """
     from backend.services.backtest_service import DEFAULT_ROUND_TRIP_FEE_PCT as FEE
     navs = [1.0, 1.0, 1.0, 1.0]  # 净值走平，隔离费用影响
     dates = [f"2026-01-0{i}" for i in range(1, 5)]
@@ -91,7 +101,9 @@ def test_turnover_fee_charged_on_position_change(service):
         "2026-01-01": {"direction": "buy", "strength": "heavy_buy", "score": 5.0},
         "2026-01-02": {"direction": "sell", "strength": "heavy_sell", "score": -5.0},
     }
-    points = service._build_points(dates, navs, signal_map, effectiveness_window=5)
+    points = service._build_points(
+        dates, navs, signal_map, effectiveness_window=5, carry_position=False
+    )
 
     # 生效仓位序列 0.5/0.9/0.1/0.5（01-01 信号在 01-02 生效，依此类推）：
     #   Δ = 0 / 0.4 / 0.8 / 0.4，费用逐日复利扣减

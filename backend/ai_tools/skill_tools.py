@@ -45,7 +45,15 @@ async def _run_xray(db: AsyncSession, **kwargs) -> dict:
 
 async def _run_advice_stats(db: AsyncSession, **kwargs) -> dict:
     from backend.services.advice_learning_service import AdviceLearningStore
-    return {"advice_stats": AdviceLearningStore().stats()}
+    stats = AdviceLearningStore().stats()
+    # 口径提示写给 LLM：只报 hit_rate 会让模型把上涨市里近乎恒真的绝对命中当成选基能力
+    stats["口径说明"] = (
+        f"by_mode.excess = 相对沪深300 同区间（建议日→其后第 30 个净值日）超额命中，"
+        f"衡量选基能力，是当前校准阈值使用的口径（hit_mode={stats['hit_mode']}）；"
+        "by_mode.abs = 绝对涨跌命中，牛市里普遍虚高，只可用于对照，不要单独作为结论。"
+        "evaluated 为已判定样本数，不足 30 条时应明确告知用户命中率尚不具统计意义。"
+    )
+    return {"advice_stats": stats}
 
 
 def _make_handler(skill_id: int, skill_name: str = ""):

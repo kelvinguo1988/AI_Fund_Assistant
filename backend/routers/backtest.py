@@ -52,6 +52,55 @@ async def update_fee_config(
     return ApiResponse(data={"fee_pct": saved})
 
 
+# ── 回测度量口径（Q6：仓位延续 + 样本下限；同时是回滚开关）────────────
+
+class BacktestMeasurementConfig(BaseModel):
+    """回测度量口径；字段为 None 表示保持现状"""
+    carry_position: Optional[bool] = Field(
+        None, description="true=无信号日延续最近仓位；false=回落半仓（旧口径）"
+    )
+    min_signals: Optional[int] = Field(
+        None, ge=0, le=250, description="非 hold 信号样本下限，0=不拦"
+    )
+    min_coverage_pct: Optional[float] = Field(
+        None, ge=0, le=100, description="信号覆盖交易日占比下限（%），0=不拦"
+    )
+
+
+@router.get("/config/measurement", response_model=ApiResponse[dict])
+async def get_measurement_config(db: AsyncSession = Depends(get_db)):
+    """读取回测度量口径（仓位延续 / 样本下限）与默认值"""
+    from backend.services.backtest_service import (
+        DEFAULT_CARRY_POSITION, DEFAULT_MIN_COVERAGE_PCT, DEFAULT_MIN_SIGNALS,
+        load_measurement_policy,
+    )
+    policy = await load_measurement_policy(db)
+    return ApiResponse(data={
+        **policy,
+        "defaults": {
+            "carry_position": DEFAULT_CARRY_POSITION,
+            "min_signals": DEFAULT_MIN_SIGNALS,
+            "min_coverage_pct": DEFAULT_MIN_COVERAGE_PCT,
+        },
+    })
+
+
+@router.put("/config/measurement", response_model=ApiResponse[dict])
+async def update_measurement_config(
+    body: BacktestMeasurementConfig,
+    db: AsyncSession = Depends(get_db),
+):
+    """更新回测度量口径（保存即对下一次回测生效）"""
+    from backend.services.backtest_service import save_measurement_policy
+    policy = await save_measurement_policy(
+        db,
+        carry_position=body.carry_position,
+        min_signals=body.min_signals,
+        min_coverage_pct=body.min_coverage_pct,
+    )
+    return ApiResponse(data=policy)
+
+
 @router.get("/{fund_id}", response_model=ApiResponse[BacktestSummary])
 async def run_backtest(
     fund_id: int,
@@ -89,6 +138,17 @@ def _result_to_out(r) -> dict:
         effectiveness_rate=r.effectiveness_rate,
         finished_at=str(r.finished_at) if r.finished_at else None,
         error=r.error, ok=r.ok,
+        baseline_buy_hold=r.baseline_buy_hold,
+        baseline_static_half=r.baseline_static_half,
+        excess_vs_static_half=r.excess_vs_static_half,
+        signal_count_non_hold=r.signal_count_non_hold,
+        signal_coverage_ratio=r.signal_coverage_ratio,
+        low_sample=r.low_sample,
+        caveat=r.caveat,
+        coverage_start_date=r.coverage_start_date,
+        coverage_days=r.coverage_days,
+        pool_size_at=r.pool_size_at,
+        carry_position=r.carry_position,
     ).model_dump(mode="json")
 
 

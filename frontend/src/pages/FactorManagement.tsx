@@ -264,7 +264,14 @@ const FactorManagement: React.FC = () => {
                   </Tooltip>
                 </TableCell>
                 <TableCell>{f.window ? `${f.window}${f.window_unit === 'quarter' ? '季' : '日'}` : '-'}</TableCell>
-                <TableCell>{NORM_LABELS[f.normalization] || '无'}</TableCell>
+                <TableCell>
+                  {NORM_LABELS[f.normalization] || '无'}
+                  {f.signal_rules_effective === false && (
+                    <Tooltip title="该因子的得分由计算函数直接给出（截面因子再经 z 分档），不读取信号规则，因此本页不提供规则编辑；库里历史遗留的规则数组已在启动时清空">
+                      <Chip label="规则不适用" size="small" variant="outlined" sx={{ ml: 0.5, height: 20, fontSize: 11 }} />
+                    </Tooltip>
+                  )}
+                </TableCell>
                 <TableCell>
                   <Slider
                     value={weightDrafts[f.id] ?? f.weight}

@@ -1,7 +1,10 @@
 /**
  * 我的持仓与调仓建议页（P3）
- * Tab1 持仓管理：手动建仓/更新（基金池代码）、CSV 粘贴导入（支付宝/天天兼容）、删除
- * Tab2 调仓建议：纯 Python 引擎四清单 + 组合层约束 + 工单原文，可一键喂 AI 解读
+ * Tab1 持仓管理：手动建仓/更新（基金池代码）、CSV 粘贴导入（支付宝/天天兼容）、删除；
+ *                含「首次买入日期」（Q10-C 持有期/赎回费约束的唯一输入，未填显示"持有 —"）
+ * Tab2 调仓建议：纯 Python 引擎四清单 + 组合层约束 + 工单原文，可一键喂 AI 解读；
+ *                权重按市值（实时估值缓存→成本→份额，逐只标注口径），卖出/换仓附持有期与阶梯赎回费
+ *      底部「建议命中率与阈值校准」卡展示自进化闭环的双口径命中数（Q7）
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -38,8 +41,9 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import {
-  positionApi, rebalanceApi,
+  positionApi, rebalanceApi, adviceApi,
   PositionItem, ImportResult, RebalanceData, RebalanceRow,
+  AdviceStats, AdviceSide,
 } from '../api/position';
 import { aiApi } from '../api/ai';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -48,6 +52,13 @@ interface Snack { open: boolean; message: string; severity: 'success' | 'error' 
 
 const signalColor = (s?: string | null) =>
   s === 'buy' ? 'success.main' : s === 'sell' ? 'error.main' : 'text.secondary';
+
+/** 本地日期的 YYYY-MM-DD（不用 toISOString：UTC 换算会把日期挪走一天） */
+const todayIso = () => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 
 const ListCard: React.FC<{ title: string; color: string; rows: RebalanceRow[]; extra?: (r: RebalanceRow) => React.ReactNode; empty: string }> = ({ title, color, rows, extra, empty }) => (
   <Card sx={{ height: '100%' }}>
@@ -69,6 +80,94 @@ const ListCard: React.FC<{ title: string; color: string; rows: RebalanceRow[]; e
   </Card>
 );
 
+/**
+ * 建议自进化闭环卡片（Q7 双口径）
+ *
+ * 命中率同时给两个数：绝对口径在上涨市里近乎恒真（量的是 beta），超额口径才量得出
+ * 选基能力。两者都落库，所以切换口径不需要重跑回填；校准实际使用的那个会标注出来。
+ */
+const AdviceLearningCard: React.FC<{
+  stats: AdviceStats | null;
+  loading: boolean;
+  backfilling: boolean;
+  onRefresh: () => void;
+  onModeChange: (mode: string) => void;
+  onBackfill: () => void;
+}> = ({ stats, loading, backfilling, onRefresh, onModeChange, onBackfill }) => {
+  const fmt = (s?: AdviceSide) => {
+    if (!s || !s.total) return '—';
+    return `${(s.hits / s.total * 100).toFixed(0)}%（${s.hits}/${s.total}）`;
+  };
+  const rows: { mode: 'excess' | 'abs'; label: string; tip: string }[] = [
+    { mode: 'excess', label: '超额口径', tip: '与沪深300 比同区间涨跌：卖出后跑输=命中、买入后跑赢=命中，量的是选基能力' },
+    { mode: 'abs', label: '绝对口径', tip: '只看基金自身涨跌：卖出后下跌=命中。上涨市里几乎恒真，量的是市场 beta' },
+  ];
+  return (
+    <Card sx={{ mt: 2 }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1 }}>
+          <Typography variant="subtitle1" fontWeight={700}>建议命中率与阈值校准</Typography>
+          <Typography variant="caption" color="text.secondary">
+            工单落库 → 满 30 个净值日后回填 → 按当前口径校准止盈/止损线（每周六 01:00 自动跑）
+          </Typography>
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="选择阈值校准依据的口径（两组命中率始终同时展示，切换只影响校准与后续回填的 hit 列，不需要重跑历史）">
+            <ToggleButtonGroup size="small" exclusive value={stats?.hit_mode ?? 'excess'}
+              onChange={(_, v) => v && onModeChange(v)}>
+              <ToggleButton value="excess">校准用超额</ToggleButton>
+              <ToggleButton value="abs">校准用绝对</ToggleButton>
+            </ToggleButtonGroup>
+          </Tooltip>
+          <Button size="small" onClick={onRefresh} disabled={loading}>
+            {loading ? <CircularProgress size={18} /> : '刷新'}
+          </Button>
+          <Tooltip title="逐只取到期基金的净值，基金之间随机等待 10–30 秒防限流；没有到期样本时不发请求">
+            <span>
+              <Button size="small" variant="outlined" onClick={onBackfill} disabled={backfilling}>
+                {backfilling ? '回填中…' : '立即回填到期建议'}
+              </Button>
+            </span>
+          </Tooltip>
+        </Box>
+
+        {!stats || stats.evaluated === 0 ? (
+          <Alert severity="info">
+            暂无已回填样本。工单来源 = AI 工作台的「调仓建议」任务与调度计划里的「AI 每日简报」
+            （同日同方向只记一次）；评估窗口固定为「建议日 → 其后第 30 个净值日」，
+            窗口未走完的建议不计入 —— 首批样本要等约 46 个自然日。
+            在此之前，止盈/止损线仍是默认值（不受校准影响）。
+          </Alert>
+        ) : (
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 2 }}>
+            {rows.map((r) => (
+              <Box key={r.mode}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+                  <Tooltip title={r.tip}>
+                    <Typography variant="body2" fontWeight={700} sx={{ cursor: 'help' }}>{r.label}</Typography>
+                  </Tooltip>
+                  {stats.hit_mode === r.mode && (
+                    <Chip size="small" color="primary" label="校准使用" sx={{ height: 20, fontSize: 11 }} />
+                  )}
+                </Box>
+                <Typography variant="body2">卖出命中 {fmt(r.mode === 'excess' ? stats.by_mode.excess.sell : stats.by_mode.abs.sell)}</Typography>
+                <Typography variant="body2">买入命中 {fmt(r.mode === 'excess' ? stats.by_mode.excess.buy : stats.by_mode.abs.buy)}</Typography>
+              </Box>
+            ))}
+            <Box>
+              <Typography variant="body2" fontWeight={700} gutterBottom>当前校准阈值</Typography>
+              <Typography variant="body2">止盈线 {stats.params.profit_take_pct ?? '—'}%</Typography>
+              <Typography variant="body2">止损线 {stats.params.stop_loss_pct ?? '—'}%</Typography>
+              <Typography variant="caption" color="text.secondary">
+                已判定样本 {stats.evaluated} 条；样本不足 30 条时不调整（避免对着噪声动阈值）
+              </Typography>
+            </Box>
+          </Box>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
 const PositionsPage: React.FC = () => {
   const [tab, setTab] = useState(0);
   const [items, setItems] = useState<PositionItem[]>([]);
@@ -82,6 +181,7 @@ const PositionsPage: React.FC = () => {
   const [fCode, setFCode] = useState('');
   const [fShares, setFShares] = useState('');
   const [fCost, setFCost] = useState('');
+  const [fDate, setFDate] = useState('');
 
   // CSV 导入
   const [csvOpen, setCsvOpen] = useState(false);
@@ -95,6 +195,11 @@ const PositionsPage: React.FC = () => {
   const [rb, setRb] = useState<RebalanceData | null>(null);
   const [rbMd, setRbMd] = useState('');
   const [aiReading, setAiReading] = useState(false);
+
+  // 建议自进化闭环（命中率双口径 + 校准口径开关）
+  const [adv, setAdv] = useState<AdviceStats | null>(null);
+  const [advLoading, setAdvLoading] = useState(false);
+  const [advBackfilling, setAdvBackfilling] = useState(false);
 
   const notify = (message: string, severity: Snack['severity']) =>
     setSnack({ open: true, message, severity });
@@ -114,24 +219,30 @@ const PositionsPage: React.FC = () => {
   useEffect(() => { refresh(); }, [refresh]);
 
   const openCreate = () => {
-    setEditTarget(null); setFCode(''); setFShares(''); setFCost(''); setDlgOpen(true);
+    setEditTarget(null); setFCode(''); setFShares(''); setFCost(''); setFDate(''); setDlgOpen(true);
   };
   const openEdit = (p: PositionItem) => {
     setEditTarget(p); setFCode(p.fund_code); setFShares(String(p.shares));
-    setFCost(p.cost_nav != null ? String(p.cost_nav) : ''); setDlgOpen(true);
+    setFCost(p.cost_nav != null ? String(p.cost_nav) : '');
+    setFDate(p.first_buy_date ?? ''); setDlgOpen(true);
   };
 
   const submitDlg = async () => {
     const shares = parseFloat(fShares);
     const cost = fCost.trim() === '' ? null : parseFloat(fCost);
+    const firstBuy = fDate.trim() === '' ? null : fDate.trim();
     if (!fCode.trim() || !Number.isFinite(shares) || shares <= 0) {
       notify('请填写基金代码与有效份额', 'error'); return;
     }
+    if (firstBuy && firstBuy > todayIso()) {
+      notify('首次买入日不能晚于今天', 'error'); return;
+    }
     try {
       if (editTarget) {
-        await positionApi.update(editTarget.id, shares, cost);
+        // 编辑对话框里"留空即清除"：后端用字段是否出现来区分"不动"和"清空"
+        await positionApi.update(editTarget.id, { shares, cost_nav: cost, first_buy_date: firstBuy });
       } else {
-        await positionApi.create(fCode.trim(), shares, cost);
+        await positionApi.create(fCode.trim(), shares, cost, firstBuy);
       }
       setDlgOpen(false);
       notify(editTarget ? '已更新' : '已建仓', 'success');
@@ -180,6 +291,48 @@ const PositionsPage: React.FC = () => {
     }
   };
 
+  const loadAdvice = useCallback(async () => {
+    setAdvLoading(true);
+    try {
+      const res = await adviceApi.stats();
+      setAdv(res.data ?? null);
+    } catch (e: any) {
+      notify(e?.displayMessage || e?.message || '命中率统计加载失败', 'error');
+    } finally {
+      setAdvLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { if (tab === 1) loadAdvice(); }, [tab, loadAdvice]);
+
+  const saveMode = async (mode: string) => {
+    try {
+      await adviceApi.setHitMode(mode);
+      notify(mode === 'excess' ? '校准口径已切换为超额（相对沪深300）' : '校准口径已回退为绝对涨跌（旧口径）', 'success');
+      loadAdvice();
+    } catch (e: any) {
+      notify(e?.response?.data?.detail || e?.displayMessage || '口径切换失败', 'error');
+    }
+  };
+
+  const runAdviceEval = async () => {
+    setAdvBackfilling(true);
+    try {
+      const r = (await adviceApi.runEval()).data;
+      notify(
+        `回填完成：判定 ${r?.evaluated ?? 0} 条 / 到期 ${r?.pending ?? 0} 条，`
+        + `窗口未走完 ${r?.skipped_window_incomplete ?? 0} 条`
+        + `${r?.calibration?.adjusted ? '；阈值已调整' : ''}`,
+        'info',
+      );
+      loadAdvice();
+    } catch (e: any) {
+      notify(e?.displayMessage || e?.message || '回填失败', 'error');
+    } finally {
+      setAdvBackfilling(false);
+    }
+  };
+
   const askAi = async () => {
     if (!rbMd) return;
     setAiReading(true);
@@ -224,19 +377,24 @@ const PositionsPage: React.FC = () => {
               <Button variant="outlined" size="small" onClick={() => { setCsvResult(null); setCsvOpen(true); }}>CSV 导入</Button>
               <Button size="small" onClick={refresh}>刷新</Button>
             </Box>
-            {loading ? <CircularProgress size={22} /> : (
+            {items.some((p) => p.first_buy_date == null) && (
+              <Alert severity="info" sx={{ mb: 1.5 }}>
+                {items.filter((p) => p.first_buy_date == null).length} 只持仓未填首次买入日期，
+                调仓工单对它们不做赎回费/持有期约束（显示"持有 —"）。点行尾编辑按钮补录即可。
+              </Alert>
+            )}            {loading ? <CircularProgress size={22} /> : (
               <TableContainer>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      {['代码', '名称', '份额', '成本价', '最新评分', '信号', '来源', '更新时间', '操作'].map((h) => (
+                      {['代码', '名称', '份额', '成本价', '持有期', '最新评分(池内)', '信号', '来源', '更新时间', '操作'].map((h) => (
                         <TableCell key={h} sx={{ whiteSpace: 'nowrap' }}>{h}</TableCell>
                       ))}
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {items.length === 0 && (
-                      <TableRow><TableCell colSpan={9}><Typography variant="body2" color="text.secondary">暂无持仓，先「建仓 / 录入」或「CSV 导入」</Typography></TableCell></TableRow>
+                      <TableRow><TableCell colSpan={10}><Typography variant="body2" color="text.secondary">暂无持仓，先「建仓 / 录入」或「CSV 导入」</Typography></TableCell></TableRow>
                     )}
                     {items.map((p) => (
                       <TableRow key={p.id} hover>
@@ -244,6 +402,19 @@ const PositionsPage: React.FC = () => {
                         <TableCell sx={{ minWidth: 140 }}>{p.fund_name}</TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{p.shares.toLocaleString()}</TableCell>
                         <TableCell>{p.cost_nav ?? '—'}</TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <Tooltip title={p.first_buy_date
+                            ? `首次买入 ${p.first_buy_date}（赎回费持有期按自然日计）`
+                            : '未填首次买入日 → 持有期未知，调仓工单对该只不做赎回费约束（可点编辑补录）'}>
+                            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, cursor: 'help' }}>
+                              <span>{p.first_buy_date ?? '—'}</span>
+                              <Typography variant="caption"
+                                color={p.holding_days == null ? 'text.disabled' : 'text.secondary'}>
+                                {p.holding_days == null ? '持有 —' : `持有 ${p.holding_days} 天`}
+                              </Typography>
+                            </Box>
+                          </Tooltip>
+                        </TableCell>
                         <TableCell>{p.latest_score ?? '—'}</TableCell>
                         <TableCell sx={{ color: signalColor(p.latest_signal), whiteSpace: 'nowrap' }}>{p.latest_signal ?? '—'}</TableCell>
                         <TableCell sx={{ whiteSpace: 'nowrap' }}>{p.source === 'import' ? '导入' : '手动'}</TableCell>
@@ -283,6 +454,15 @@ const PositionsPage: React.FC = () => {
                   navigator.clipboard.writeText(rbMd).then(() => notify('工单已复制', 'success'));
                 }}>复制工单</Button>
               )}
+              {rb?.fee_policy && (
+                <Tooltip title="阶梯来自可配参数 redemption_fee_ladder；惩罚档是 redemption_fee_penalize_pct；关闭开关 redemption_fee_enabled=0 回到旧工单">
+                  <Typography variant="caption" color="text.secondary" sx={{ cursor: 'help' }}>
+                    {rb.fee_policy.enabled
+                      ? `赎回费阶梯 ${rb.fee_policy.ladder_text}，≥${rb.fee_policy.penalize_pct}% 降级观望`
+                      : '赎回费约束已关闭（redemption_fee_enabled=0）'}
+                  </Typography>
+                </Tooltip>
+              )}
             </CardContent>
           </Card>
 
@@ -319,7 +499,18 @@ const PositionsPage: React.FC = () => {
                   <CardContent>
                     <Typography variant="subtitle1" fontWeight={700} gutterBottom>同赛道换仓配对（按分差）</Typography>
                     <Table size="small">
-                      <TableHead><TableRow><TableCell>卖出</TableCell><TableCell>买入去向</TableCell><TableCell>赛道</TableCell><TableCell>分差</TableCell></TableRow></TableHead>
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>卖出</TableCell><TableCell>买入去向</TableCell>
+                          <TableCell>赛道</TableCell>
+                          <TableCell>
+                            <Tooltip title="分差 = 两侧各自最新一条分析记录的池内相对分之差。两条记录可能来自不同交易日，而池内相对分只在当日池内可比，所以这个差值适合用来给候选配对排序，不适合当作多 3 分就值 3 分的绝对刻度">
+                              <span>分差</span>
+                            </Tooltip>
+                          </TableCell>
+                          <TableCell>卖侧持有/费率</TableCell>
+                        </TableRow>
+                      </TableHead>
                       <TableBody>
                         {rb.swaps.map((s, i) => (
                           <TableRow key={i}>
@@ -327,6 +518,10 @@ const PositionsPage: React.FC = () => {
                             <TableCell>{s.buy_name}({s.buy_code})</TableCell>
                             <TableCell>{s.theme}</TableCell>
                             <TableCell>{s.score_gap}</TableCell>
+                            <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                              {s.sell_holding_days == null ? '持有 —' : `持有 ${s.sell_holding_days} 天`}
+                              {s.sell_fee_pct != null ? ` / 费 ${s.sell_fee_pct}%` : ''}
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -352,7 +547,11 @@ const PositionsPage: React.FC = () => {
                   {rb.holdings.length > 0 && rb.holdings.length <= 30 && (
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
                       {rb.holdings.map((h) => (
-                        <Tooltip key={h.code} title={`评分 ${h.score ?? '—'} / ${h.direction ?? '—'}`}>
+                        <Tooltip key={h.code} title={`评分 ${h.score ?? '—'} / ${h.direction ?? '—'}｜权重口径 ${
+                            h.weight_basis === 'market' ? '实时净值市值'
+                              : h.weight_basis === 'cost' ? '成本市值（净值未命中）'
+                              : h.weight_basis === 'shares' ? '份额估算（无净值无成本）'
+                              : '等权近似'}｜${h.holding_days == null ? '持有期未知' : `持有 ${h.holding_days} 天`}`}>
                           <Chip size="small" variant="outlined" label={`${h.name} ${h.weight_pct}%`} sx={{ height: 22 }} />
                         </Tooltip>
                       ))}
@@ -369,6 +568,15 @@ const PositionsPage: React.FC = () => {
               </Card>
             </>
           )}
+
+          <AdviceLearningCard
+            stats={adv}
+            loading={advLoading}
+            onRefresh={loadAdvice}
+            onModeChange={saveMode}
+            onBackfill={runAdviceEval}
+            backfilling={advBackfilling}
+          />
         </>
       )}
 
@@ -379,7 +587,13 @@ const PositionsPage: React.FC = () => {
           <TextField autoFocus fullWidth margin="dense" label="基金代码（须在基金池）" value={fCode}
             onChange={(e) => setFCode(e.target.value)} disabled={!!editTarget} />
           <TextField fullWidth margin="dense" label="持有份额" value={fShares} onChange={(e) => setFShares(e.target.value)} />
-          <TextField fullWidth margin="dense" label="持仓成本价（可空=等权）" value={fCost} onChange={(e) => setFCost(e.target.value)} />
+          <TextField fullWidth margin="dense" label="持仓成本价（可空=无成本口径）" value={fCost} onChange={(e) => setFCost(e.target.value)} />
+          <TextField fullWidth margin="dense" type="date" InputLabelProps={{ shrink: true }}
+            label="首次买入日期（可空）" value={fDate} onChange={(e) => setFDate(e.target.value)} />
+          <Typography variant="caption" color="text.secondary">
+            首买日是持有期/赎回费约束的唯一输入。不填则该持仓不做费用约束（工单显示"持有 —"）；
+            它是实际买入日，与"录入系统时间"无关，可以补录历史。
+          </Typography>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDlgOpen(false)}>取消</Button>
@@ -392,7 +606,8 @@ const PositionsPage: React.FC = () => {
         <DialogTitle>CSV 粘贴导入</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            直接粘贴支付宝/天天基金等导出内容；自动按表头别名识别「基金代码/持有份额/持仓成本价」列，
+            直接粘贴支付宝/天天基金等导出内容；自动按表头别名识别「基金代码/持有份额/持仓成本价/首次买入日期」列
+            （首次买入日期列名兼容「买入日期」「确认日期」），
             无表头按「代码,份额[,成本价]」列序。池外代码逐行跳过并提示。
           </Typography>
           <ToggleButtonGroup size="small" exclusive value={csvMode} onChange={(_, v) => v && setCsvMode(v)} sx={{ mb: 1 }}>

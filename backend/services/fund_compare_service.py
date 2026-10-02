@@ -8,8 +8,9 @@
 - 规模/持有人（模块 6）：份额/规模变化倍数（首末季报比）+ 最新机构占比
   （库内 fund_quarterly，零新增请求）
 
-数据：净值序列复用 review_service._fetch_nav_series（限流链路），
-基准为 stock_zh_index_daily sh000300。
+数据：净值序列复用 review_service._fetch_nav_series（限流链路，Q11 起为分红复权口径），
+基准为 stock_zh_index_daily sh000300 点位 + caliber_service 的股息折算（价格指数不含分红，
+而基金侧已含分红，直接对比会让 Alpha 系统性偏高约一个股息率）。
 """
 
 import logging
@@ -160,6 +161,9 @@ class FundCompareService:
         baseline: str = "沪深300",
     ) -> CompareReport:
         from backend.data_sources.akshare_adapter import AKShareAdapter
+        from backend.services.caliber_service import (
+            caliber_head_lines, load_caliber, with_dividend_carry,
+        )
         from backend.services.review_service import _fetch_nav_series
 
         if not fund_ids:
@@ -173,12 +177,21 @@ class FundCompareService:
         if not funds:
             raise ValueError("基金不存在")
 
+        # 口径与复盘/回填共用一套（Q11）：净值复权 + 基准含息，一轮只读一次
+        policy = await load_caliber(self.db)
+        caliber_lines = caliber_head_lines(
+            policy,
+            cash_line=f"夏普/Alpha 扣减无风险利率 {RF_ANNUAL}%/年，净值不另计利息",
+        )
+
         adapter = AKShareAdapter()
         fetch_days = 365 * 5 + 40  # 成立以来窗口上限 5 年
 
         # 基准序列（复用 adapter 基准缓存；失败降级 None 指标而非 500）
         try:
-            bench_series = await adapter.get_benchmark_series(period=365 * 5 + 40)
+            raw_bench = await adapter.get_benchmark_series(period=365 * 5 + 40)
+            # 价格指数 + 股息：基金侧含分红，基准侧不含会让 Alpha 系统性偏高
+            bench_series = with_dividend_carry(raw_bench, policy["bench_div_yield_pct"])
         except Exception as e:
             logger.warning(f"基准序列获取失败，归因指标将缺失: {e}")
             bench_series = []
@@ -188,7 +201,8 @@ class FundCompareService:
 
         async def _fetch(fund: Fund):
             try:
-                series = await _fetch_nav_series(adapter, fund.code, fetch_days)
+                series = await _fetch_nav_series(
+                    adapter, fund.code, fetch_days, adjusted=policy["nav_adjusted"])
                 return fund, series, None
             except Exception as e:
                 return fund, None, str(e)[:80]
@@ -238,7 +252,8 @@ class FundCompareService:
                     item.windows.append(m)
             items.append(item)
 
-        report = CompareReport(baseline=baseline, items=items)
+        report = CompareReport(baseline=baseline, items=items,
+                               caliber={**policy, "lines": caliber_lines})
         report.summary_md = self._summary_md(report)
         return report
 
@@ -275,10 +290,15 @@ class FundCompareService:
 
     @staticmethod
     def _summary_md(r: CompareReport) -> str:
+        # Q11-C：三行口径头（净值口径 / 基准口径 / 是否计息），先看尺子再看数字
+        head = list(r.caliber.get("lines") or [
+            f"> 口径：净值统一计算（无风险利率 {RF_ANNUAL}%）；基准 {r.baseline}"
+        ])
         lines = [
             "## 📊 基金 PK 对比报告",
             "",
-            f"> 口径：净值统一计算（无风险利率 {RF_ANNUAL}%）；基准 {r.baseline}。仅供参考，不构成投资建议。",
+        ] + head + [
+            "> 仅供参考，不构成投资建议。",
             "",
             "| 基金 | 窗口 | 年化收益 | 最大回撤 | 夏普 | Beta | Alpha年化 | 信息比率 | 规模变化 | 机构占比 |",
             "|------|------|----------|----------|------|------|-----------|----------|----------|----------|",

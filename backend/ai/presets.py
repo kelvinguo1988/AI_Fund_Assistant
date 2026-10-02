@@ -25,7 +25,9 @@ async def _factor_audit_context(db, params: dict) -> str:
 
 async def _rebalance_context(db, params: dict) -> str:
     from backend.ai.rebalance import RebalanceService
-    report = await RebalanceService(db).analyze(window_days=int(params.get("window_days", 30)))
+    # record_advice：Agent 任务产出的工单同时进 advice_log（自进化闭环的样本来源）
+    report = await RebalanceService(db).analyze(
+        window_days=int(params.get("window_days", 30)), record_advice=True)
     return json.dumps(report.to_dict(), ensure_ascii=False, default=str)
 
 
@@ -39,6 +41,7 @@ async def build_brief_payload(db) -> dict:
 
     from backend.models.analysis_result import AnalysisResult
     from backend.models.fund import Fund
+    from backend.engines.scoring_engine import score_caliber_note
 
     payload: dict = {"as_of": str(beijing_today()), "sections": {}}
     caveats: list[str] = []
@@ -68,6 +71,9 @@ async def build_brief_payload(db) -> dict:
             f = funds.get(r.fund_id)
             overview["top_sell"].append({"code": f.code if f else None, "name": f.name if f else None,
                                          "score": r.weighted_score, "signal": r.signal_direction})
+        # Q5：简报里的 score 是截面相对分，不写这句 LLM 会拿它当绝对质量跨日比较
+        pools = [r.pool_size for r in rows if r.pool_size]
+        caveats.append(f"signal_overview 里的 score 是{score_caliber_note(max(pools) if pools else None)}")
     else:
         caveats.append("最新分析数据缺失，请先运行分析任务")
     payload["sections"]["signal_overview"] = overview
@@ -75,7 +81,7 @@ async def build_brief_payload(db) -> dict:
     # ② 调仓四清单摘要（引擎口径与信号链路一致）
     try:
         from backend.ai.rebalance import RebalanceService
-        rb = await RebalanceService(db).analyze(window_days=30)
+        rb = await RebalanceService(db).analyze(window_days=30, record_advice=True)
         rbd = rb.to_dict()
         payload["sections"]["rebalance"] = {
             "holdings_mode": rbd.get("holdings_mode"),
@@ -101,7 +107,12 @@ async def build_brief_payload(db) -> dict:
         )
         payload["sections"]["factor_audit"] = {
             "window": f"{fa.window_start} ~ {fa.window_end}",
+            # Q12：Top/Bottom 只是 RankIC 排序，必须连同采样口径与非显著警告一起给出，
+            # 否则简报会把 4 个周期里的噪声读成"某因子失效"
+            "ic_sampling": fa.ic_sampling,
             "top_factors": ic[:3], "bottom_factors": ic[-3:],
+            "significant_factors": [x for x in ic if x.get("significant")],
+            "caveats": fa.caveats[:5],
             "whipsaw_top": fa.whipsaw_top[:3],
         }
     except Exception as e:
@@ -123,6 +134,18 @@ async def build_brief_payload(db) -> dict:
         logger.warning(f"简报-市场环境快照失败: {type(e).__name__}: {e}")
         caveats.append("市场环境快照不可用")
 
+    # ⑤ 收益口径头（Q11-C）：简报里凡是引用区间收益/超额/回测数字，都必须带同一份口径
+    try:
+        from backend.services.caliber_service import caliber_head_lines, load_caliber
+        policy = await load_caliber(db)
+        payload["caliber"] = caliber_head_lines(
+            policy,
+            extra="信号与调仓清单为当日快照，不含区间收益",
+            cash_line="回测未成交的现金按 0% 计息（不计息）",
+        )
+    except Exception as e:
+        logger.warning(f"简报-收益口径读取失败: {type(e).__name__}: {e}")
+
     payload["caveats"] = caveats
     return payload
 
@@ -138,6 +161,10 @@ PRESET_TASKS: dict[str, dict] = {
             "信号超额胜率、whipsaw、质量过滤对照）。请解读：①哪些因子有效/失效/建议调权或停用"
             "②评分与阈值是否需要调整③质量过滤是否产生了正贡献④数据口径风险。"
             "结论必须基于给定数字，不得重新计算或编造统计量。"
+            "Q12 口径硬约束：factor_ic 里的 IR 是**非重叠周期**上的均值/标准差（看 days 与 "
+            "n_days_valid 两个数），rank_ic_ir_annualized 才是可与他人比较的年化 IR；"
+            "只有 rank_ic_q_bh < 0.05（同窗口多因子校正后）且 days ≥ 8 的因子才允许说"
+            "'有效/建议调权重'，其余一律说'独立周期不足或未达显著，不能据此调权重'。"
         ),
         "context_builder": _factor_audit_context,
         "allowed_tools": ["get_latest_signals", "list_factors", "get_scoring_config",
@@ -167,6 +194,8 @@ PRESET_TASKS: dict[str, dict] = {
             "Markdown 格式：①一句话总体判断（市场环境下池子信号基调）②值得行动的 1-3 条"
             "（结合调仓清单与申购可执行性）③1 条风险/观察提示。只使用给定数字与结论，"
             "不得重算或编造；某节缺失时在末尾注明。"
+            "若正文引用了区间收益/超额/回测数字，必须在开头单独一行照抄 caliber 三行口径"
+            "（净值口径 / 基准口径 / 计息口径），不改写其中数字。"
         ),
         "context_builder": _daily_brief_context,
         "allowed_tools": ["get_latest_signals", "get_positions", "get_otc_trade_status",
