@@ -7,6 +7,7 @@ from sqlalchemy import DateTime, Integer, String, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class ConceptBoardMap(Base):
@@ -27,5 +28,5 @@ class ConceptBoardMap(Base):
     stock_code: Mapped[str] = mapped_column(String(10), nullable=False, comment="股票代码")
     stock_name: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, comment="该板块成分最近抓取时间"
+        DateTime, nullable=False, default=now_beijing, comment="该板块成分最近抓取时间"
     )

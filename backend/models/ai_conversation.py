@@ -8,6 +8,7 @@ from sqlalchemy import String, Integer, Text, DateTime, ForeignKey, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class AIConversation(Base):
@@ -35,5 +36,5 @@ class AIConversation(Base):
         Text, nullable=True, comment="JSON: Agent 工具调用轨迹（摘要，供回放/审计），普通对话为 NULL"
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )

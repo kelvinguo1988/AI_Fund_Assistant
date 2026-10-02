@@ -14,6 +14,7 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConst
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class FundQuarterly(Base):
@@ -53,8 +54,8 @@ class FundQuarterly(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+        DateTime, nullable=False, default=now_beijing, onupdate=now_beijing
     )

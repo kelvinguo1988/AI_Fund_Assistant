@@ -8,6 +8,7 @@ from sqlalchemy import Float, Integer, String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class Factor(Base):
@@ -35,5 +36,5 @@ class Factor(Base):
         String(10), nullable=False, default="active", comment="active / disabled"
     )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="排序")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_beijing)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_beijing, onupdate=now_beijing)

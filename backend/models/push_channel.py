@@ -8,6 +8,7 @@ from sqlalchemy import String, Boolean, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class PushChannel(Base):
@@ -23,8 +24,8 @@ class PushChannel(Base):
     config: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="JSON 额外配置")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+        DateTime, nullable=False, default=now_beijing, onupdate=now_beijing
     )

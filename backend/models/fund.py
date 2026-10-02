@@ -8,6 +8,7 @@ from sqlalchemy import String, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class Fund(Base):
@@ -38,8 +39,8 @@ class Fund(Base):
         String(10), nullable=False, default="active", comment="active / disabled"
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+        DateTime, nullable=False, default=now_beijing, onupdate=now_beijing
     )

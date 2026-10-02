@@ -67,3 +67,40 @@ async def test_funds_detail_no_cache_path(db_session, monkeypatch):
     assert len(resp.data.funds) == 1
     assert resp.data.funds[0].code == "161725"
     assert resp.data.funds[0].return_1y == "15.5%"
+
+
+# ── 模型时间戳列默认值的时钟口径（2026-10-02 NAS 实测失守后加的闸门）──────
+
+def test_no_model_column_defaults_to_machine_clock():
+    """`backend/models` 里所有列默认值不得用裸 `datetime.now`
+
+    判据用源码级机检（同 Q13 的做法）：容器里 `TZ=Asia/Shanghai` 在 python:3.9-slim
+    上不生效，裸 `datetime.now` 落 UTC，而 `now_beijing()` 写的业务时间戳是北京时 ——
+    同一张表两套钟。NAS 上被这条咬到的实例是 `fund_manager_records.last_seen_at`：
+    命中已有记录时服务显式写 `now_beijing()`，新插入的行走默认值落 UTC，
+    差 8 小时直接废掉"同一刷新批次"的 1 分钟窗口，在任/离任判定跟着错。
+    """
+    import pathlib
+    import re
+
+    models_dir = pathlib.Path(__file__).resolve().parent.parent / "backend" / "models"
+    pattern = re.compile(r"(default|onupdate)=datetime\.now\b")
+    offenders = [p.name for p in sorted(models_dir.glob("*.py")) if pattern.search(p.read_text(encoding="utf-8"))]
+    assert offenders == [], f"以下模型仍在用机器时区的裸时钟做列默认值: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_new_row_timestamp_is_beijing_wall_clock(db_session):
+    """插入行的 created_at 必须是北京时墙钟（UTC runner 上与 utcnow 差 8 小时，正好测得出）"""
+    from backend.models.schedule import Schedule
+    from backend.utils.timezone import now_beijing
+
+    sched = Schedule(name="时钟口径检查", task_type="analysis_push", time_point="20:40")
+    db_session.add(sched)
+    await db_session.commit()
+    await db_session.refresh(sched)
+
+    assert abs(sched.created_at - now_beijing().replace(tzinfo=None)) < timedelta(minutes=1)
+    utc_wall = datetime.now(timezone.utc).replace(tzinfo=None)
+    if abs(now_beijing() - utc_wall) > timedelta(hours=1):  # 机器本身是东八区时这条无意义
+        assert abs(sched.created_at - utc_wall) > timedelta(hours=7), "created_at 落成了 UTC"

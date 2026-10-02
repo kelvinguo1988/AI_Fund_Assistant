@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, DateTime, Float, Integer, String, UniqueConstrai
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class BacktestResult(Base):
@@ -64,7 +65,7 @@ class BacktestResult(Base):
     # 结果是否有效（净值拉取失败等 → False，保留错误信息）
     ok: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_beijing)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+        DateTime, nullable=False, default=now_beijing, onupdate=now_beijing
     )

@@ -8,6 +8,7 @@ from sqlalchemy import String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class SystemConfig(Base):
@@ -22,5 +23,5 @@ class SystemConfig(Base):
     config_value: Mapped[str] = mapped_column(Text, nullable=False, comment="配置值")
     description: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="配置说明")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+        DateTime, nullable=False, default=now_beijing, onupdate=now_beijing
     )

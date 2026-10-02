@@ -6,6 +6,7 @@ from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class FundDataCache(Base):
@@ -19,5 +20,5 @@ class FundDataCache(Base):
     )
     data_json: Mapped[str] = mapped_column(Text, nullable=False, comment="JSON 数据")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )

@@ -7,6 +7,7 @@ from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstrain
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class AISkill(Base):
@@ -30,7 +31,7 @@ class AISkill(Base):
                 '非空时 Agent 可将其作为工具 skill_<id> 调用，返回渲染后的指导文本',
     )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_beijing)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+        DateTime, nullable=False, default=now_beijing, onupdate=now_beijing
     )

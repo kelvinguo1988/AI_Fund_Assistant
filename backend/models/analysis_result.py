@@ -8,6 +8,7 @@ from sqlalchemy import Float, String, Integer, Date, Text, DateTime, ForeignKey,
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class AnalysisResult(Base):
@@ -78,5 +79,5 @@ class AnalysisResult(Base):
         Float, nullable=True, comment="有效权重和/总权重 0.0-1.0（Q4），NULL=总权重为 0"
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )

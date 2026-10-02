@@ -7,6 +7,7 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConst
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class FundHolding(Base):
@@ -32,5 +33,5 @@ class FundHolding(Base):
     )
     report_date: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, comment="报告日期")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )

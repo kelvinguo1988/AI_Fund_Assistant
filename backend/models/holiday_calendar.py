@@ -7,6 +7,7 @@ from sqlalchemy import String, Boolean, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class HolidayCalendar(Base):
@@ -33,5 +34,5 @@ class HolidayCalendar(Base):
         Text, nullable=True, comment="数据来源地址"
     )
     synced_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )

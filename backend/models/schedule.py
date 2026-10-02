@@ -8,6 +8,7 @@ from sqlalchemy import String, Boolean, Integer, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class Schedule(Base):
@@ -28,8 +29,8 @@ class Schedule(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
     last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="上次运行时间")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
+        DateTime, nullable=False, default=now_beijing, onupdate=now_beijing
     )

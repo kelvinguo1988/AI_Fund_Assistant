@@ -6,6 +6,7 @@ from sqlalchemy import String, Boolean, Integer, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.database import Base
+from backend.utils.timezone import now_beijing
 
 
 class ReportConfig(Base):
@@ -19,5 +20,5 @@ class ReportConfig(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, comment="是否启用")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="排序")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now
+        DateTime, nullable=False, default=now_beijing
     )
