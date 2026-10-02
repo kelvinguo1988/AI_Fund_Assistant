@@ -34,6 +34,8 @@ const migrationText = (key: string) => {
 };
 
 const pct = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v}%`);
+/** 判据一比的就是这个上界，保留一位小数好让 14.0 不显示成 14（后端已 round 到 0.1） */
+const pct1 = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `${v.toFixed(1)}%`);
 const signed = (v: number | null | undefined) => {
   if (v === null || v === undefined) return '—';
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}`;
@@ -91,7 +93,9 @@ const ShadowScoringCard: React.FC<Props> = ({ onNotify }) => {
           <Typography variant="body2" color="text.secondary">
             生产列（weighted_score / signal_direction）仍是旧口径；新口径每轮并排另算一次，
             只写 shadow_* 列。纯 Python 加权，<b>零上游请求</b>。
-            切换判据：分歧比例连续 {cfg?.stable_days_required ?? 5} 个交易日 &lt; {cfg?.divergence_threshold_pct ?? 15}%。
+            切换判据：连续 {cfg?.stable_days_required ?? 5} 个交易日的<b>合并</b>分歧比例，
+            其单侧 95% 置信上界（Wilson）&lt; {cfg?.divergence_threshold_pct ?? 15}%
+            —— 不是「每个单日都 &lt;{cfg?.divergence_threshold_pct ?? 15}%」，也不是「点估 &lt;{cfg?.divergence_threshold_pct ?? 15}%」。
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -179,11 +183,23 @@ const ShadowScoringCard: React.FC<Props> = ({ onNotify }) => {
               </Tooltip>
             )}
             <Chip size="small" label={`日均可分歧比例 ${pct(summary.avg_divergence_pct)}`} />
-            <Chip
-              size="small"
-              color={report?.meets_ratio_criterion ? 'success' : 'default'}
-              label={`连续达标 ${summary.stable_days ?? 0} 日${report?.meets_ratio_criterion ? '（判据一满足）' : ''}`}
-            />
+            <Tooltip
+              title={'判据一比的是上界不是点估：'
+                + (summary.criterion_tolerance_note ?? `n=${summary.criterion_rows ?? 0} 只次`)
+                + `。末尾连续有影子对照的交易日 ${summary.consecutive_days ?? 0} 天`
+                + (summary.criterion_window_complete ? '' : '，不足 5 天 ⇒ 窗口不整，不下结论')
+                + '；样本太少时即使零分歧，上界也压不进线（n=14 时 0 分歧的上界是 16.2%）'}>
+              <span>
+                <Chip
+                  size="small"
+                  color={report?.meets_ratio_criterion ? 'success' : 'default'}
+                  label={`判据窗口 ${summary.criterion_days ?? 0}/${cfg?.stable_days_required ?? 5} 日 · `
+                    + `合并分歧 ${summary.criterion_divergent ?? 0}/${summary.criterion_rows ?? 0}`
+                    + `（点估 ${pct(summary.criterion_pct)}，95% 上界 ${pct1(summary.criterion_upper_pct)}）`
+                    + `${report?.meets_ratio_criterion ? ' ⇒ 判据一满足' : ''}`}
+                />
+              </span>
+            </Tooltip>
             {(summary.buy_to_other ?? 0) > 0 && (
               <Chip size="small" color="secondary" label={`旧 buy→其他 ${summary.buy_to_other} 只`} />
             )}
@@ -208,7 +224,11 @@ const ShadowScoringCard: React.FC<Props> = ({ onNotify }) => {
                   <TableCell align="right">影子/总行</TableCell>
                   <TableCell align="right">分歧</TableCell>
                   <TableCell align="right">其中 skip</TableCell>
-                  <TableCell align="right">比例</TableCell>
+                  <TableCell align="right">
+                    <Tooltip title="单日比例只作观察：判据一比的是「窗口合并分歧率的 95% 上界」，单日超线不再一票否决">
+                      <span>比例</span>
+                    </Tooltip>
+                  </TableCell>
                   <TableCell align="right">平均分差</TableCell>
                   <TableCell align="right">最大绝对分差</TableCell>
                   <TableCell>方向迁移</TableCell>
@@ -218,11 +238,23 @@ const ShadowScoringCard: React.FC<Props> = ({ onNotify }) => {
               <TableBody>
                 {(report?.daily ?? []).map((d) => (
                   <TableRow key={d.date}>
-                    <TableCell>{d.date}</TableCell>
+                    <TableCell>
+                      {d.date}
+                      {(summary.criterion_dates ?? []).includes(d.date) && (
+                        <Tooltip title="这一日在判据一的样本窗口里（末尾连续有对照的交易日，最后 5 天）">
+                          <Chip size="small" label="窗口" color="primary" sx={{ ml: 0.5, height: 20 }} />
+                        </Tooltip>
+                      )}
+                      {!d.trading_day && (
+                        <Tooltip title="周末/法定节假日（含调休补班周六）跑的轮次：股市没有新净值，对照与上一交易日同质，不进判据一的窗口">
+                          <Chip size="small" label="休市" variant="outlined" sx={{ ml: 0.5, height: 20 }} />
+                        </Tooltip>
+                      )}
+                    </TableCell>
                     <TableCell align="right">
                       {d.shadow_rows}/{d.rows}
                       {d.low_sample && (
-                        <Tooltip title={`影子样本 < 10 只：单日一两只分歧就能越过判据线，只作观察`}>
+                        <Tooltip title="影子样本 < 10 只：单日一两只分歧就能越过判据线，因此只按行数进合并分母，单日比例不单独决定结论">
                           <Chip size="small" label="小样本" color="warning" sx={{ ml: 0.5, height: 20 }} />
                         </Tooltip>
                       )}

@@ -571,9 +571,9 @@ class TestDivergenceReport:
         assert any("小样本" in c or "< 10 只" in c for c in rep["caveats"])
 
     @pytest.mark.asyncio
-    async def test_stable_days_counts_trailing_and_criterion(self, db_session):
-        """连续达标只从最近一天往回数，且按交易日历走（判据一的定义）"""
-        # D1~D3 全体分歧（100%），D4~D6 全体一致 → 尾部连续 3 个交易日
+    async def test_criterion_pools_the_window_and_meets_upper(self, db_session):
+        """判据一比的是窗口合并样本的置信上界，单日全翻转的日子**留在分母里**"""
+        # D1~D3 全体分歧（单日 100%），D4~D6 全体一致
         for d, new_dir in [(D1, "hold"), (D2, "hold"), (D3, "hold"),
                            (D4, "buy"), (D5, "buy"), (D6, "buy")]:
             for i in range(12):                       # 每天 12 只，避免小样本噪声
@@ -582,21 +582,32 @@ class TestDivergenceReport:
         await db_session.commit()
 
         rep = await ShadowReportService(db_session).build(days=10)
+        s = rep["summary"]
         assert [x["date"] for x in rep["daily"]] == [d.isoformat() for d in [D1, D2, D3, D4, D5, D6]]
         assert all(x["trading_day"] for x in rep["daily"])   # 全是工作日（退化口径）
-        assert rep["summary"]["stable_days"] == 3
-        assert rep["summary"]["non_trading_rounds"] == 0
+        assert s["consecutive_days"] == 6
+        assert s["non_trading_rounds"] == 0
+        # 窗口 = 末尾 5 个连续交易日（D2~D6），两个 100% 分歧日仍在其中
+        assert s["criterion_dates"] == [d.isoformat() for d in [D2, D3, D4, D5, D6]]
+        assert s["criterion_rows"] == 60 and s["criterion_divergent"] == 24
+        assert s["criterion_pct"] == pytest.approx(40.0)
+        assert s["criterion_upper_pct"] > 40    # 上界只会比点估更保守，不可能放行
         assert rep["meets_ratio_criterion"] is False
         assert "判据一未满足" in rep["conclusion"]
 
-        # 再补 2 个一致日（9/29 周二、9/30 周三）→ 尾部连续 5 个交易日 → 判据一满足
+        # 再补 2 个一致日（9/29 周二、9/30 周三）→ 窗口整体平移到 D4~9/30，全一致
         for j, d in enumerate([date(2026, 9, 29), date(2026, 9, 30)]):
             for i in range(12):
                 await _mk_row(db_session, f"7{j}{i:03d}", d, "buy", 2.0, "buy", 2.0)
         await db_session.commit()
         rep2 = await ShadowReportService(db_session).build(days=10)
+        s2 = rep2["summary"]
         # 9/26、9/27 是周末：夹在 D6=9/28 之前也不打断连续（日历相邻而非日期相邻）
-        assert rep2["summary"]["stable_days"] == 5
+        assert s2["criterion_dates"] == ["2026-09-24", "2026-09-25", "2026-09-28",
+                                         "2026-09-29", "2026-09-30"]
+        assert s2["criterion_divergent"] == 0 and s2["criterion_rows"] == 60
+        # n=60 零分歧的单侧 95% 上界 ≈ 4.3% —— 一致 + 样本够，才叫"压进线内"
+        assert s2["criterion_upper_pct"] == pytest.approx(4.3, abs=0.2)
         assert rep2["meets_ratio_criterion"] is True
         assert "判据一已满足" in rep2["conclusion"]
 
@@ -658,7 +669,7 @@ class TestDivergenceReport:
     @pytest.mark.asyncio
     async def test_zero_divergence_is_flagged(self, db_session):
         """全零分歧要么是巧合要么是空实现，报表要提示看变体明细"""
-        for k in range(5):                    # 5 个交易日 × 4 只：刚好凑够判据一的连续天数
+        for k in range(5):                    # 5 个交易日 × 4 只 = 20 只次，够判据一开口
             d = D1 + timedelta(days=k)
             for i in range(4):
                 await _mk_row(db_session, f"006{k}{i:03d}", d, "buy", 2.0, "buy", 2.0)
@@ -666,8 +677,54 @@ class TestDivergenceReport:
         rep = await ShadowReportService(db_session).build(days=10)
         assert any("零分歧" in c for c in rep["caveats"])
         assert any("小样本" in c or "< 10 只" in c for c in rep["caveats"])
-        assert rep["summary"]["stable_days"] == 5
+        assert rep["summary"]["criterion_days"] == 5
+        assert rep["summary"]["criterion_rows"] == 20
         assert rep["meets_ratio_criterion"] is True
+
+    @pytest.mark.asyncio
+    async def test_thin_pool_never_satisfies_criterion_even_with_zero_divergence(self, db_session):
+        """判据一换成置信上界的全部意义：样本不够就**不许**下结论，无需再加池子特判
+
+        5 日 × 3 只 = 15 只次、零分歧，点估 0% 看着完美，但单侧 95% 上界 15.3% ≥ 15%
+        ⇒ 不满足；同样零分歧再多加一只（16 只次）上界降到 14.5% 才放行。
+        旧口径（逐日 <15% 连续 5 日）在 3 只/日的池子上会被"0 分歧"直接刷满。
+        """
+        for k in range(5):
+            d = D1 + timedelta(days=k)
+            for i in range(3):
+                await _mk_row(db_session, f"007{k}{i:03d}", d, "buy", 2.0, "buy", 2.0)
+        await db_session.commit()
+        rep = await ShadowReportService(db_session).build(days=10)
+        s = rep["summary"]
+        assert s["criterion_rows"] == 15 and s["criterion_divergent"] == 0
+        assert s["criterion_pct"] == 0.0
+        assert s["criterion_upper_pct"] == pytest.approx(15.3, abs=0.2)
+        assert s["criterion_tolerance"] == -1    # 无解哨兵：15 只次连零分歧都压不进线，不是"容忍 0 次"
+        assert "不可能满足" in s["criterion_tolerance_note"]
+        assert rep["meets_ratio_criterion"] is False
+        assert "判据一未满足" in rep["conclusion"]
+
+    @pytest.mark.asyncio
+    async def test_single_day_surge_no_longer_vetoes_by_itself(self, db_session):
+        """新口径换来的容忍度要说清：单日 16.7% 翻转不再一票否决，靠窗口上界把关
+
+        4 个一致日 + 1 个"12 只里 2 只翻转"（单日 16.7%，旧口径下这天真接）：
+        合并 60 只次 2 次分歧 → 点估 3.3%、上界 9.6% ⇒ 判据一满足。
+        """
+        for d in [D1, D2, D3, D4]:
+            await _mk_day(db_session, d, "q", n=12)
+        for i in range(12):
+            await _mk_row(db_session, f"zx{i:03d}", D5, "buy", 2.0,
+                          "hold" if i < 2 else "buy", 0.1 if i < 2 else 2.0)
+        await db_session.commit()
+
+        rep = await ShadowReportService(db_session).build(days=10)
+        s = rep["summary"]
+        assert s["criterion_dates"][-1] == D5.isoformat()
+        assert s["criterion_rows"] == 60 and s["criterion_divergent"] == 2
+        assert s["criterion_upper_pct"] == pytest.approx(9.6, abs=0.3)
+        assert rep["meets_ratio_criterion"] is True
+        assert any("单日翻转不再一票否决" in c for c in rep["caveats"])
 
     @pytest.mark.asyncio
     async def test_criterion_two_never_fabricated(self, db_session):
@@ -688,9 +745,10 @@ class TestDivergenceReport:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 6b. 判据一的"连续 N 个交易日"必须按 A 股交易日历数
-#     （2026-10-02 加固：休市日手点一轮也会落一行，旧实现按"有数据的日期"倒序计数，
-#      连续 5 天可以全是周六 —— 攒样本这件事本身得先不能被刷）
+# 6b. 判据一的样本窗口必须按 A 股交易日历数
+#     （2026-10-02 加固：休市日手点一轮也会落一行，若按"有数据的日期"倒序取窗口，
+#      连续 5 天可以全是周六 —— 攒样本这件事本身得先不能被刷；
+#      同日判据一从"逐日 <15%"改为"窗口合并分歧率的单侧 95% Wilson 上界 <15%"）
 # ═══════════════════════════════════════════════════════════════════════
 
 async def _mk_day(db, d: date, prefix: str, n: int = 4, divergent: bool = False):
@@ -712,21 +770,23 @@ async def _mk_off_day_rows(db, dates: list[date]):
     await db.flush()
 
 
-class TestStableDaysUseTradingCalendar:
+class TestCriterionWindowUsesTradingCalendar:
     @pytest.mark.asyncio
     async def test_weekend_round_does_not_count_as_trading_day(self, db_session):
-        """4 个达标交易日 + 1 个周六达标轮次 → 只算 4 天，且日表里如实标注非交易日"""
+        """4 个有对照的交易日 + 1 个周六轮次 → 窗口只算 4 天，日表里如实标注非交易日"""
         for d in [date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 23), date(2026, 9, 24)]:
             await _mk_day(db_session, d, "w")
         await _mk_day(db_session, date(2026, 9, 26), "w")        # 周六手点一轮
         await db_session.commit()
 
         rep = await ShadowReportService(db_session).build(days=10)
-        assert rep["summary"]["stable_days"] == 4
-        assert rep["summary"]["non_trading_rounds"] == 1
+        s = rep["summary"]
+        assert s["consecutive_days"] == 4
+        assert s["criterion_window_complete"] is False
+        assert s["non_trading_rounds"] == 1
         assert rep["meets_ratio_criterion"] is False
         by_date = {x["date"]: x for x in rep["daily"]}
-        assert by_date["2026-09-26"]["trading_day"] is False      # 仍然展示，只是不进连续
+        assert by_date["2026-09-26"]["trading_day"] is False      # 仍然展示，只是不进窗口
         assert by_date["2026-09-24"]["trading_day"] is True
         assert any("非交易日" in c for c in rep["caveats"])
 
@@ -739,29 +799,33 @@ class TestStableDaysUseTradingCalendar:
         await db_session.commit()
 
         base = await ShadowReportService(db_session).build(days=10)
-        assert base["summary"]["stable_days"] == 5                 # 日历空 → 退化"周一至周五"
+        assert base["summary"]["consecutive_days"] == 5           # 日历空 → 退化"周一至周五"
+        assert base["meets_ratio_criterion"] is True
 
         await _mk_off_day_rows(db_session, [date(2026, 9, 25)])    # 2026 真日历：9/25 中秋休市
         await db_session.commit()
         rep = await ShadowReportService(db_session).build(days=10)
-        assert rep["summary"]["stable_days"] == 4
+        assert rep["summary"]["consecutive_days"] == 4
         assert rep["summary"]["non_trading_rounds"] == 1
+        # 窗口只剩 4 天 ⇒ 不整，判据一直接不满足（哪怕这 4 天零分歧）
+        assert rep["summary"]["criterion_dates"][-1] == "2026-09-24"
+        assert rep["meets_ratio_criterion"] is False
         assert {x["date"] for x in rep["daily"] if not x["trading_day"]} == {"2026-09-25"}
 
     @pytest.mark.asyncio
     async def test_missing_trading_day_breaks_streak(self, db_session):
-        """漏跑一个真实交易日必须打断连续：9/21+9/22+9/24 读不成连续 3 天"""
+        """漏跑一个真实交易日必须打断窗口：9/21+9/22+9/24 读不成连续 3 天"""
         for d in [date(2026, 9, 21), date(2026, 9, 22), date(2026, 9, 24)]:
             await _mk_day(db_session, d, "m")
         await db_session.commit()
 
         rep = await ShadowReportService(db_session).build(days=10)
-        assert rep["summary"]["stable_days"] == 1
+        assert rep["summary"]["consecutive_days"] == 1
 
         await _mk_day(db_session, date(2026, 9, 23), "m")          # 补上缺的那天
         await db_session.commit()
         rep2 = await ShadowReportService(db_session).build(days=10)
-        assert rep2["summary"]["stable_days"] == 4                 # 9/21~9/24 连成一片
+        assert rep2["summary"]["consecutive_days"] == 4            # 9/21~9/24 连成一片
 
     @pytest.mark.asyncio
     async def test_five_holiday_rounds_alone_never_satisfy_criterion(self, db_session):
@@ -772,8 +836,11 @@ class TestStableDaysUseTradingCalendar:
         await db_session.commit()
 
         rep = await ShadowReportService(db_session).build(days=10)
-        assert rep["summary"]["stable_days"] == 0
-        assert rep["summary"]["non_trading_rounds"] == 5
+        s = rep["summary"]
+        assert s["consecutive_days"] == 0
+        assert s["criterion_dates"] == [] and s["criterion_rows"] == 0
+        assert s["criterion_upper_pct"] is None
+        assert s["non_trading_rounds"] == 5
         assert rep["meets_ratio_criterion"] is False
         assert all(not x["trading_day"] for x in rep["daily"])
         assert "判据一未满足" in rep["conclusion"]
@@ -787,11 +854,11 @@ class TestStableDaysUseTradingCalendar:
         await db_session.commit()
 
         short = await ShadowReportService(db_session).build(days=3)
-        assert short["summary"]["stable_days"] == 3
+        assert short["summary"]["consecutive_days"] == 3
         assert any("窗口边界" in c for c in short["caveats"])
 
         full = await ShadowReportService(db_session).build(days=10)
-        assert full["summary"]["stable_days"] == 6
+        assert full["summary"]["consecutive_days"] == 6
         assert not any("窗口边界" in c for c in full["caveats"])
 
     def test_calendar_helpers(self):
@@ -811,6 +878,31 @@ class TestStableDaysUseTradingCalendar:
         assert MAX_TRADING_BACKTRACK == 40
         all_off = frozenset(date(2026, 8, 1) + timedelta(days=k) for k in range(70))
         assert prev_trading_day(date(2026, 10, 8), all_off) is None
+
+    def test_wilson_upper_bound_values(self):
+        """判据一的尺子本身：上界恒 ≥ 点估、随分歧数单调、样本越小越不放过"""
+        from backend.services.shadow_report_service import (
+            max_tolerated_divergences, tolerance_note, wilson_upper_bound,
+        )
+
+        assert wilson_upper_bound(0, 0) is None
+        # NAS 实测刻度：14 只/日 × 5 日 = 70 只次，第 5 次分歧还能过，第 6 次出线
+        assert wilson_upper_bound(5, 70) == pytest.approx(14.0, abs=0.1)
+        assert wilson_upper_bound(6, 70) == pytest.approx(15.7, abs=0.1)
+        assert max_tolerated_divergences(70) == 5
+        # 薄池的代价：单日 14 只即使零分歧，上界也压不进 15% —— 报"容忍 0 次"会被读成"零分歧就通过"
+        assert wilson_upper_bound(0, 14) > 15.0
+        assert max_tolerated_divergences(14) == -1
+        assert max_tolerated_divergences(15) == -1
+        assert max_tolerated_divergences(16) == 0      # 16 只次起零分歧才算过（上界 14.5%）
+        assert "不可能满足" in tolerance_note(15)
+        assert "最多容忍 4 次" in tolerance_note(60)
+        # 恒 ≥ 点估，且同样本量下分歧越多上界越高
+        for k in range(0, 8):
+            upper = wilson_upper_bound(k, 70)
+            assert upper >= k / 70 * 100
+            if k:
+                assert upper > wilson_upper_bound(k - 1, 70)
 
 
 # ═══════════════════════════════════════════════════════════════════════

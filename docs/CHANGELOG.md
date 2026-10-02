@@ -38,7 +38,28 @@
 - [新功能] `FactorScore` 增加 `weight`（本轮实际参与加权的**有效**权重），`_save_result` 接收 `factor_weights` 并把它与因子分值同序写进 `factor_scores` JSON、透出到响应与导出，`_result_to_out` 读回，`_score_and_store` 传入质量过滤修正后的 `corrected_weights`
 - [修复] 复算恒等式 `Σ(score × weight) == original_score` 此前**在数学上不成立**：`apply_factor_corrections` 在超额持续性=1 且趋势分满档时把 `trend_consistency` 权重 0.5→0.8（`trend_consistency_boost_weight`），这个 boost 只存在于内存，落库 JSON 只有分值没有权重。NAS 287 行里 44 行因此恒差 +0.30，`factor_audit` 的历史有效性回算拿这些行做分母会系统性偏。旧行 `weight=None`，`score_caliber_note` 仍标"未记录"，不假装可复算
 - [测试] `tests/test_result_evidence.py` 7 条契约：可复算恒等式（走真实 `apply_factor_corrections` + `compute_with_quality_filter`，断言落库 `trend_consistency.weight==0.8`）、条件不满足时 boost **不得**落库（仍 0.5）、`_score_and_store` 源码必须把 `factor_weights=corrected_weights` 传下去（唯一生产调用点，链路只由此条守护）、地基字段不得退回 NULL、导出/覆盖导入回环不吞权重、旧行 `weight=None` 仍可读出、`market_valuation` 缺数据时 `factor_coverage` 必须 <1.0（能识别"死权重占分母"）。回归：`TZ=UTC pytest -q` **786 passed**（原 779 + 7），默认时区下相关 4 文件 111 passed
-- [遗留·待裁定] 薄池（每日仅 14 行有效样本，粒度 7.1%/只）下判据一（连续 5 交易日分歧 <15%）的口径选择；`shadow_report_service._stable_trading_days` 把 `low_sample` 轮次计入连续天数、与自家 caveat"不进入切换结论"矛盾（当前 14 行 >`LOW_SAMPLE_ROWS=10` 未触发）
+- [遗留·已裁定] 薄池（每日仅 14 行有效样本，粒度 7.1%/只）下判据一的口径已于同日改为"合并分歧率的 Wilson 单侧 95% 置信上界 <15%"（见下一节）；`_stable_trading_days` 的旧实现连同它与自家 caveat 的自相矛盾一起被 `_criterion_window` 取代
+
+### 2026-10-02 §3 判据一定案（C 口径）：合并分歧率的 Wilson 单侧 95% 置信上界
+
+**为什么必须改**：NAS 库换代后可比 15 个交易日 / 215 行 / 10 次分歧 = 4.7%，但每天只有 **14 只**有影子对照
+⇒ 单日分歧比例的最小粒度是 **7.1%/只**：2 只翻脸 14.3%（勉强过线）、3 只 21.4%（越线）；生产历史 287 行里
+**61 行（21%）**落在阈值 ±0.5 的边际带。旧判据"逐日都 <15% 且连续 5 日"实际比的是**当天有几只踩在门槛上**，
+随机性远大于口径差异。三个候选口径的取舍（详见 `docs/QUANT_DECISIONS_2026-10.md` §3「判据一口径定案」）：
+**A 扩池到 ≥30 只/日** —— 否，42 只 active 里 22 只从未取到净值、`get_fund_data` 无基金级负缓存，扩池要新增取数代码，
+全池每轮上游请求 +35%~60%，撞防封禁红线，而且它解决的是数据地基不是判据写法；**B 70 行合并点估 <15%** —— 否，
+实现最省但薄池上点估骗人（14 只次零分歧点估 0%，真实上界 16.2%；09-08 那种单日 4 只/28.6% 会被摊成 5.7% 放行，
+判据从"从不坏"退化成"平均不坏"）；**C（采纳）合并分歧率的 Wilson 单侧 95% 置信上界 < 15%** —— 点估与上界并列显示，
+样本不够时**公式本身**就拒绝下结论，不需要再加"池子小于多少不算"的特判。
+
+- [改动] 判据一 = `末尾连续有影子对照的交易日数 ≥ 5` **且** `wilson_upper_bound(窗口分歧只数, 窗口行数) < DIVERGENCE_THRESHOLD_PCT`（`z=1.645` 单侧 95%）。新增 `wilson_upper_bound()` / `max_tolerated_divergences()` / `tolerance_note()`，`build()` 改由 `_criterion_window()`（按库内 `holiday_calendar` 串连续交易日，休市轮次只展示不进窗口）+ `_criterion_stats()` 出数；报表新增 `criterion_days/criterion_dates/criterion_rows/criterion_divergent/criterion_pct/criterion_upper_pct/criterion_tolerance/criterion_tolerance_note/consecutive_days/criterion_window_complete`，`summary.stable_days` 退位（判定不再需要"逐日达标天数"）。上游请求增量 **0**（纯 SQL + 纯 Python）
+- [修复] `max_tolerated_divergences` 首版把"零分歧也压不进线"的薄池报成 **容忍 0 次**，读起来等于"零分歧就能通过"，而 n≤15 时 0 分歧的上界本身就 ≥15%（n=14 → 16.2%，n=15 → 15.3%）。改为返回 `TOLERANCE_IMPOSSIBLE = -1` 并由 `tolerance_note()` 统一成一句话，caveat / 结论 / 前端 tooltip 共用一份，不再各自翻译哨兵值
+- [关键刻度] n=70（14 只/日 × 5 日，NAS 现状）→ 容忍 **5** 次（5 次 13.96% 过、6 次 15.73% 出线）；n=60 → 4；n=25/20/16 → 0（零分歧才过）；**n≤15 → 无解**。代价必须写清：单日分歧率高不再一票否决，改成窗口累计容忍次数上限；改的是"哪天算达标"，**不是**"哪天算样本"，低样本日与单日越线日仍按行数进合并分母
+- [顺带消解] `_stable_trading_days` 把 `low_sample` 轮次计入连续天数、自家 caveat 却说"低样本日不进入切换结论"的自相矛盾 —— 新口径下单日比例根本不参与结论，低样本日只按行数进分母
+- [前端] 「评分配置」影子卡：判据说明文案改为合并窗口 + 上界口径（阈值取 `cfg.divergence_threshold_pct`，不再硬写 15）；新增 `判据窗口 x/5 日 · 合并分歧 k/n（点估 …，95% 上界 …）` chip（Tooltip 引 `criterion_tolerance_note` + `consecutive_days` + 薄池注）；上界保留一位小数（`pct1`，14.0 不显示成 14，与结论文案同源）；日期列加「窗口」/「休市」chip；「比例」列表头标注"只作观察"；caveat 文案去掉 Markdown 星号（前端按纯文本渲染，`**合并**` 会原样显示）
+- [测试] `tests/test_shadow_scoring.py`：`test_stable_days_counts_trailing_and_criterion` 改名 `test_criterion_pools_the_window_and_meets_upper`（窗口合并 k/n、点估、上界、日期序列逐项断言），新增 `test_thin_pool_never_satisfies_criterion_even_with_zero_divergence`（5×3=15 只次零分歧 ⇒ 上界 15.3% 仍不满足、`criterion_tolerance==-1`、note 含"不可能满足"）、`test_single_day_surge_no_longer_vetoes_by_itself`（单日 16.7% 不再否决，k=2/n=60 ⇒ 上界 9.6% 放行）、`test_wilson_upper_bound_values`（`wilson_upper_bound(0,0) is None`、上界恒 ≥ 点估且随分歧数单调、`max_tolerated_divergences(70)==5 / (14)==(15)==-1 / (16)==0`、`tolerance_note` 两个分支）；日历 4 例尾部断言归位 `test_calendar_helpers`。`TZ=UTC pytest -q` **789 passed**，`npm run build` 通过
+- [实测] 浏览器取证（开发库临时夹具造 09-21~09-29 的对照行，含库内标休市的 09-25；取证后按标记精确删除，夹具脚本与 `/tmp` 副本均已清库，开发库回到 123 行 / 影子 0 行）：三分支各取一次 —— **窗口不整**（4 个连续交易日 + 1 个休市轮次 ⇒ `non_trading_rounds=1`、休市日带「休市」chip、不进窗口）；**已满足**（60 只次 4 次分歧 ⇒ 点估 6.7% / 上界 14.0% / 容忍 4，Alert `MuiAlert-colorSuccess`，「窗口」chip 只落在窗口内 5 天）；**上界越线**（同分母 5 次分歧 ⇒ 点估 8.3% 但上界 16.1%，Alert `Warning`，文案写明"加大 days 不会让这个上界变小"）。另用 React fiber 读出 chip 的 Tooltip title 实测确认走的是 `criterion_tolerance_note`（截图因 Qoder 内置浏览器面板处于隐藏 surface 不可用，取证为渲染后 DOM 文本 + 类名 + 控制台零报错）
+- [生效路径] NAS 上要等本改动进 `:latest` 并 pull/up 后，分歧卡才按新口径出数；攒样本起点不变（最早 10-14 那 5 个连续交易日），新口径下 10-08 起第 5 个连续对照日即可判
 
 ### 2026-10-02 外部审查第一批整改（#53–#61：取数正确性、静默错数据与防封禁预算）
 

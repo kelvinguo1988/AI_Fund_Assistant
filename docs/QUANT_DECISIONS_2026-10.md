@@ -757,8 +757,9 @@ lint 作为 Q14b 单独决策。
 2. **每日差异报表**：飞书/页面显示"今日口径分歧：N 只，其中旧 buy→新 hold 的有 M 只"，
    并按 `original_score / dynamic_buy_threshold`（已落库）分档统计分布迁移。
 3. **切换判据**（建议明确写死，避免拍脑袋）：
-   - 分歧比例连续 5 个交易日 < 15%，或
-   - 影子口径在 Q6 新基线（vs 静态 50%）上的超额不劣于旧口径；
+   - 判据一：末尾**连续 5 个交易日**的合并分歧样本，其分歧比例的 **Wilson 单侧 95% 置信上界 < 15%**
+     （2026-10-02 定案，见下方"判据一口径定案"；原写法"逐日都 <15%"在 14 只/日的薄池上不成立）；
+   - 或影子口径在 Q6 新基线（vs 静态 50%）上的超额不劣于旧口径；
    满足后再把开关切到生产。
 4. **成本**：影子评分只多算一次纯 Python 加权（无上游请求，符合红线）。
 
@@ -784,12 +785,13 @@ lint 作为 Q14b 单独决策。
   `caliber_2c` 变体文件并注册，不必再改分析链 —— 这就是"先影子，达标再切"里"切"的成本控制。
   开关与变体名落在 `system_config.shadow_scoring_enabled / shadow_variant`，回滚只需把 enabled 置 0。
 - 分歧报表（`backend/services/shadow_report_service.py`，纯本地 3 条 SQL，**零上游请求**）：
-  只统计 `shadow_direction` 非 NULL 的行；`stable_days` = 最近**连续**达标天数（判据一是"连续 5 日"，
-  整窗平均会把刚破线的日子洗掉）；**"日"按 A 股交易日历数**（2026-10-02 加固：`_stable_trading_days` 读库内
-  `holiday_calendar`，与 Q9 同表同口径 —— 周末/节假日手点一轮也会落一行，按"有数据的日期"倒序数可以把判据一
-  刷成五个周六；反之漏跑一个真实交易日必须打断连续。休市轮次仍在日表展示并标 `trading_day=false`，
-  汇总给 `non_trading_rounds`，连续达标顶到 `days` 窗口边界时出"可能被截断"caveat）；迁移矩阵 +
-  `buy_to_other/sell_to_other`；分档用修正前 `original_score` 对 `dynamic_buy/sell_threshold`（与仪表盘五档同口径）；
+  只统计 `shadow_direction` 非 NULL 的行；判据一的样本窗口由 `_criterion_window()` 给出 ——
+  末尾**连续有影子对照的 A 股交易日**序列（2026-10-02 加固：读库内 `holiday_calendar`，与 Q9 同表同口径 ——
+  周末/节假日手点一轮也会落一行，按"有数据的日期"倒序数可以把判据一刷成五个周六；反之漏跑一个真实交易日必须打断连续。
+  休市轮次仍在日表展示并标 `trading_day=false`，汇总给 `non_trading_rounds`，连续窗口顶到 `days` 边界时出"可能被截断"caveat）；
+  报表取窗口最后 `STABLE_DAYS_REQUIRED` 天做**合并**分子分母，输出 `criterion_rows / criterion_divergent /
+  criterion_pct / criterion_upper_pct / criterion_tolerance / consecutive_days / criterion_window_complete`；
+  迁移矩阵 + `buy_to_other/sell_to_other`；分档用修正前 `original_score` 对 `dynamic_buy/sell_threshold`（与仪表盘五档同口径）；
   按变体分行（变体切换打断可比性）。
 - **判据二本表不自动判定**：影子口径没有独立回测曲线，要拿它跟 Q6 新基线比就得为影子重跑一遍回测，
   那是 2C 之后的独立决策；报表里只写"需人工评估"，不给编出来的数字。
@@ -801,6 +803,38 @@ lint 作为 Q14b 单独决策。
   代价只有每轮多一次纯 Python 加权和 6 个可空列。不想要就 `PUT /api/analysis/shadow-config {"enabled": false}`。
 - 判据一常量 `DIVERGENCE_THRESHOLD_PCT=15.0` / `STABLE_DAYS_REQUIRED=5` 由
   `GET /api/analysis/shadow-config` 返回给前端，文案与判定同源，不在前端另写一份。
+
+**判据一口径定案（2026-10-02，选 C：合并分歧率的 Wilson 单侧 95% 置信上界）**
+
+改口径的实证依据（NAS 库 215 行可比对照，脚本 `/tmp/replay_q2.py` 可复算）：换代后 15 个交易日、
+每日只 **14 只**有影子对照 ⇒ 单日分歧比例的最小粒度是 **7.1%/只**，一只翻脸 7.1%、两只 14.3%（不过线）、
+三只 21.4%（越线）；而 287 行生产历史里有 **61 行（21%）**落在阈值 ±0.5 的边际带。也就是说旧写法
+"每个单日都 <15%" 实际比的是**当天有几只基金踩在门槛上**，随机性远大于口径差异，且单日 2 只与 3 只
+在结论上是天壤之别。三个候选口径：
+
+| 方案 | 判据 | 结论 |
+|---|---|---|
+| A：把截面池做大（≥30 只/日）再谈逐日 | 需要为扩池新增取数代码：42 只 active 里 **22 只从未取到净值**，`get_fund_data` 无基金级负缓存，每轮已为它们各花 ~2 次注定失败的请求；扩到 20 只有效样本要新增代码，全池每轮上游请求 **+35%~60%** | **否**：撞防封禁红线，而且它解决的是"数据地基"而不是"判据怎么写"。反向可做的省预算项是把那 22 只置 inactive（每轮省 ~44 次请求），但那会缩池子，与 A 目标相反 |
+| B：70 行（5×14）合并点估 <15%，不看置信区间 | 实现最省（一个除法） | **否**：薄池上点估骗人 —— 14 只/日时 0 分歧的点估是 0%，但真实分歧率的上界仍有 16.2%；反过来 09-08 那种单日 4 只（28.6%）会被摊成 5.7% 放行，判据从"从不坏"退化成"平均不坏" |
+| **C（采纳）**：连续 5 个交易日的**合并**分歧率，其 **Wilson 单侧 95% 置信上界** < 15% | `meets = consecutive_days ≥ 5 且 wilson_upper_bound(k, n) < 15%` | 点估与上界在报表里并列显示；**样本不够时公式本身就拒绝下结论**（n=14、0 分歧 ⇒ 上界 16.2%），不需要再加"池子小于多少不算"的特判 |
+
+- 实现落点：`wilson_upper_bound()` / `max_tolerated_divergences()` / `_criterion_window()` /
+  `_criterion_stats()`（`backend/services/shadow_report_service.py`），`z = 1.645`（单侧 95%）。
+  判定仍是纯 SQL + 纯 Python，**上游请求增量 0**。
+- 关键刻度（`max_tolerated_divergences`，即该分母最多容忍几次分歧）：n=70 → **5** 次
+  （5 次 13.96% 过、6 次 15.73% 出线）；n=60 → **4**；n=20 → 0（0 分歧也只有 11.9% 上界，1 次就 19.9%）；
+  n=16 → 0；**n=15 时即使零分歧，上界 15.3% 也越线** ⇒ 池子不足 16 只/日 × 5 天，判据一永远不可能满足，
+  这正是薄池该有的行为。
+- **代价要写清**：单日分歧率高不再一票否决，改成窗口累计容忍次数上限（上面那张表就是上限本身）。
+  改的是"哪天算达标"，**不是**"哪天算样本" —— 低样本日、单日越线日都仍按行数进合并分母，
+  所以这个口径同时消掉了 `_stable_trading_days` 旧实现把 `low_sample` 轮次计入连续天数、
+  却与自家 caveat"低样本日不进入切换结论"自相矛盾的问题（现在单日比例根本不参与结论）。
+- 报表三个分支各自给数：满足（点估 + 上界 + 容忍次数）、窗口不整（只给攒到的天数，不下结论）、
+  上界越线（写明"加大 `days` 不会让这个上界变小"，防止用扩窗刷指标）。
+- 前端「评分配置」分歧卡同步：判据说明文案、`判据窗口 x/5 日 · 合并分歧 k/n（点估 …，95% 上界 …）` chip
+  （Tooltip 带 `criterion_tolerance` 与 `consecutive_days`）、日表日期列的「窗口」/「休市」chip、
+  「比例」列表头标注"只作观察"。浏览器实测三个分支各取一次证（夹具造在 09-21~09-29，
+  含一个库内标休市的 09-25，实测确认它不进窗口）。
 
 **落地（2C 注册为 `caliber_2c`，2026-10-02 已开发并浏览器实测；生产未切）**
 
@@ -863,7 +897,7 @@ lint 作为 Q14b 单独决策。
 
 **开发状态（2026-10-02 收尾）**：2A / 2B / §3 / 2C / 2D 五批**全部开发完成**，逐条落点与回滚键见 §0.1。
 唯一未闭环的是 **2C 尚未切生产**：新口径目前只写 `shadow_*` 列，生产 `weighted_score` 与
-`threshold_ref_total_weight=8.3` 保持旧口径，等 §3 判据（分歧连续 5 个交易日 <15%，或影子在 Q6
+`threshold_ref_total_weight=8.3` 保持旧口径，等 §3 判据（连续 5 个交易日的合并分歧率 Wilson 单侧 95% 上界 <15%，或影子在 Q6
 新基线上的超额不劣于旧口径）达标后再切。
 
 **攒样本的现实起点（2026-10-02 核）**：判据一现在**一个样本都没有** —— 开发库最近的分析日是 2026-07-22、
@@ -872,6 +906,8 @@ lint 作为 Q14b 单独决策。
 （净值停在 9/30，那一轮与 9/30 那轮完全同质，且按新口径标 `trading_day=false` 不进连续）；
 最早可攒的 5 个连续交易日是 **10-08 / 10-09 / 10-12 / 10-13 / 10-14**（10-10 是补班周六，股市不开），
 判据一的最早可能结论因此落在 10-14 当天收盘后 —— 在此之前任何"分歧已经达标"的说法都不成立。
+按 NAS 实测的 14 只/日池子，那天的窗口分母是 70 只次，**最多容忍 5 次分歧**（第 6 次上界 15.7% 出线）；
+攒够 5 天后若中间漏跑任一真实交易日，窗口重新攒，但单日分歧率高不再把那天踢出分母。
 
 ## 5. 需要你明确回答的 6 个问题（2026-10-02 已全部裁定）
 
@@ -893,7 +929,7 @@ lint 作为 Q14b 单独决策。
 | Q9 | **>5 交易日标注 / >10 否决** | 按交易日历（优先用库内 `holiday_calendar`，**不新增上游请求**）；QDII/海外（含 96 开头互认）额外宽一档 +5；否决走既有 `_log_missing_nav` + `analysis.data_missing` 埋点；同时落 `analysis_results.nav_as_of_date`；回滚键 `nav_staleness_max_trading_days=0` |
 | Q10 | **去哨兵 + 市值权重 + 持有期/赎回费（B+A+C）** | `ai/rebalance.py` 缺成本时改 `shares/Σshares` 等权并逐只加 caveat；市值权重 = `shares × 最新净值`，净值**只走已有 `fund_realtime_service` 缓存**，禁止为算权重逐只拉净值；`user_positions` 加可空列 `first_buy_date`（启动迁移 + 前端持仓表单加字段），阶梯费率 `redemption_fee_ladder=[[7,1.5],[365,0.5],[null,0.25]]`，费 > 预期改善则降级"观望"；未填首买日显示"未知，未做持有期约束"，**不得默认 0 天** |
 | Q11 | **复盘统一复权 + 基准加回股息常数 2.7%（A+B②+C）** | `review_service._fetch_nav_series` 场外分支改消费复权序列（ETF 保持 qfq），回填链路 `routers/analysis.py:461` 同步；新增 `benchmark_dividend_yield_pct=2.7` 按区间天数折算，与 Q7 的 bench 同源一起改；复盘/对比/推送/回测头部固定三行口径（净值口径 / 基准口径 / 是否计息）；不接全收益指数（新增上游接口 riskier） |
-| §3 | **先影子评分，达标再切生产** | 新增 `analysis_results.shadow_score/shadow_direction/shadow_variant`（或 `analysis_shadow` 表），同轮两套口径各算一次，生产 `weighted_score/signal_direction` 切换前保持旧口径；每日差异报表（分歧 N 只、旧 buy→新 hold M 只，按已落库的 `original_score/dynamic_buy_threshold` 分档）；切换判据写死：分歧连续 5 个交易日 <15%，**或**影子口径在 Q6 新基线上的超额不劣于旧口径；配套落 `pool_size` / `nav_as_of_date` / `factor_coverage` 三个元数据列 |
+| §3 | **先影子评分，达标再切生产** | 新增 `analysis_results.shadow_score/shadow_direction/shadow_variant`（或 `analysis_shadow` 表），同轮两套口径各算一次，生产 `weighted_score/signal_direction` 切换前保持旧口径；每日差异报表（分歧 N 只、旧 buy→新 hold M 只，按已落库的 `original_score/dynamic_buy_threshold` 分档）；切换判据写死：连续 5 个交易日的**合并**分歧率，其 Wilson 单侧 95% 置信上界 <15%（2026-10-02 定案，原写法"逐日 <15%"在 14 只/日的薄池上不成立，见 §3「判据一口径定案」），**或**影子口径在 Q6 新基线上的超额不劣于旧口径；配套落 `pool_size` / `nav_as_of_date` / `factor_coverage` 三个元数据列 |
 
 **2C 落地后对裁定的两处数值更正（勿按原表数字"改回来"）**
 

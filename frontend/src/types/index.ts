@@ -680,6 +680,8 @@ export interface ShadowDailyRow {
   pool_size: number | null;
   coverage: number | null;
   low_sample: boolean;
+  /** 该轮是否落在 A 股交易日：休市轮次仍展示，但不进判据一的窗口（读数字时要分得清） */
+  trading_day: boolean;
 }
 
 export interface ShadowDivergence {
@@ -707,7 +709,24 @@ export interface ShadowDivergence {
     divergence_pct?: number;
     skip_rows?: number;
     avg_divergence_pct?: number;
-    stable_days?: number;
+    /** 判据一窗口：末尾连续有对照的交易日里，最后 stable_days_required 天 */
+    criterion_days?: number;
+    criterion_dates?: string[];
+    /** 窗口内"有影子对照的行"总数（判据的分母，不是全表行数） */
+    criterion_rows?: number;
+    criterion_divergent?: number;
+    criterion_pct?: number | null;
+    /** 合并分歧率的 Wilson 单侧 95% 置信上界：判据一比的是这个数，不是点估 */
+    criterion_upper_pct?: number | null;
+    /** 末尾连续有影子对照的交易日数（漏跑一个真实交易日即重新攒） */
+    consecutive_days?: number;
+    criterion_window_complete?: boolean;
+    /** 当前分母下还能压进判据线的最多分歧只数 */
+    /** 该分母能容忍的最多分歧只数；-1 = 零分歧也压不进 15% 线（薄池无解），此时读 note */
+    criterion_tolerance?: number;
+    /** 后端拼好的一句话，前端不再各自翻译 -1 */
+    criterion_tolerance_note?: string;
+    non_trading_rounds?: number;
     migration?: Record<string, number>;
     buy_to_other?: number;
     sell_to_other?: number;

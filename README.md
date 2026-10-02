@@ -86,8 +86,8 @@ AI_Fund_Assistant/
 - **影子评分层（2C 新口径的取证地基）**：同一轮分析用两套口径各算一次，**新口径只写 `analysis_results.shadow_score/shadow_direction/shadow_variant/shadow_detail` 四个可空新列**（启动迁移、不回填历史），生产 `weighted_score/signal_direction/operation_advice` 保持旧口径 —— 2A/2B 之后评分结构要改（Q2/Q3/Q4/Q1），而库里样本只有 6 个信号日，改完无法证明变好，所以先并行对照。影子吃的是**质量过滤修正后**的同一份因子输入，分差只反映口径差异；三类失败（开关关闭 / 变体注册表为空 / 变体内部抛异常）一律收敛成"没有影子"并记 warning，**影子崩了不会崩生产那一行**（实测：崩变体后生产列照常落库）。附带两个元数据新列 `pool_size`（本轮截面样本基金数，同一个 2.5 分在 50 只池和 8 只池不是一回事）与 `factor_coverage`（有效权重和/总权重）。上游成本 **0 新增请求**（配置一轮读一次 DB、加权纯 Python、报表 2 条本地 SQL）。
   - 新口径按名注册进 `backend/engines/shadow_scoring.py` 的变体表即可参与对照，不必再改分析链；开关与变体名在 `system_config.shadow_scoring_enabled / shadow_variant`（回滚 = 置 0，关闭时影子列显式写 NULL，不留上一轮的旧对照）。开关默认**开**：判据一要连续 5 个交易日的对照样本才有结论，而开着是零上游请求、零生产信号影响。
   - **2C 新口径已注册为变体 `caliber_2c`**（`backend/engines/shadow_variants.py`，生产未切）：市场三因子退出加权和 + 参考权重成对下移（影子侧 8.3 → 6.0；只清权重不改 ref 会让 `scale=total/ref` 掉到 0.72，等于把门槛一起缩 28%）+ 趋势改乘性位（只收 short/mid/accel，先查 `data_valid`）+ 单簇权重上限（默认 35%×8.3≈2.905，当前动量簇 2.9 不触发，是后续配权的护栏）+ 覆盖率折算门槛 + 五档只渲染措辞。覆盖率低于 `shadow_2c_min_coverage` 时影子方向记 **`skip`**（"新口径本轮不落库"，不洗成观望）。4 个参数在「质量过滤」页的 影子口径2C 分组可改，越界自动钳位并在 `shadow_detail.params_clamped` 留痕。
-  - **切换判据**（写死不在页面拍脑袋）：判据一 = 分歧比例连续 5 个交易日 < 15%（报表自动判定，看的是最近**连续**达标天数而非整窗平均）；判据二 = 影子口径在 Q6 新基线上的超额不劣于旧口径（**报表不自动判定**，影子没有独立回测曲线，硬算就是编数字）。
-  - `GET|PUT /api/analysis/shadow-config`、`GET /api/analysis/shadow-divergence?days=1..60`；「评分配置」页「影子评分口径」卡显示日分歧表（影子/总行、比例、**其中 skip**、平均分差、最大绝对分差、方向迁移矩阵、池规模/覆盖率）、按 `original_score` 的分档迁移、按变体的日期区间、当前口径说明与 4 个参数 chips，以及「解读注意」（小样本日、多变体混窗、池 <20、覆盖率 <85%、零分歧、判据二）。注册表为空时明示「内置的 2C 新口径没被注册进来，这不是故障而是还没有可对比的口径」，不出全零表。
+  - **切换判据**（写死不在页面拍脑袋）：判据一 = 末尾**连续 5 个交易日**的**合并**分歧比例，其 **Wilson 单侧 95% 置信上界 < 15%**（报表自动判定；不是"每个单日都 <15%"，也不是"点估 <15%" —— 14 只/日的池子里单日粒度是 7.1%/只，逐日比例比的是当天几只踩在门槛上。样本不够时上界必然压不进线，`n≤15` 时零分歧也判不满足，薄池不下结论）；判据二 = 影子口径在 Q6 新基线上的超额不劣于旧口径（**报表不自动判定**，影子没有独立回测曲线，硬算就是编数字）。取舍过程与刻度表见 `docs/QUANT_DECISIONS_2026-10.md` §3「判据一口径定案」。
+  - `GET|PUT /api/analysis/shadow-config`、`GET /api/analysis/shadow-divergence?days=1..60`；「评分配置」页「影子评分口径」卡显示日分歧表（日期列标「窗口」/「休市」、影子/总行、比例（只作观察）、**其中 skip**、平均分差、最大绝对分差、方向迁移矩阵、池规模/覆盖率）、判据窗口 chip（`k/n` + 点估 + 95% 上界）、按 `original_score` 的分档迁移、按变体的日期区间、当前口径说明与 4 个参数 chips，以及「解读注意」（判据口径与容忍次数、小样本日、多变体混窗、池 <20、覆盖率 <85%、零分歧、判据二）。注册表为空时明示「内置的 2C 新口径没被注册进来，这不是故障而是还没有可对比的口径」，不出全零表。
 - **原生 AI Skill 双件套**（启动自动补种 ai_skills 表，可在设置页停用）：「组合X光透视」（Agent 工具化——调用即返回真实穿透数据 + 解读框架，非纯提示词）、「调仓建议自进化」（命中率统计查询）
 - **双层基金标签**：主标签（天天基金 F10 官方类型 + 业绩基准定位解析 + 名称关键词，稳定不漂移）+ 副标签（库内持仓赛道暴露反推，随季报变动）；主副标签不一致时前端高亮"漂移"警示（如固收+ 基金当前重仓算力）；互认基金（968 开头）名称解析兜底
 - **并发控制架构**：独立线程池隔离（akshare 专用 16 workers，与 asyncio 默认线程池隔离）+ 全局信号量限流（并发 5）+ 强制超时保护（25s）+ asyncio.Lock 双重检查防止缓存穿透，根治 40-60 只基金批量分析时的线程池耗尽与超时堆积问题
@@ -352,7 +352,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/analysis/review` | GET | 投资复盘（start_date/end_date/fund_ids） |
 | `/api/analysis/caliber` | GET/PUT | 收益口径（净值分红复权开关 + 基准股息率，Q11 回滚键） |
 | `/api/analysis/shadow-config` | GET/PUT | 影子评分开关与口径变体（注册表 + 切换判据常量 + `variant_descriptions` 口径说明 + `caliber_params` 各变体参数取值/区间/越界标记；`system_config.shadow_scoring_enabled`，非法变体名 400） |
-| `/api/analysis/shadow-divergence` | GET | 每日口径分歧报表（days=1..60，旧→新方向迁移矩阵、分档迁移、按变体统计、切换判据一自动判定——连续天数按库内 `holiday_calendar` 的 A 股交易日数，休市轮次标 `trading_day=false` 不计；纯本地 SQL） |
+| `/api/analysis/shadow-divergence` | GET | 每日口径分歧报表（days=1..60，旧→新方向迁移矩阵、分档迁移、按变体统计；判据一自动判定 = 末尾连续 5 个**A 股交易日**（读库内 `holiday_calendar`，休市轮次标 `trading_day=false` 不计）的合并分歧率 Wilson 单侧 95% 上界 < 15%，输出 `criterion_rows/criterion_divergent/criterion_pct/criterion_upper_pct/criterion_tolerance(-1=零分歧也不可)/criterion_tolerance_note/consecutive_days/criterion_window_complete`；纯本地 SQL） |
 | `/api/backtest/batch/results` | GET/DELETE | 自动回测批量结果（逐基金完成时间） |
 | `/api/backtest/batch/config` | GET/PUT | 自动回测配置（开关/防封间隔） |
 | `/api/backtest/batch/run` | POST | 手动触发全量回测（409=运行中） |
@@ -651,11 +651,11 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   + 持有期/阶梯赎回费门槛（`first_buy_date` 为唯一输入，未填显示"持有 —"、不得默认 0 天）。
 - **§3 影子评分层**：同一轮用两套口径各算一次，新口径**只写 `shadow_*` 可空列**，生产 `weighted_score/signal_direction` 一字不动；
   变体注册表 + 每日分歧报表（2 条本地 SQL）+ `GET|PUT /api/analysis/shadow-config`、`GET /api/analysis/shadow-divergence` + 「评分配置」页影子口径卡。
-  报表里"连续达标天数"**按 A 股交易日历数**（读库内 `holiday_calendar`，周末与法定节假日轮次仍展示但标 `trading_day=false`、不进连续，
+  报表里判据一的样本窗口**按 A 股交易日历数**（读库内 `holiday_calendar`，周末与法定节假日轮次仍展示但标 `trading_day=false`、不进连续，
   漏跑一个真实交易日同样打断连续）——否则长假里手点五轮就能把判据一刷满。
 - **2C 评分结构新口径 `caliber_2c`（注册为影子变体，生产未切）**：市场三因子退出加权和（Q2，影子侧参考权重成对 8.3→6.0）、
   动量簇权重上限 + 趋势改乘性符号位（Q3）、阈值按有效权重折算且覆盖率 <60% 记 `skip`（Q4）、五档只驱动建议措辞（Q1）。
-  **生产 `threshold_ref_total_weight` 仍是 8.3**；切换判据：分歧连续 5 个**交易日** <15%，或影子在 Q6 新基线上的超额不劣于旧口径（判据二仍需人工另跑）。
+  **生产 `threshold_ref_total_weight` 仍是 8.3**；切换判据：连续 5 个**交易日**的合并分歧率 Wilson 单侧 95% 置信上界 <15%（2026-10-02 定案，替代原"逐日 <15%"），或影子在 Q6 新基线上的超额不劣于旧口径（判据二仍需人工另跑）。
 - **2D 卫生**：Q5 池内相对分标注、Q12 IC 非重叠采样 + 年化 IR + BH 校正、Q13 死配置清扫（`signal_rules` 适用性 / 分位单一定义 /
   MACD 文档 / `size_stability` 量纲 / 删除 `FundData.pb` 与 `volume_history`）、Q14 CI（pytest + npm build 两条 job）。
 - **回归**：`pytest -q` **777 passed**，`tsc --noEmit` 干净，`vite build` 通过，前端改动逐页浏览器实测取证；
