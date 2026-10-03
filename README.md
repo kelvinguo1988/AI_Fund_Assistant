@@ -382,7 +382,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/analysis/advice-stats` | GET | 建议命中率与阈值校准状态（`by_mode` 里 `abs`/`excess` 双口径并存，历史两列都已在库） |
 | `/api/analysis/advice-hit-mode` | GET/PUT | 命中口径读写：`excess`=相对沪深300超额（默认）/ `abs`=绝对涨跌旧口径（Q7 回滚键，只影响此后回填） |
 | `/api/backtest/{id}` | GET | 信号回测（含有效性评分） |
-| `/api/factors` | GET/POST | 因子 CRUD |
+| `/api/factors` | GET/POST | 因子列表 / 新建；配套 `/api/factors/{id}` PUT 编辑 / DELETE 删除（两者对不存在的 id 一律 404。删除**不校验权重**：直接删掉一个还带权重的 active 因子会让总权重从 8.3 往下掉，而阈值按 `total_weight / threshold_ref_total_weight` 等比折算 ⇒ 门槛跟着缩，等于变相放宽信号。要下线一个因子先把权重置 0 或停用（加权只读 `status="active"` 的因子，停用即置 `disabled`） |
 | `/api/factors/export` | GET | 因子导出 JSON |
 | `/api/factors/import` | POST | 因子导入 JSON |
 | `/api/report-config` | GET/PUT | 报告配置项（17 项开关。分组口径两处不一致，改配置前要知道：报告引擎文档串按 5 基金 + 9 市场，推送侧 `push_service.FUND_ITEMS/MARKET_ITEMS` 按 7 基金（多 `top10_change`/`fund_daily_change`）+ 10 市场（多 `fund_realtime_top10`）——同一项在两份清单里的维度归属可以不同） |
@@ -725,3 +725,12 @@ arm64 镜像直接构建失败 —— 别把它当"精简镜像"清理掉。
   `PE/PB` 注释同样过时）；组合 X 光的经理集中度是**两档**（≥50% 罚 15 / ≥35% 罚 8）而非一句"≥35% 告警"；
   `src/hooks/` 目前只有 `useAIChat`，"分析 hook"并不存在；`caliber_2c` 那句 `scale=0.72` 补上算式，
   并说明源码注释里的 0.78 是"只清市场三因子"那一步（8.3→6.5），两个数不是打架而是两步。
+- **第三轮核查（verb 级重跑 + 参数抽验）**：把上面的集合差改成**按方法（GET/POST/PUT/DELETE）逐条比对**再跑一遍，
+  代码侧 112 条路由全部有文档落点，文档侧多出的只有 `/api/funds/concept-map/*` 这种**一行通配写法**（progress/import/fetch/export/清空
+  五条真实子路由），以及 `push-channels`/`schedules`/`error-logs`/`analysis/export|import` 写在同行说明里的子路径 —— 不是缺端点。
+  唯一没落字面的是 `PUT|DELETE /api/factors/{id}`（原写"因子 CRUD"），已展开并把**删除不校验权重**这个坑写清：
+  删掉一个还带权重的 active 因子会让 `total_weight` 掉，而阈值按 `total_weight / threshold_ref_total_weight` 等比折算 ⇒ 门槛一起缩、变相放宽。
+  抽验通过的参数：akshare 线程池 16 workers / 信号量 5 / `DEFAULT_TIMEOUT=25s`（`utils/concurrency.py`，`SEM_QUEUE_TIMEOUT=120s` 排队上限）、
+  概念板块起步 375 + `FETCH_BATCH_SIZE=20`、回填 `EVAL_HORIZON_TRADING_DAYS=30`（窗口取的是**净值日**序列第 30 个点，README 的"30 个净值日"是对的）、
+  回填任务 `day_of_week="sat" hour=1`、赎回费阶梯 `[[7,1.5],[365,0.5],[null,0.25]]`、`shadow-divergence` 的 `days=1..60` 与
+  `WILSON_Z_ONE_SIDED_95=1.645` / `TOLERANCE_IMPOSSIBLE=-1`、Agent 工具注册表 **15 个且零 hidden**、`tests/test_*.py` **39 个文件**、前端 `pages/` **16 个**。
