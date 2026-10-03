@@ -14,15 +14,17 @@ AI_Fund_Assistant/
 │   ├── database.py             # SQLAlchemy 异步引擎 + 迁移
 │   ├── models/                 # ORM 模型
 │   ├── schemas/                # Pydantic Schema
-│   ├── routers/                # API 路由（15 个模块：基金/因子/分析/回测/AI对话/AI Agent/Skills/持仓/推送/调度/报告/系统配置/调休等）
+│   ├── routers/                # API 路由（13 个模块：基金/因子/分析/回测/AI对话/AI Agent/Skills/持仓/推送/调度/报告/系统配置/调休）
 │   ├── services/               # 业务逻辑层（连通性检测、缓存、变更检测、复盘、基金PK、ETF扫描、概念映射、市场环境、错误日志等）
-│   ├── engines/                # 因子引擎 + 评分引擎 + 质量过滤 + 报告引擎
-│   │   ├── factor_engine.py    # 11 因子计算 + 信号规则 + 截面标准化（data_valid 剔除数据不足基金）
+│   ├── engines/                # 因子引擎 + 评分引擎 + 质量过滤 + 报告引擎 + 影子口径层
+│   │   ├── factor_engine.py    # 17 个因子计算函数（默认 11 + 可扩展 6）+ 信号规则 + 截面标准化（data_valid 剔除数据不足基金）
 │   │   ├── quality_filter.py   # 第零层质量过滤（前置否决/因子修正/偏置/动态阈值/场外申购约束）
 │   │   ├── scoring_engine.py   # 加权评分 + 信号判定
 │   │   └── report_engine.py    # 报告生成（Markdown / HTML）
 │   ├── data_sources/           # 多数据源适配器（AKShare/JoinQuant）
 │   ├── llm/                    # AI 大模型接入（DeepSeek/智谱GLM/通义千问/OpenAI）
+│   ├── ai/                     # Agent 内核（ReAct 工具调用循环、因子诊断统计、调仓引擎）
+│   ├── ai_tools/               # Agent 只读工具注册表（15 个内置工具）
 │   ├── patch/                  # 东方财富反爬虫补丁
 │   ├── push/                   # 推送机器人（飞书等）
 │   ├── scheduler/              # 定时任务调度（APScheduler）
@@ -34,7 +36,12 @@ AI_Fund_Assistant/
 │   ├── src/hooks/              # 自定义 Hooks（AI 对话、分析）
 │   └── nginx.conf              # Nginx（API 反向代理 + SPA）
 ├── android/                    # Android 原生客户端（Kotlin/Compose，独立构建，不参与 Docker 部署；服务器地址在 App 内配置）
-├── docker-compose.yml          # 一键部署（生产 + 开发模式）
+├── tests/                      # pytest 用例（39 个文件；conftest 默认屏蔽重接口数据源，零真实上游请求）
+├── docs/                       # CHANGELOG / 量化裁定 / 审查报告 / 架构图
+├── docker-compose.yml          # 生产部署（backend + frontend 两个服务）
+├── docker-compose.dev.yml      # 开发模式（源码挂载 + --reload + DEBUG）
+├── docker-compose.qnap.yml     # QNAP Container Station：拉 GHCR 现成镜像，绝对路径挂载
+├── deploy.sh                   # 一键部署脚本（预置 data/ 与 fund_name_cache.json + 等健康检查）
 ├── .env.example
 └── backend/requirements.txt
 ```
@@ -43,7 +50,7 @@ AI_Fund_Assistant/
 
 ## 核心功能
 
-- **11 因子配置体系**：短期/中期动量、波动率倒数、回撤修复度、收益风险比、动量加速度、趋势一致性、MACD 信号（自研 7 + MACD）+ 大盘估值分位、市场情绪、资金面（市场环境 3，共享 MarketRegimeService 快照）；扩展因子（PE 百分位/股债性价比 FED/信息比率/最大回撤/规模稳定性）可在因子管理页启用
+- **11 因子配置体系**：短期/中期动量、波动率倒数、回撤修复度、收益风险比、动量加速度、趋势一致性、MACD 信号（自研 7 + MACD）+ 大盘估值分位、市场情绪、资金面（市场环境 3，共享 MarketRegimeService 快照）；扩展因子（净值价格百分位/股债性价比 FED/6 个月动量/信息比率/最大回撤/规模稳定性 6 个）可在因子管理页启用
 - **-1~+1 因子评分**：信号规则映射 + 滚动百分位 / 截面 Z-score 标准化，加权总评 -8.5~+8.5（钳位 = active 因子总权重 8.3）。两点必须知道口径：① **加权总评是「池内相对分」**（6 个截面 z 因子权重合计 5.2/8.3，当日池内均值 0），跨日/跨池不可直接比较，各展示面（仪表盘、历史报告、飞书推送、AI 简报与 Skill、Agent 工具）统一由 `scoring_engine.score_caliber_note(pool_size)` 标注当日参与标准化的只数，`pool_size` 随结果落 `analysis_results`（旧行 NULL → 文案明说"样本数未记录"），`<20` 追加"池子偏薄"；② **只有 7 个计算函数真的读 `signal_rules`**（默认 11 因子里是 `drawdown_recovery` + 3 个 market 因子；扩展因子里是 `price_percentile` / `fed_model` / `momentum_6m`），其余 10 个因子的得分由计算函数（截面因子再经 z 分档）直接给出，`/api/factors` 以 `signal_rules_effective` 透出，因子页对无效因子打「规则不适用」chip、库里遗留的规则数组在启动时由幂等迁移清空
 - **可调评分阈值**：前端 Web UI 五档对称阈值（强烈加仓 → 强烈减仓，末档 catch-all -8.5；正式路径信号由第零层动态阈值决策，五档仅旧计算路径生效）
 - **多数据源链**：AKShare → JoinQuant（聚宽），自动降级恢复
@@ -85,7 +92,7 @@ AI_Fund_Assistant/
 - **调仓工单的权重口径与执行成本**（Q10）：四清单权重按**市值**三档推导 —— 实时净值市值 → 成本市值 → 份额×组合平均单位价值，每只标 `weight_basis` 并把缺档的代码列进 caveat（旧口径 `shares*cost_nav or 1.0` 的哨兵会把漏填成本的那只压到 ≈0.006% 权重）。净值**只读** `FundRealtimeService.peek_cached_nav()`（7 天龄上限的既有估值缓存，未命中不回退拉取）⇒ **权重计算零新增上游请求**。卖出/换仓附**持有期与阶梯赎回费**：唯一输入是 `user_positions.first_buy_date`（可空，持有期按自然日），费率阶梯 `[[7,1.5],[365,0.5],[null,0.25]]`，适用费率 ≥`redemption_fee_penalize_pct`（默认 1.0 ⇒ 只有 7 日内 1.5% 那档拦人）的卖出**降级为观望**并给出"再持有几日出档"，未填首买日一律显示"持有期未知，未做赎回费约束"（**不默认 0 天**，那会把全池建议拦光）。回滚键 `redemption_fee_enabled=0`（工单逐字回到旧样子）；阶梯是 list 值，配置页不渲染，经 `quality_filter_config` JSON 覆盖
 - **影子评分层（2C 新口径的取证地基）**：同一轮分析用两套口径各算一次，**新口径只写 `analysis_results.shadow_score/shadow_direction/shadow_variant/shadow_detail` 四个可空新列**（启动迁移、不回填历史），生产 `weighted_score/signal_direction/operation_advice` 保持旧口径 —— 2A/2B 之后评分结构要改（Q2/Q3/Q4/Q1），而库里样本只有 6 个信号日，改完无法证明变好，所以先并行对照。影子吃的是**质量过滤修正后**的同一份因子输入，分差只反映口径差异；三类失败（开关关闭 / 变体注册表为空 / 变体内部抛异常）一律收敛成"没有影子"并记 warning，**影子崩了不会崩生产那一行**（实测：崩变体后生产列照常落库）。附带两个元数据新列 `pool_size`（本轮截面样本基金数，同一个 2.5 分在 50 只池和 8 只池不是一回事）与 `factor_coverage`（有效权重和/总权重）。上游成本 **0 新增请求**（配置一轮读一次 DB、加权纯 Python、报表 2 条本地 SQL）。
   - 新口径按名注册进 `backend/engines/shadow_scoring.py` 的变体表即可参与对照，不必再改分析链；开关与变体名在 `system_config.shadow_scoring_enabled / shadow_variant`（回滚 = 置 0，关闭时影子列显式写 NULL，不留上一轮的旧对照）。开关默认**开**：判据一要连续 5 个交易日的对照样本才有结论，而开着是零上游请求、零生产信号影响。
-  - **2C 新口径已注册为变体 `caliber_2c`**（`backend/engines/shadow_variants.py`，生产未切）：市场三因子退出加权和 + 参考权重成对下移（影子侧 8.3 → 6.0；只清权重不改 ref 会让 `scale=total/ref` 掉到 0.72，等于把门槛一起缩 28%）+ 趋势改乘性位（只收 short/mid/accel，先查 `data_valid`）+ 单簇权重上限（默认 35%×8.3≈2.905，当前动量簇 2.9 不触发，是后续配权的护栏）+ 覆盖率折算门槛 + 五档只渲染措辞。覆盖率低于 `shadow_2c_min_coverage` 时影子方向记 **`skip`**（"新口径本轮不落库"，不洗成观望）。4 个参数在「质量过滤」页的 影子口径2C 分组可改，越界自动钳位并在 `shadow_detail.params_clamped` 留痕。
+  - **2C 新口径已注册为变体 `caliber_2c`**（`backend/engines/shadow_variants.py`，生产未切）：市场三因子退出加权和 + 参考权重成对下移（影子侧 8.3 → 6.0；只清权重不改 ref 会让 `scale=total/ref` 掉到 0.72，等于把门槛一起缩 28%）+ 趋势改乘性位（只收 short/mid/accel，先查 `data_valid`）+ 单簇权重上限（默认 35%×8.3≈2.905，当前动量簇 2.9 不触发，是后续配权的护栏）+ 覆盖率折算门槛 + 五档只渲染措辞。覆盖率低于 `shadow_2c_min_coverage` 时影子方向记 **`skip`**（"新口径本轮不落库"，不洗成观望）。4 个参数在后端归到「影子口径2C」分组，越界自动钳位并在 `shadow_detail.params_clamped` 留痕。⚠️ **已知缺口**：前端 `QualityConfig.tsx` 的 `CATEGORY_ORDER` 只列了 9 组，这一组渲染不出来（不在清单里的分类会被分组逻辑丢掉），当前只能经 `quality_filter_config` JSON 改。
   - **切换判据**（写死不在页面拍脑袋）：判据一 = 末尾**连续 5 个交易日**的**合并**分歧比例，其 **Wilson 单侧 95% 置信上界 < 15%**（报表自动判定；不是"每个单日都 <15%"，也不是"点估 <15%" —— 14 只/日的池子里单日粒度是 7.1%/只，逐日比例比的是当天几只踩在门槛上。样本不够时上界必然压不进线，`n≤15` 时零分歧也判不满足，薄池不下结论）；判据二 = 影子口径在 Q6 新基线上的超额不劣于旧口径（**报表不自动判定**，影子没有独立回测曲线，硬算就是编数字）。取舍过程与刻度表见 `docs/QUANT_DECISIONS_2026-10.md` §3「判据一口径定案」。
   - `GET|PUT /api/analysis/shadow-config`、`GET /api/analysis/shadow-divergence?days=1..60`；「评分配置」页「影子评分口径」卡显示日分歧表（日期列标「窗口」/「休市」、影子/总行、比例（只作观察）、**其中 skip**、平均分差、最大绝对分差、方向迁移矩阵、池规模/覆盖率）、判据窗口 chip（`k/n` + 点估 + 95% 上界）、按 `original_score` 的分档迁移、按变体的日期区间、当前口径说明与 4 个参数 chips，以及「解读注意」（判据口径与容忍次数、小样本日、多变体混窗、池 <20、覆盖率 <85%、零分歧、判据二）。注册表为空时明示「内置的 2C 新口径没被注册进来，这不是故障而是还没有可对比的口径」，不出全零表。
 - **原生 AI Skill 双件套**（启动自动补种 ai_skills 表，可在设置页停用）：「组合X光透视」（Agent 工具化——调用即返回真实穿透数据 + 解读框架，非纯提示词）、「调仓建议自进化」（命中率统计查询）
@@ -108,16 +115,41 @@ cp .env.example .env
 
 # 2. 一键启动
 docker compose up -d
+#    或 ./deploy.sh（多做几件事：检查 compose V1/V2、建 data/、
+#    预置 fund_name_cache.json —— 该文件不存在时 Docker 会把它挂成目录，容器内写缓存直接报错；
+#    再等 /health 就绪。开发模式：./deploy.sh dev）
 
-# 3. 访问 Web 界面
-# http://localhost:8000 或 http://localhost
+# 3. 访问 Web 界面 → http://localhost（前端 Nginx :80，反代 /api 到 backend:8000）
+#    ⚠️ http://localhost:8000 只是后端 API：backend 镜像里没有 frontend/dist，
+#    根路径返回 "Frontend not built" 的 404，不是页面坏了
 
 # 查看日志
 docker compose logs -f backend
 docker compose logs -f frontend
 ```
 
-首次启动自动建表、执行迁移、写入默认因子配置。
+首次启动自动建表、执行迁移、写入默认因子配置。开发模式在**另一个文件**：
+`docker compose -f docker-compose.dev.yml up`（源码挂载 + `--reload` + `FUND_QUANT_DEBUG=true`）；
+`docker-compose.yml` 只有生产 backend + frontend 两个服务。
+
+> ⚠️ `DEBUG=true` 会让 SQLAlchemy `echo` 把所有 bind 参数写进 `data/logs/app.log`（保留 7 天），
+> 其中包含 AI API Key —— 只在本地排障时开，别在 NAS 上常开。
+
+### 现成镜像部署（GHCR，QNAP / Container Station）
+
+push 到 `main` 后 `.github/workflows/docker-publish.yml` 会构建并推送两个镜像：
+`ghcr.io/<owner>/ai_fund_assistant/backend`（linux/amd64 + arm64）与
+`.../frontend`（**仅 amd64**）。生产机（x86 QNAP）不必在本地编译，直接拉镜像：
+
+```bash
+docker pull ghcr.io/<owner>/ai_fund_assistant/backend:latest
+docker pull ghcr.io/<owner>/ai_fund_assistant/frontend:latest
+docker compose -f docker-compose.qnap.yml up -d
+```
+
+`docker-compose.qnap.yml` 的 `env_file` / `volumes` 全是**绝对路径**（Container Station 会把相对路径
+解析到 `/tmp/`），换机器部署时改这几行即可；镜像包若保持 GHCR 默认的 private，生产机要先
+`docker login ghcr.io`（PAT 需 `read:packages`）再 pull。
 
 ### 本地开发
 
@@ -211,7 +243,7 @@ cd frontend && npx tsc --noEmit && npm run build
 - **推送渠道**：/push 配置飞书机器人 Webhook（支持签名密钥），多渠道可选。
 - **数据源连通性**：/system 一键测试东财系列域名 + AI API 可达性。
 - **数据源运行时健康**：/system 上方卡片显示当前哪些源在冷却（剩余秒数）、调度器哪个计划已触发当日熔断、各缓存的新鲜度与 TTL —— 全部读自进程内存，**零网络请求**（`GET /api/system/data-source-health`）。排查"仪表盘一片空"先看这里，不要反复点连通性测试去捅正在冷却的源。
-- **质量过滤**：/quality-config 48 个数值参数分 10 组（前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值调节、持有期与赎回费、固定偏置、影子口径2C，含场外申购降级开关 `otc_pause_veto_buy`），改动下次分析生效；`threshold_ref_total_weight` 配置后买卖阈值随因子总权重等比折算（本库已配 8.3，边界锚定当前口径）。赎回费阶梯 `redemption_fee_ladder` 是 list 值，页面只渲染数值参数，需经 `quality_filter_config` JSON 覆盖。
+- **质量过滤**：/quality-config 48 个数值参数分 10 组（前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值调节、持有期与赎回费、固定偏置、影子口径2C，含场外申购降级开关 `otc_pause_veto_buy`），改动下次分析生效；`threshold_ref_total_weight` 配置后买卖阈值随因子总权重等比折算（本库已配 8.3，边界锚定当前口径）。两类不在页面上渲染的值需经 `quality_filter_config` JSON 覆盖：list 型（如赎回费阶梯 `redemption_fee_ladder`）、以及「影子口径2C」那一组 4 参数（前端 `CATEGORY_ORDER` 只列了 9 组，这是已知缺口）。
 
 ---
 
@@ -319,6 +351,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 |------|------|------|
 | `/api/funds` | GET/POST | 基金池列表 / 新增 |
 | `/api/funds/import` | POST | 批量导入 |
+| `/api/funds/lookup-name` | GET | 按代码查名称与类型（新增基金时的即时校验，单只请求） |
 | `/api/funds/{id}` | PUT/DELETE | 更新 / 删除 |
 | `/api/funds/batch` | PATCH | 批量启用/停用 |
 | `/api/funds/detail` | GET | 基金阶段涨幅列表（优先缓存） |
@@ -334,6 +367,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/funds/extended-detail` | GET | 基金扩展详情（累计收益走势 / 规模变动 / 持有人结构 / 资产配置，仅活跃基金） |
 | `/api/funds/etf-scan` | GET | 全市场 ETF 扫描三榜单（量价齐升/资金流入/换手异动，交叉标注已持有） |
 | `/api/funds/holding-overlap` | GET | 重仓股重叠度排行（基金 PK 页抱团识别） |
+| `/api/funds/xray` | GET | 组合 X 光：个股穿透 HHI / 两两 Jaccard 重叠 / 经理公司集中度 / 多样化评分 |
 | `/api/funds/concept-map/*` | GET/POST/DELETE | 概念板块成分映射：progress 进度 / import 起步数据 / fetch 手动抓取 / export 导出 / 清空 |
 | `/api/analysis` | GET | 查询分析结果 |
 | `/api/analysis/latest` | GET | 最新分析结果 |
@@ -344,11 +378,14 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/analysis/export` / `import` | GET/POST | 历史报告导出备份 / 恢复导入（JSON，含全部因子评分与信号） |
 | `/api/analysis/market-regime` | GET | 市场环境快照（PE 分位 / 涨跌家数比 / 两融 7 日变化） |
 | `/api/analysis/compare` | GET | 基金 PK（2~10 只：双窗口年化/回撤/夏普 + Beta/Alpha/信息比率 + 规模与机构占比） |
+| `/api/analysis/advice-eval` | POST | 回填到期建议的实际表现并尝试阈值校准（每周六 01:00 自动跑，无到期样本时 0 请求；这里的手动入口同一条链） |
+| `/api/analysis/advice-stats` | GET | 建议命中率与阈值校准状态（`by_mode` 里 `abs`/`excess` 双口径并存，历史两列都已在库） |
+| `/api/analysis/advice-hit-mode` | GET/PUT | 命中口径读写：`excess`=相对沪深300超额（默认）/ `abs`=绝对涨跌旧口径（Q7 回滚键，只影响此后回填） |
 | `/api/backtest/{id}` | GET | 信号回测（含有效性评分） |
 | `/api/factors` | GET/POST | 因子 CRUD |
 | `/api/factors/export` | GET | 因子导出 JSON |
 | `/api/factors/import` | POST | 因子导入 JSON |
-| `/api/report-config` | GET/PUT | 报告配置项（17 项：8 基金维度 + 9 市场维度） |
+| `/api/report-config` | GET/PUT | 报告配置项（17 项开关。分组口径两处不一致，改配置前要知道：报告引擎文档串按 5 基金 + 9 市场，推送侧 `push_service.FUND_ITEMS/MARKET_ITEMS` 按 7 基金（多 `top10_change`/`fund_daily_change`）+ 10 市场（多 `fund_realtime_top10`）——同一项在两份清单里的维度归属可以不同） |
 | `/api/analysis/review` | GET | 投资复盘（start_date/end_date/fund_ids） |
 | `/api/analysis/caliber` | GET/PUT | 收益口径（净值分红复权开关 + 基准股息率，Q11 回滚键） |
 | `/api/analysis/shadow-config` | GET/PUT | 影子评分开关与口径变体（注册表 + 切换判据常量 + `variant_descriptions` 口径说明 + `caliber_params` 各变体参数取值/区间/越界标记；`system_config.shadow_scoring_enabled`，非法变体名 400） |
@@ -356,6 +393,8 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/backtest/batch/results` | GET/DELETE | 自动回测批量结果（逐基金完成时间） |
 | `/api/backtest/batch/config` | GET/PUT | 自动回测配置（开关/防封间隔） |
 | `/api/backtest/batch/run` | POST | 手动触发全量回测（409=运行中） |
+| `/api/backtest/batch/status` | GET | 全量回测是否仍在后台运行（前端据此分开两个轮询，不必每秒拉逐基金结果表） |
+| `/api/backtest/config/measurement` | GET/PUT | 回测度量口径（Q6：`backtest_carry_position` 仓位延续 / 样本下限）与默认值，保存即对下一次回测生效 |
 | `/api/backtest/config/fee` | GET/PUT | 回测费率参数（调仓成本口径） |
 | `/api/ai/chat` | POST | AI 对话 |
 | `/api/ai/conversations` | GET | 会话历史（按 conversation_id） |
@@ -371,11 +410,11 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/positions` | GET/POST | 我的持仓列表 / 建仓 |
 | `/api/positions/{id}` | PUT/DELETE | 编辑 / 删除持仓 |
 | `/api/positions/import-csv` | POST | 支付宝/天天基金 CSV 批量导入（表头别名识别、池外代码逐行跳过） |
-| `/api/push-channels` | GET/POST | 推送渠道 |
-| `/api/schedules` | GET/POST | 调度计划 |
+| `/api/push-channels` | GET/POST | 推送渠道列表 / 新建；配套 `/api/push-channels/{id}` PUT/DELETE、`/{id}/test` POST 发一条测试消息 |
+| `/api/schedules` | GET/POST | 调度计划列表 / 新建；配套 `/api/schedules/{id}` PUT/DELETE |
 | `/api/system` | GET/PUT | 系统配置（AI 开关、模型、API Key） |
 | `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
-| `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（48 个数值参数分 10 组：前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值、持有期与赎回费、固定偏置、影子口径2C；含场外申购降级开关。list 型键如 `redemption_fee_ladder` 不在页面渲染，可经 `quality_filter_config` JSON 覆盖） |
+| `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（**API 元数据** 48 个数值参数分 10 组：前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值、持有期与赎回费、固定偏置、影子口径2C；含场外申购降级开关。页面按 `CATEGORY_ORDER` 只渲染 9 组，「影子口径2C」与 list 型键如 `redemption_fee_ladder` 都不在页面上，需经 `quality_filter_config` JSON 覆盖） |
 | `/api/system/error-logs` | GET/DELETE | 错误日志查询（分类/模块筛选）/ 清空；配套 `/error-logs/count` 未读徽标、`/error-logs/download` 下载、`POST /error-logs` 前端异常上报 |
 | `/api/system/feature-flags` | GET/PUT | 提示功能开关（「场内提示与扫描」「场外提示与高低估」，关闭即停发对应数据源请求） |
 | `/api/system/index-valuations` | GET | 宽基指数高低估分位卡片（近一年 PE 分位） |
@@ -457,7 +496,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `_AKSHARE_POOL` | akshare 专用独立线程池（16 workers），与 asyncio 默认线程池隔离，防止 akshare 卡死耗尽默认池 |
 | `_AKSHARE_SEM` | 全局信号量（并发 5），替代原全局时间戳串行限流，允许合理并发 |
 | `run_with_timeout()` | 强制超时保护（默认 25s），超时后释放线程槽位，防止死连接无限挂起 |
-| `run_batch_with_timeout()` | 批量并发执行 + 超时控制 |
+| `run_batch_with_timeout()` | 批量并发 + 超时的备用工具；**当前全仓无调用方**（实际批处理走 `asyncio.gather` + `run_with_timeout`），列在这里只是说明它不是链路上的限流点 |
 | `random_ua()` / `rotate_ua_for_akshare()` | User-Agent 轮换，降低反爬风险 |
 | `shutdown_pool()` | 应用关闭时清理线程池 |
 
@@ -483,16 +522,12 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 
 ### Docker 构建优化
 
-Dockerfile 使用阿里云镜像源加速依赖下载（apt + pip），构建时间从 20+ 分钟降至 2-3 分钟：
-
-```dockerfile
-# apt 镜像源替换
-RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
-
-# pip 阿里云镜像源
-ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-    PIP_TRUSTED_HOST=mirrors.aliyun.com
-```
+镜像源是**构建参数**而不是写死的 `sed`（`backend/Dockerfile`）：默认走官方 `deb.debian.org` / `pypi.org`，
+因为 CI 与 GHCR 的 runner 在海外，那才是它们的速度来源；国内设备本地构建才在
+`docker-compose.yml` 的 `build.args` 里传 `APT_MIRROR_HOST=mirrors.aliyun.com` +
+`PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/` 切阿里云（构建时间从 20+ 分钟降到 2-3 分钟）。
+另保留 `gcc/g++/libffi-dev` 构建链：`py-mini-racer` 等依赖没有 aarch64 预编译 wheel，删掉这层
+arm64 镜像直接构建失败 —— 别把它当"精简镜像"清理掉。
 
 ### 性能基准（51 只基金）
 
@@ -658,7 +693,30 @@ ENV PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
   **生产 `threshold_ref_total_weight` 仍是 8.3**；切换判据：连续 5 个**交易日**的合并分歧率 Wilson 单侧 95% 置信上界 <15%（2026-10-02 定案，替代原"逐日 <15%"），或影子在 Q6 新基线上的超额不劣于旧口径（判据二仍需人工另跑）。
 - **2D 卫生**：Q5 池内相对分标注、Q12 IC 非重叠采样 + 年化 IR + BH 校正、Q13 死配置清扫（`signal_rules` 适用性 / 分位单一定义 /
   MACD 文档 / `size_stability` 量纲 / 删除 `FundData.pb` 与 `volume_history`）、Q14 CI（pytest + npm build 两条 job）。
-- **回归**：`pytest -q` **777 passed**，`tsc --noEmit` 干净，`vite build` 通过，前端改动逐页浏览器实测取证；
+- **回归**：`pytest -q` **789 passed**（`TZ=UTC` 实测；本批 2A~2D 落地当时是 777，判据一定案又补了薄池/单日翻转用例），
+  `tsc --noEmit` 干净，`vite build` 通过，前端改动逐页浏览器实测取证；
   全流程**零新增上游请求**（除既有的推送路径），未放宽任何限流/jitter/退避/冷却/熔断参数。
 - **仍待用户处理**：`013149` / `162719` 两条持仓的**首次买入日期为空**，需在「我的持仓」行尾编辑里补录；补录前这两只的
   持有期与赎回费约束按设计不生效（显示"持有 —"）。
+
+---
+
+## 修复记录（2026-10-03 README 与代码全量对表）
+
+用 `PYTHONPATH=. python3 -c "from backend.main import app"` 导出真实路由（**112 条 `/api/*`**）与 README 端点表做集合差，
+再逐条核对数字型陈述，改动全部有代码/DB 依据：
+
+- **补端点**：`/api/funds/lookup-name`、`/api/funds/xray`、`/api/analysis/advice-eval`、`/advice-stats`、`/advice-hit-mode`、
+  `/api/backtest/batch/status`、`/api/backtest/config/measurement`，并把 `push-channels`/`schedules` 的配套子路径写进同一行；
+  反向差集为空 ⇒ 表里没有已不存在的端点。
+- **修错**：路由模块 15 → **13**（`routers/__init__.py` 的 `include_router` 数）；报告配置项"8 基金 + 9 市场"→ 写清两处口径不一致
+  （`report_engine` 文档串 5+9，`push_service.FUND_ITEMS/MARKET_ITEMS` 7+10）；`run_batch_with_timeout()` 标为**全仓无调用方**；
+  Dockerfile 镜像源片段改成 `APT_MIRROR_HOST`/`PIP_INDEX_URL` 构建参数的真实机制；`factor_engine` 行由"11 因子"改"17 个计算函数（默认 11 + 扩展 6）"。
+- **部署链补全**：README 此前完全没提 GHCR —— 现补 `.github/workflows/docker-publish.yml`（backend amd64+arm64 / frontend 仅 amd64）
+  与 `docker-compose.qnap.yml` 的拉取流程、`deploy.sh` 的预置动作、dev compose 是独立文件；并更正"`localhost:8000` 能看 Web"
+  （backend 镜像内无 `frontend/dist`，根路径是 404 提示，Web 入口只有 :80）。
+- **确认无误**（未改）：48 数值参数 / 10 分组（API 侧）、16 页面、17 报告项、15 Agent 工具、17 计算函数、7 个读 `signal_rules`
+  的因子、6 截面 z 因子权重 5.2、总权重 8.3、钳位 ±8.5、批处理 20~60s 与熔断阈值 3、回测样本下限 8/30%、调休默认源与 03:00、
+  环境变量表 8 项与 `.env.example` 逐字一致。
+- **顺带发现的前端缺口**（本次只写进文档，未改代码）：「影子口径2C」这一组在 `QualityConfig.tsx` 的 `CATEGORY_ORDER`（9 项）里没有，
+  分组逻辑会把不在清单里的分类直接丢弃 ⇒ 那 4 个参数在页面上改不了，只能经 `quality_filter_config` JSON。
