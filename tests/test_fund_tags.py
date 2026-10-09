@@ -285,7 +285,7 @@ class TestBenchmarkApprox:
     def test_direct_match(self):
         from backend.services.index_valuation_service import IndexValuationService
         IndexValuationService._cache = [{
-            "index": "沪深300", "pe": 12.8, "percentile_1y": 55.0,
+            "index": "沪深300", "pe": 12.8, "pe_percentile": 55.0,
             "zone": "合理", "advice": "合理区间", "updated": "2026-08-31",
         }]
         try:
@@ -300,7 +300,7 @@ class TestBenchmarkApprox:
         """主动基金基准近似映射：取占比最高的支持指数，标注近似"""
         from backend.services.index_valuation_service import IndexValuationService
         IndexValuationService._cache = [{
-            "index": "沪深300", "pe": 12.8, "percentile_1y": 55.0,
+            "index": "沪深300", "pe": 12.8, "pe_percentile": 55.0,
             "zone": "合理", "advice": "合理区间", "updated": "2026-08-31",
         }]
         try:
@@ -328,7 +328,7 @@ class TestBenchmarkApprox:
         """支持指数占比 <20% 不近似（无意义）"""
         from backend.services.index_valuation_service import IndexValuationService
         IndexValuationService._cache = [{
-            "index": "沪深300", "pe": 12.8, "percentile_1y": 55.0,
+            "index": "沪深300", "pe": 12.8, "pe_percentile": 55.0,
             "zone": "合理", "advice": "x", "updated": "d",
         }]
         try:

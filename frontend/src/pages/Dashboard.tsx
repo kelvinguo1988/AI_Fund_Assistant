@@ -43,7 +43,7 @@ import { analysisApi } from '../api/analysis';
 import { fundApi } from '../api/fund';
 import type { FundRealtimeOut } from '../api/fund';
 import { systemApi } from '../api/system';
-import type { IndexValuation } from '../types';
+import type { IndexValuation, MarketTemperature } from '../types';
 import type { AnalysisResultOut, FundOut, MarketSummaryOut, MarketRegimeOut, SectorFlowItem } from '../types';
 
 
@@ -89,6 +89,8 @@ const Dashboard: React.FC = () => {
   const [realtimeMap, setRealtimeMap] = useState<Record<string, FundRealtimeOut>>({});
   // ── 指数高低估（模块 C'）──
   const [indexValuations, setIndexValuations] = useState<IndexValuation[]>([]);
+  // ── 市场温度计（中证800 PE+PB 分位，只作行动参考）──
+  const [temperature, setTemperature] = useState<MarketTemperature | null>(null);
 
   const loadRealtime = useCallback(async (force = false) => {
     try {
@@ -106,6 +108,10 @@ const Dashboard: React.FC = () => {
     systemApi.getIndexValuations()
       .then((r) => setIndexValuations((r.data as IndexValuation[]) || []))
       .catch(() => { /* 估值卡片失败静默 */ });
+    // 温度计取的是后端 1h 缓存的月频序列，日内重复取没有意义，故不 force
+    systemApi.getMarketTemperature()
+      .then((r) => setTemperature(r.data ?? null))
+      .catch(() => { /* 温度计为增强卡片，失败静默 */ });
   }, [loadRealtime]);
 
 
@@ -370,7 +376,7 @@ const Dashboard: React.FC = () => {
         </Grid>
       </Grid>
 
-      {/* ── 指数高低估（近一年 PE 分位）── */}
+      {/* ── 指数高低估（乐咕 2007 起月频全序列 PE 分位）── */}
       {indexValuations.length > 0 && (
         <Card variant="outlined" sx={{ mb: 3 }}>
           <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
@@ -378,7 +384,7 @@ const Dashboard: React.FC = () => {
               <Typography variant="subtitle2" sx={{ minWidth: 90 }}>
                 指数高低估
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                  近一年 PE 分位
+                  PE 全序列分位（乐咕月频，起点/样本数见各指数）
                 </Typography>
               </Typography>
               {indexValuations.map((v) => {
@@ -393,7 +399,7 @@ const Dashboard: React.FC = () => {
                     <br />
                     <Chip
                       size="small"
-                      label={`${v.zone} ${v.percentile_1y}%`}
+                      label={`${v.zone} ${v.pe_percentile}%`}
                       sx={{
                         mt: 0.5, height: 20, fontSize: '0.7rem',
                         backgroundColor: zoneColor, color: '#fff',
@@ -401,10 +407,105 @@ const Dashboard: React.FC = () => {
                     />
                     <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                       {v.advice}
+                      {v.sample_points ? ` · ${v.sample_points} 个月末点` : ''}
                     </Typography>
                   </Box>
                 );
               })}
+            </Box>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── 市场温度计（中证800，仅市场层行动参考，不参与单只基金判定）── */}
+      {temperature && (
+        <Card variant="outlined" sx={{ mb: 3 }}>
+          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <Box sx={{ minWidth: 150 }}>
+                <Typography variant="subtitle2">
+                  市场温度计
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    {temperature.index} · 读数 {temperature.date} · 取数 {temperature.updated.slice(11, 16)}
+                  </Typography>
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 0.5 }}>
+                  <Typography variant="h5" sx={{ fontWeight: 700, color: regimeColor(temperature.temperature / 100) }}>
+                    {temperature.temperature}°
+                  </Typography>
+                  <Chip
+                    size="small"
+                    label={temperature.zone}
+                    sx={{
+                      height: 20, fontSize: '0.7rem', fontWeight: 600, color: '#fff',
+                      backgroundColor: regimeColor(temperature.temperature / 100),
+                    }}
+                  />
+                </Box>
+                <LinearProgress
+                  variant="determinate"
+                  value={Math.min(100, Math.max(0, temperature.temperature))}
+                  sx={{ mt: 1, height: 6, borderRadius: 3 }}
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  {temperature.caliber}
+                </Typography>
+              </Box>
+
+              <Box sx={{ minWidth: 170 }}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  参考权益仓位 {temperature.suggested_equity_pct}%
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 0.5 }}>{temperature.action}</Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {temperature.rebalance_hint}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  PE {temperature.pe}（{temperature.pe_percentile}%）· PB {temperature.pb}（{temperature.pb_percentile}%）
+                </Typography>
+                {temperature.temperature_expanding !== null && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    扩展窗口参照 {temperature.temperature_expanding.toFixed(1)}°（窗口不同，数字不可跨口径比）
+                  </Typography>
+                )}
+              </Box>
+
+              <Box sx={{ minWidth: 240, flexGrow: 1 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  该档历史证据（其后 12 个月指数收益）
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
+                  {temperature.history_by_zone.map((z) => (
+                    <Tooltip
+                      key={z.zone}
+                      title={`档位 ${z.range}：重叠样本 ${z.n} 个 / 独立（非重叠）样本 ${z.n_independent} 个`}
+                    >
+                      <Chip
+                        size="small"
+                        variant={z.zone === temperature.zone ? 'filled' : 'outlined'}
+                        color={z.zone === temperature.zone ? 'primary' : 'default'}
+                        label={
+                          z.avg_forward_12m_pct === null
+                            ? `${z.zone} 无历史样本`
+                            : `${z.zone} ${z.avg_forward_12m_pct > 0 ? '+' : ''}${z.avg_forward_12m_pct}% / n=${z.n}`
+                        }
+                        sx={{ fontSize: '0.7rem', height: 22 }}
+                      />
+                    </Tooltip>
+                  ))}
+                </Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  {temperature.note}。n 为重叠月样本，独立（非重叠）样本全期共{' '}
+                  {temperature.history_by_zone.reduce((s, z) => s + z.n_independent, 0)} 个，分档后每档只剩个位数
+                  —— 所以这里只给仓位参考，不给买卖信号。
+                </Typography>
+                {/* 历史样本范围只说明"证据从哪年起算"，与右侧读数时效无关，故挂在证据区而非温度旁 */}
+                {temperature.sample_note && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    {temperature.sample_note}
+                  </Typography>
+                )}
+              </Box>
             </Box>
           </CardContent>
         </Card>

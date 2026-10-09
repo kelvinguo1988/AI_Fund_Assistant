@@ -50,7 +50,7 @@ def _clean_ivs(real_valuation_services):
 
 def _row(name, pe=12.0, pct=40.0):
     return {
-        "index": name, "pe": pe, "percentile_1y": pct, "zone": "合理",
+        "index": name, "pe": pe, "pe_percentile": pct, "zone": "合理",
         "advice": "合理区间", "updated": "2026-09-30",
     }
 

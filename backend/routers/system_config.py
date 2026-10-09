@@ -376,7 +376,7 @@ async def index_valuations(
     force: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    """主要指数 PE 高低估区间（近一年分位口径；沪深300/中证500/上证50/中证1000）"""
+    """主要指数 PE 高低估区间（乐咕 2007 起月频全序列分位；沪深300/中证500/上证50/中证1000）"""
     from backend.services.index_valuation_service import IndexValuationService
     # otc 开关关闭时不拉取（省资源）
     from backend.services.fund_realtime_service import _feature_flag
@@ -384,6 +384,17 @@ async def index_valuations(
         return ApiResponse(data=[])
     rows = await IndexValuationService.get_valuations(force=force)
     return ApiResponse(data=rows)
+
+
+@router.get("/market-temperature")
+async def market_temperature(force: bool = False):
+    """中证800 市场温度计（滚动 10 年月频 PE+PB 分位）
+
+    只读、市场层行动参考：不进 quality_filter、不改买卖阈值、不产出个股/单基金信号。
+    上游成本 = 乐咕 2 个请求（PE 表自带点位 + PB 表），类级缓存 1h + 失败冷却 120s。
+    """
+    from backend.services.market_temperature_service import MarketTemperatureService
+    return ApiResponse(data=await MarketTemperatureService.get_temperature(force=force))
 
 
 # ── 特性开关（场内/场外提示模块，2026-08-31）──────────────────────────

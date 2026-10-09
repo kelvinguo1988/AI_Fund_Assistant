@@ -15,7 +15,7 @@ async def test_index_valuations_endpoint(db_session, monkeypatch):
         return True
 
     async def _fake_vals(force=False):
-        return [{"index": "沪深300", "pe": 12.8, "percentile_1y": 55.0,
+        return [{"index": "沪深300", "pe": 12.8, "pe_percentile": 55.0,
                  "zone": "合理", "advice": "合理区间", "updated": "2026-09-12"}]
 
     import backend.services.fund_realtime_service as _mod

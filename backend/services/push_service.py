@@ -25,6 +25,9 @@ MARKET_ITEMS = {
     "sector_flow_day", "sector_flow_week", "sector_flow_month",
     # fund_realtime_top10 2026-08-31 加入：全景报告尾部基金实时涨跌 TOP10
     "fund_realtime_top10",
+    # market_temperature 2026-10-09 加入：中证800 温度计一行（市场环境区块内的行动参考）
+    # 代价 = 乐咕 2 个请求，走 MarketTemperatureService 的 1h 类级缓存 + 120s 失败冷却
+    "market_temperature",
 }
 # 基金维度项（top10_change 2026-08-29 / fund_daily_change 2026-08-31 加入：
 # 推送报告含前十大持仓当日涨跌 + 基金本身当日实时涨跌）
@@ -159,6 +162,18 @@ class PushService:
                             f"- 资金面：两融余额 7 日变化 **{snap.margin_change_pct_7d:+.2%}**"
                             f"（{snap.margin_date}）"
                         )
+                    # 市场温度计（行动参考）：独立 try —— 乐咕抖动不能把上面三行一起带走
+                    if "market_temperature" in enabled_items:
+                        try:
+                            from backend.services.market_temperature_service import (
+                                MarketTemperatureService, format_temperature_line,
+                            )
+                            tt = await MarketTemperatureService.get_temperature()
+                            line = format_temperature_line(tt)
+                            if line:
+                                regime_lines.append(line)
+                        except Exception as te:
+                            logger.warning(f"市场温度计生成失败: {te}")
                     if regime_lines:
                         market_regime_md = "**市场环境**\n" + "\n".join(regime_lines)
                 except Exception as re_:

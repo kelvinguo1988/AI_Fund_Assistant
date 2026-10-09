@@ -13,6 +13,7 @@ import type {
   DataSourceHealth,
   QualityConfigOut,
   QualityConfigUpdate,
+  MarketTemperature,
 } from '../types';
 
 const BASE = '/api/system';
@@ -38,6 +39,10 @@ export const systemApi = {
 
   getIndexValuations: () =>
     apiClient.get<ApiResponse<unknown>>('/api/system/index-valuations').then((r) => r.data),
+
+  /** 中证800 市场温度计：后端为 null 表示乐咕当日取数失败（前端按「暂无数据」处理） */
+  getMarketTemperature: () =>
+    apiClient.get<ApiResponse<MarketTemperature | null>>(`${BASE}/market-temperature`, { timeout: 60000 }).then((r) => r.data),
 
   testConnectivity: () =>
     apiClient.get<ApiResponse<ConnectivityResult>>(`${BASE}/connectivity`).then((r) => r.data),

@@ -631,9 +631,52 @@ export interface QualityConfigUpdate {
 export interface IndexValuation {
   index: string;
   pe: number;
-  percentile_1y: number;
+  /** 该指数 PE 在乐咕全历史序列（2007 起·月频）里的分位，0~100 */
+  pe_percentile: number;
+  /** 分位用的样本月点数 + 序列起点 —— 月频/日频的置信度差别必须可见 */
+  sample_points?: number;
+  series_start?: string;
   zone: '低估' | '合理' | '高估' | string;
   advice: string;
+  updated: string;
+}
+
+/* ── 市场温度计（中证800，仅市场层行动参考）── */
+export interface TemperatureZoneEvidence {
+  zone: string;
+  range: string;
+  /** 重叠样本数：相邻月的未来区间互相重叠，不能当独立观测看 */
+  n: number;
+  /** 非重叠（独立）样本数：本序列全期只有十几个，这是温度计不进生产信号的直接原因 */
+  n_independent: number;
+  avg_forward_12m_pct: number | null;
+  median_forward_12m_pct: number | null;
+  win_rate_pct: number | null;
+  worst_forward_12m_pct: number | null;
+}
+
+export interface MarketTemperature {
+  index: string;
+  date: string;
+  close: number;
+  pe: number;
+  pb: number;
+  pe_percentile: number;
+  pb_percentile: number;
+  temperature: number;
+  /** 扩展窗口口径的参照值：与主口径差十几度，只有一致的窗口才有可比性 */
+  temperature_expanding: number | null;
+  zone: string;
+  action: string;
+  suggested_equity_pct: number;
+  delta_vs_prev_month: number | null;
+  rebalance_hint: string;
+  history_by_zone: TemperatureZoneEvidence[];
+  current_zone_evidence: TemperatureZoneEvidence | null;
+  caliber: string;
+  /** 历史样本范围：读数日期之外的"起算/预热"信息，挂在分档证据旁，避免被当成读数时效 */
+  sample_note: string;
+  note: string;
   updated: string;
 }
 

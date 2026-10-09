@@ -7,6 +7,8 @@
 - OtcTradeStatusService.get_status_map  真实调用 = 拉全市场 24056 只申购状态
 - IndexValuationService.get_valuations  真实调用 = 拉乐咕 4 指数 PE 历史
   （乐咕已实测对短时重复请求限流）
+- MarketTemperatureService.get_temperature  真实调用 = 拉乐咕中证800 的 PE + PB 历史
+  （同一个 legulegu.com 域名，与上两条共用限流预算）
 
 需要验证真实网络行为的测试应显式覆盖（monkeypatch 覆盖本 fixture 的补丁）；
 要驱动这两个服务自身逻辑（负缓存/合并）的用例请 request `real_valuation_services`。
@@ -17,9 +19,11 @@ import pytest
 
 # 原始 classmethod 描述符：必须在任何补丁之前捕获（模块导入时即取）
 from backend.services import index_valuation_service as _ivs
+from backend.services import market_temperature_service as _mts
 
 _IV_GET_VALUATIONS = _ivs.IndexValuationService.__dict__["get_valuations"]
 _OTC_GET_STATUS_MAP = _ivs.OtcTradeStatusService.__dict__["get_status_map"]
+_MT_GET_TEMPERATURE = _mts.MarketTemperatureService.__dict__["get_temperature"]
 
 
 @pytest.fixture
@@ -34,6 +38,15 @@ def real_valuation_services(monkeypatch):
     return _ivs
 
 
+@pytest.fixture
+def real_temperature_service(monkeypatch):
+    """驱动 MarketTemperatureService 本体（缓存/冷却/对齐），网络层仍由用例 stub"""
+    monkeypatch.setattr(
+        _mts.MarketTemperatureService, "get_temperature", _MT_GET_TEMPERATURE
+    )
+    return _mts
+
+
 @pytest.fixture(autouse=True)
 def _block_heavy_network(monkeypatch):
     import backend.services.index_valuation_service as _iv
@@ -46,8 +59,14 @@ def _block_heavy_network(monkeypatch):
     async def _empty_vals(force: bool = False):
         return []
 
+    async def _empty_temp(force: bool = False):
+        return None
+
     monkeypatch.setattr(_iv.OtcTradeStatusService, "get_status_map", _empty_map)
     monkeypatch.setattr(_iv.IndexValuationService, "get_valuations", _empty_vals)
+    # 市场温度计（中证800 PE+PB 月频）：与指数估值同一个乐咕域名，同样必须屏蔽
+    import backend.services.market_temperature_service as _mts
+    monkeypatch.setattr(_mts.MarketTemperatureService, "get_temperature", _empty_temp)
     # 雪球基本信息交叉源（每次标签刷新逐基金请求）
     import backend.services.fund_tag_service as _ft
     monkeypatch.setattr(_ft, "fetch_xq_basic", lambda code: None)

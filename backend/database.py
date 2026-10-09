@@ -828,6 +828,13 @@ async def init_db() -> None:
                     sort_order=17,
                     created_at=now,
                 ),
+                ReportConfig(
+                    name="市场温度计(中证800)",
+                    item_key="market_temperature",
+                    enabled=True,
+                    sort_order=18,
+                    created_at=now,
+                ),
         ]
         # 逐条检查缺失的配置项，避免覆盖已有数据
         for cfg in default_report_configs:

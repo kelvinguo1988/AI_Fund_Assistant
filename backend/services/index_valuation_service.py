@@ -3,7 +3,8 @@
 指数高低估（C'）:
 - 数据源：乐咕乐股主要指数 PE 历史（非东财域名，不受东财限连影响）
 - 支持指数：沪深300 / 中证500 / 上证50 / 中证1000（创业板指等暂无数据源）
-- 口径：**近一年 PE 分位**（乐咕序列约一年日线）——<30% 低估 / 30~70% 合理 / >70% 高估
+- 口径：**该指数 PE 全历史序列分位** —— 乐咕给的是 2007 年起的**月频约 238 点**（不是近一年日线），
+  所以分位是"当前 PE 在近 19 年月末序列里的位置"；<30% 低估 / 30~70% 合理 / >70% 高估
 - 映射：场外基金基准/名称含指数词 → 对应区间提示；主动基金无官方估值不标
 
 场外交易可执行性（A'）:
@@ -94,12 +95,14 @@ class IndexValuationService:
                     if pe_series.empty:
                         continue
                     current_pe = float(pe_series.iloc[-1])
-                    # 近一年分位（序列本身约一年）；口径统一走 percentile_rank_inclusive
+                    # 全历史序列分位（乐咕为 2007 起月频序列）；口径统一走 percentile_rank_inclusive
                     percentile = float(percentile_rank_inclusive(pe_series.tolist(), current_pe) or 0.0) * 100
                     out.append({
                         "index": index_name,
                         "pe": round(current_pe, 2),
-                        "percentile_1y": round(percentile, 1),
+                        "pe_percentile": round(percentile, 1),
+                        "sample_points": int(len(pe_series)),
+                        "series_start": str(df["日期"].iloc[0]),
                         "zone": pe_zone(percentile),
                         "advice": (
                             "低估区间——适合定投加码"
@@ -187,8 +190,8 @@ class IndexValuationService:
             "type": "valuation",
             "level": level,
             "message": (
-                f"{basis} {v['index']}：PE {v['pe']}，近一年分位 "
-                f"{v['percentile_1y']}%（{zone}）——{v['advice']}"
+                f"{basis} {v['index']}：PE {v['pe']}，近 {v.get('sample_points') or '—'} 个月末点分位 "
+                f"{v['pe_percentile']}%（{zone}）——{v['advice']}"
             ),
         }
 
