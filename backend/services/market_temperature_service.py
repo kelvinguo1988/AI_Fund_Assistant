@@ -25,6 +25,7 @@ import time
 from typing import Optional
 
 from backend.utils.stats import percentile_rank_inclusive
+from backend.utils.timezone import format_beijing
 
 logger = logging.getLogger(__name__)
 
@@ -295,5 +296,5 @@ def _build_payload(series: dict, fetched_at: float) -> dict:
             f"分档证据要留 {FORWARD_MONTHS} 个月前瞻，最晚到 {evidence_to}"
         ),
         "note": "市场层行动参考，不参与单只基金买卖判定",
-        "updated": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(fetched_at)),
+        "updated": format_beijing(fetched_at),
     }

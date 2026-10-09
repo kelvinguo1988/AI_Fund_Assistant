@@ -27,6 +27,15 @@ def _now_beijing_dt() -> datetime:
         return datetime.now(_BEIJING).replace(tzinfo=None)
 
 
+def format_beijing(ts: float) -> str:
+    """epoch 秒 → 北京时间串
+
+    缓存里存的是 time.time()，展示要落回北京时：容器 TZ=UTC 时
+    `time.strftime(..., time.localtime(ts))` 给出的是 UTC，比界面其他时间戳早 8 小时。
+    """
+    return datetime.fromtimestamp(ts, _BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def beijing_today():
     """北京日期（date 对象）
 

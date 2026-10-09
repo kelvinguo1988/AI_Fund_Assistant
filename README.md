@@ -800,9 +800,15 @@ arm64 镜像直接构建失败 —— 别把它当"精简镜像"清理掉。
   历史范围挪到新字段 `sample_note` 并渲染在**分档证据区**下方（预热起点/证据末点这类信息本来就属于证据表，不属于读数）；
   卡片标题同时拆出"读数 {date} · 取数 {updated}"两个时刻，推送行补 `{date} 读数`。
   两处单测断言 `date ∈ caliber`、`date ∈ 推送行`，防止再退化成只有历史区间的表述。
+- **`updated` 走北京时（NAS 部署前自查发现）**：新服务初版用 `time.strftime(..., time.localtime(fetched_at))`
+  渲染缓存取数时刻，而 QNAP 容器时钟是 UTC —— 界面会显示比实际早 8 小时的"取数 14:30"。
+  这个坑本仓 2026-08-28 已在 `error_log_service` 修过一次（`backend/utils/timezone.py` 文档串即那次留的规矩：
+  全项目时间戳统一走该模块），故补 `format_beijing(ts)` 把 epoch 显式按 +8 渲染，`timezone.py` 里唯一需要
+  "epoch → 展示串"的场景此前没有出口。用例 `test_updated_is_beijing_even_in_utc_container` 在用例内临时
+  `TZ=UTC + time.tzset()` 再断言（本机是 +8，不钉 TZ 的话旧写法也能蒙过），固定 epoch 1.8e9 → `2027-01-15 16:00:00`。
 - **测试防线**：`tests/conftest.py` 的 autouse 屏蔽清单加 `MarketTemperatureService.get_temperature`
   （同一个 legulegu 域名），配套 `real_temperature_service` fixture 供驱动服务本体的用例解除屏蔽；
-  新增 `tests/test_market_temperature.py` 16 例（窗口/预热/point-in-time 无前视/对齐拒短序列/
-  迟滞三档/缓存与失败冷却），全部走 `run_with_timeout` stub ⇒ **零真实请求**。
-  `TZ=UTC` 全量 **805 passed**（原 789 + 16），`tsc --noEmit` 与仪表盘浏览器实测通过。
+  新增 `tests/test_market_temperature.py` 17 例（窗口/预热/point-in-time 无前视/对齐拒短序列/
+  迟滞三档/缓存与失败冷却/读数日期与北京时），全部走 `run_with_timeout` stub ⇒ **零真实请求**。
+  `TZ=UTC` 全量 **806 passed**（原 789 + 17），`tsc --noEmit` 与仪表盘浏览器实测通过。
 - **端点总数 112 → 113**（新增 `/api/system/market-temperature`），报告配置项 17 → 18。

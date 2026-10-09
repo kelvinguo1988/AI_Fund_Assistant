@@ -6,6 +6,7 @@
 test_cache_merge_and_negative_cache 同法），不会打乐咕。
 """
 
+import os
 import time
 
 import pandas as pd
@@ -161,6 +162,24 @@ class TestAlignAndPayload:
         assert rows[0][0] in p["sample_note"] and f"{len(rows)} 点" in p["sample_note"]
         # 参照口径必须一起给出：两个窗口差 11.5° 是这套数字最大的不确定性来源
         assert p["temperature_expanding"] is not None
+
+    def test_updated_is_beijing_even_in_utc_container(self):
+        """缓存时间戳必须显式 +8：NAS 容器 TZ=UTC，用 time.localtime 会比界面其他时刻早 8 小时
+
+        本机是 +8，不钉住 TZ 的话 localtime 也能蒙过这条，故显式切 UTC 再断言。
+        """
+        saved = os.environ.get("TZ")
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        try:
+            p = _build_payload(_align_series(*_frames(_series())), 1_800_000_000)
+        finally:
+            if saved is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = saved
+            time.tzset()
+        assert p["updated"] == "2027-01-15 16:00:00"
 
     def test_rebalance_hint_thresholds(self):
         """<5° 视作噪音；5~10° 只观察；>=10° 才提示动一次；无参照点不判断"""
