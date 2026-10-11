@@ -4,7 +4,7 @@ LLM 全部用脚本化 Fake Provider（不进 CI 真实调用）。
 """
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -76,7 +76,7 @@ async def _seed(db):
                        operation_advice="加仓", equity_ratio=0.7, factor_scores=scores,
                        original_score=2.0, dynamic_buy_threshold=1.5,
                        dynamic_sell_threshold=-1.5, quality_warnings='["风格漂移"]'),
-        AnalysisResult(fund_id=f1.id, analysis_date=date(2026, 9, 20), weighted_score=-0.5,
+        AnalysisResult(fund_id=f1.id, analysis_date=date.today() - timedelta(days=20), weighted_score=-0.5,
                        signal_direction="hold", signal_strength="hold",
                        operation_advice="持有", equity_ratio=0.5, factor_scores=scores),
     ])
@@ -118,8 +118,10 @@ class TestDataTools:
         from backend.models.analysis_result import AnalysisResult
         f1, _ = await _seed(db_session)
         # sell → hold → buy：翻转只看相邻非 hold 信号，共 1 次
+        # 日期一律相对今天：t_get_analysis_stats 的窗口是 beijing_today()-days，
+        # 写死年月会在某天之后整行落窗外（2026-10-11 就是这样开始红的）
         db_session.add(AnalysisResult(
-            fund_id=f1.id, analysis_date=date(2026, 9, 10), weighted_score=-3.0,
+            fund_id=f1.id, analysis_date=date.today() - timedelta(days=25), weighted_score=-3.0,
             signal_direction="sell", signal_strength="moderate_sell",
             operation_advice="减仓", equity_ratio=0.3, factor_scores="{}"))
         await db_session.commit()
