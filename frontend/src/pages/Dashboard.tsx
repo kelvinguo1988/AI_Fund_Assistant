@@ -43,7 +43,7 @@ import { analysisApi } from '../api/analysis';
 import { fundApi } from '../api/fund';
 import type { FundRealtimeOut } from '../api/fund';
 import { systemApi } from '../api/system';
-import type { IndexValuation, MarketTemperature } from '../types';
+import type { IndexValuation, MarketTemperature, UsMarketTiming } from '../types';
 import type { AnalysisResultOut, FundOut, MarketSummaryOut, MarketRegimeOut, SectorFlowItem } from '../types';
 
 
@@ -59,6 +59,29 @@ const formatAmount = (v: number): string => {
 const regimeColor = (pct: number): string => pct > 0.6 ? GROWTH_UP : pct < 0.4 ? GROWTH_DOWN : '#ff9800';
 const regimeLabel = (pct: number): string =>
   pct > 0.8 ? '高估' : pct > 0.6 ? '偏贵' : pct < 0.2 ? '低估' : pct < 0.4 ? '偏便宜' : '中性';
+
+/**
+ * 美股择时面板配色按「风险层是否触发」而不是涨跌方向 ——
+ * 本仓红涨绿跌是 A 股语义，用它会让人把"破位"读成"该买"。
+ */
+const US_STATE_COLOR: Record<string, 'default' | 'warning' | 'error'> = {
+  all_ok: 'default',
+  warmup: 'default',
+  split: 'warning',
+  main_break: 'warning',
+  both_break: 'error',
+};
+const US_TREND_BREAK = '#e65100';   // 破位：橙，提示风险而非提示卖出
+const US_TREND_OK = 'text.secondary';
+
+/** 动作横幅配色：绿=不用动，橙=停买（只挡新增资金），红=进入减仓评估，中性=无结论 */
+const US_ACTION_TINT: Record<string, { bg: string; border: string }> = {
+  all_ok: { bg: 'rgba(46, 125, 50, 0.08)', border: 'rgba(46, 125, 50, 0.35)' },
+  main_break: { bg: 'rgba(230, 81, 0, 0.09)', border: 'rgba(230, 81, 0, 0.38)' },
+  both_break: { bg: 'rgba(198, 40, 40, 0.08)', border: 'rgba(198, 40, 40, 0.42)' },
+  split: { bg: 'rgba(230, 81, 0, 0.06)', border: 'rgba(230, 81, 0, 0.3)' },
+  warmup: { bg: 'action.hover', border: 'divider' },
+};
 
 const Dashboard: React.FC = () => {
   const [results, setResults] = useState<AnalysisResultOut[]>([]);
@@ -91,6 +114,8 @@ const Dashboard: React.FC = () => {
   const [indexValuations, setIndexValuations] = useState<IndexValuation[]>([]);
   // ── 市场温度计（中证800 PE+PB 分位，只作行动参考）──
   const [temperature, setTemperature] = useState<MarketTemperature | null>(null);
+  // ── 美股择时风险面板（美元价月末趋势 + VIX → 本月动作；动作是节奏规则，不给权益比例）──
+  const [usTiming, setUsTiming] = useState<UsMarketTiming | null>(null);
 
   const loadRealtime = useCallback(async (force = false) => {
     try {
@@ -112,6 +137,10 @@ const Dashboard: React.FC = () => {
     systemApi.getMarketTemperature()
       .then((r) => setTemperature(r.data ?? null))
       .catch(() => { /* 温度计为增强卡片，失败静默 */ });
+    // 美股面板同样是月频 + 后端 1h 缓存（单次 3 个上游大请求），前端不 force、不轮询
+    systemApi.getUsMarketTiming()
+      .then((r) => setUsTiming(r.data ?? null))
+      .catch(() => { /* 境外源不稳，失败静默 —— 这块是风险参考，不该挡主流程 */ });
   }, [loadRealtime]);
 
 
@@ -375,6 +404,9 @@ const Dashboard: React.FC = () => {
           </Card>
         </Grid>
       </Grid>
+
+      {/* ── 市场层参考分 A 股 / 美股两块：都只作市场层参考，不参与单只基金买卖判定 ── */}
+      <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>A 股市场</Typography>
 
       {/* ── 指数高低估（乐咕 2007 起月频全序列 PE 分位）── */}
       {indexValuations.length > 0 && (
@@ -814,6 +846,173 @@ const Dashboard: React.FC = () => {
             </CardContent>
           </Card>
         </Box>
+      )}
+
+      {/* ── 美股市场 — 择时风险面板（美元价月末趋势 + CBOE VIX）
+          P0 回放判据未过（docs/US_TIMING_REPLAY_2026-10.md），所以动作只能是**月频节奏规则**
+          （新增资金进不进、存量动不动、什么条件恢复），不写权益比例；
+          代价必须与状态同屏，否则就是在推销择时 ── */}
+      <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>美股市场</Typography>
+      {usTiming && (
+        <Card variant="outlined" sx={{ mb: 3 }}>
+          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            {/* 本月动作横幅：这张卡的主语是"这个月怎么做"，下面的四栏是依据 */}
+            <Box
+              sx={{
+                mb: 2, p: 1.25, borderRadius: 1, border: '1px solid',
+                borderColor: US_ACTION_TINT[usTiming.state]?.border ?? 'divider',
+                bgcolor: US_ACTION_TINT[usTiming.state]?.bg ?? 'action.hover',
+              }}
+            >
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>本月动作</Typography>
+                <Chip
+                  size="small"
+                  label={usTiming.action.short}
+                  color={US_STATE_COLOR[usTiming.state] ?? 'default'}
+                  sx={{ height: 24, fontWeight: 700 }}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  {usTiming.next_check}
+                </Typography>
+              </Box>
+              <Typography variant="body2" sx={{ mt: 0.75 }}>{usTiming.action.do}</Typography>
+              <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: '#2e7d32' }}>
+                恢复条件：{usTiming.action.restore}
+              </Typography>
+              <Typography variant="caption" sx={{ display: 'block', color: US_TREND_BREAK }}>
+                别做：{usTiming.action.avoid}
+              </Typography>
+              {usTiming.action.coverage_warning && (
+                <Typography
+                  variant="caption"
+                  sx={{ display: 'block', mt: 0.5, color: 'warning.main', fontWeight: 600 }}
+                >
+                  {usTiming.action.coverage_warning}
+                </Typography>
+              )}
+            </Box>
+            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <Box sx={{ minWidth: 175 }}>
+                <Typography variant="subtitle2">
+                  趋势状态
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                    读数 {usTiming.date ?? '—'} · 取数 {usTiming.updated.slice(11, 16)}
+                  </Typography>
+                </Typography>
+                <Chip
+                  size="small"
+                  label={usTiming.state_name}
+                  color={US_STATE_COLOR[usTiming.state] ?? 'default'}
+                  sx={{ mt: 0.5, height: 22, fontSize: '0.75rem', fontWeight: 600 }}
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  {usTiming.state_desc}
+                </Typography>
+                {/* 读数时效（caliber）只说这一档是什么时候的数；历史样本范围在右下角的证据区 */}
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {usTiming.caliber}
+                </Typography>
+              </Box>
+
+              <Box sx={{ minWidth: 205 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  两层均线（月末点，美元价）
+                </Typography>
+                {usTiming.indices.map((r) => (
+                  <Box key={r.key} sx={{ mt: 0.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>{r.name}</Typography>
+                      {r.warmup_ok ? (
+                        <Typography
+                          variant="caption"
+                          sx={{ fontWeight: 600, color: r.trend_main_ok ? US_TREND_OK : US_TREND_BREAK }}
+                        >
+                          {r.trend_main_ok ? '线上' : '破位'}
+                          {r.gap_main_pct !== null
+                            ? ` ${r.gap_main_pct > 0 ? '+' : ''}${r.gap_main_pct}% vs MA12` : ''}
+                        </Typography>
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">
+                          样本不足（{r.months} 个月末点）
+                        </Typography>
+                      )}
+                    </Box>
+                    {r.warmup_ok && r.ma12 !== null && r.ma18 !== null && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        收盘 {r.close} · MA12 {r.ma12} · MA18 {r.ma18}
+                        {r.gap_slow_pct !== null
+                          ? `（对照 ${r.gap_slow_pct > 0 ? '+' : ''}${r.gap_slow_pct}%）` : ''}
+                      </Typography>
+                    )}
+                  </Box>
+                ))}
+              </Box>
+
+              <Box sx={{ minWidth: 200 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  VIX（恐慌阈值 {usTiming.vix.threshold}）
+                </Typography>
+                {usTiming.vix_available ? (
+                  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 0.5 }}>
+                    <Typography variant="h6" sx={{ fontWeight: 700 }}>{usTiming.vix.value}</Typography>
+                    <Chip
+                      size="small"
+                      label={`${usTiming.vix.level}·${usTiming.vix.direction}`}
+                      color={usTiming.vix.panic ? 'error' : usTiming.vix.level === '偏高' ? 'warning' : 'default'}
+                      sx={{ height: 20, fontSize: '0.7rem' }}
+                    />
+                    {usTiming.vix.delta_vs_prev_month !== null && (
+                      <Typography variant="caption" color="text.secondary">
+                        较上月 {usTiming.vix.delta_vs_prev_month > 0 ? '+' : ''}{usTiming.vix.delta_vs_prev_month} 点
+                      </Typography>
+                    )}
+                  </Box>
+                ) : (
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                    VIX 缺数（境外源失败，已降级为只报趋势）
+                  </Typography>
+                )}
+                {usTiming.add_back && (
+                  <Box sx={{ mt: 1, p: 1, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}>
+                    <Typography variant="caption" sx={{ fontWeight: 700, display: 'block' }}>
+                      {usTiming.add_back.title}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                      {usTiming.add_back.text}
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block', mt: 0.5, color: US_TREND_BREAK }}>
+                      {usTiming.add_back.caveat}
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+
+              <Box sx={{ minWidth: 250, flexGrow: 1 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                  防御的历史代价（人民币口径 · 含场外申赎费 · 相对买入持有）
+                </Typography>
+                {usTiming.indices.filter((r) => r.risk_evidence).map((r) => {
+                  const re = r.risk_evidence;
+                  if (!re) return null;
+                  return (
+                    <Typography key={r.key} variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                      {r.name}：回撤 {re.dd_hold.toFixed(1)}% → {re.dd_timing.toFixed(1)}%（改善 {re.dd_improve_pct.toFixed(1)}%），
+                      年化 {re.cagr_cost_pp.toFixed(2)}pp；相对静态同权 {re.vs_static_pp > 0 ? '+' : ''}{re.vs_static_pp.toFixed(2)}pp/年
+                      —— {re.note}
+                    </Typography>
+                  );
+                })}
+                <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
+                  {usTiming.note}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                  {usTiming.sample_note}
+                </Typography>
+              </Box>
+            </Box>
+          </CardContent>
+        </Card>
       )}
 
       <Grid container spacing={3}>

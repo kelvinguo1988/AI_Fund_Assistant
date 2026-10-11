@@ -680,6 +680,87 @@ export interface MarketTemperature {
   updated: string;
 }
 
+/* ── 美股择时风险面板（市场层风险参考；判据未过，后端不会下发任何仓位数字）── */
+export interface UsTimingRiskEvidence {
+  /** 回放窗口（该标的均线预热后的那段），不是本次读数的时效 */
+  window: string;
+  dd_hold: number;
+  dd_timing: number;
+  dd_improve_pct: number;
+  /** 负数 = 防御的代价（年化少赚这么多个百分点） */
+  cagr_cost_pp: number;
+  vs_static_pp: number;
+  note: string;
+}
+
+export interface UsTimingIndexRow {
+  key: string;
+  name: string;
+  symbol: string;
+  close: number | null;
+  ma12: number | null;
+  ma18: number | null;
+  gap_main_pct: number | null;
+  gap_slow_pct: number | null;
+  trend_main_ok: boolean | null;
+  trend_slow_ok: boolean | null;
+  months: number;
+  first_point: string | null;
+  decision_date: string | null;
+  /** false = 该标的月末点不足预热期，本行不参与判档 */
+  warmup_ok: boolean;
+  risk_evidence: UsTimingRiskEvidence | null;
+}
+
+export interface UsTimingVix {
+  value: number | null;
+  prev_month: number | null;
+  delta_vs_prev_month: number | null;
+  direction: string;
+  level: string;
+  panic: boolean;
+  falling: boolean;
+  threshold: number;
+}
+
+export interface UsTimingAddBack {
+  triggered: boolean;
+  title: string;
+  text: string;
+  caveat: string;
+}
+
+/** 状态 → 本月动作：月频节奏规则（新增资金进不进、存量动不动、什么条件恢复），不含权益比例 */
+export interface UsTimingAction {
+  short: string;
+  do: string;
+  restore: string;
+  avoid: string;
+  /** 有指数缺数/未预热时下发：本月动作只覆盖有数的指数 */
+  coverage_warning?: string;
+}
+
+export interface UsMarketTiming {
+  /** 决策月（最新完整月的月末点），不是取数时刻 */
+  date: string | null;
+  updated: string;
+  /** false = VIX 境外源取失败，面板已降级为只报趋势 */
+  vix_available: boolean;
+  state: string;
+  state_name: string;
+  state_desc: string;
+  action: UsTimingAction;
+  /** 下一次复核时点（月频：月内盘中破/站回都不作为动作依据） */
+  next_check: string;
+  indices: UsTimingIndexRow[];
+  vix: UsTimingVix;
+  add_back: UsTimingAddBack | null;
+  cost_note: string;
+  caliber: string;
+  sample_note: string;
+  note: string;
+}
+
 /* ── 影子评分（§3 新旧口径分歧报表）─────────────────────────────────── */
 export interface ShadowConfig {
   enabled: boolean;

@@ -9,6 +9,8 @@
   （乐咕已实测对短时重复请求限流）
 - MarketTemperatureService.get_temperature  真实调用 = 拉乐咕中证800 的 PE + PB 历史
   （同一个 legulegu.com 域名，与上两条共用限流预算）
+- UsMarketTimingService.get_panel  真实调用 = 新浪 .INX/.NDX 全历史日线 + CBOE VIX 全历史 CSV
+  （3 个大请求；VIX 还是境外源，测试里既慢又不可靠）
 
 需要验证真实网络行为的测试应显式覆盖（monkeypatch 覆盖本 fixture 的补丁）；
 要驱动这两个服务自身逻辑（负缓存/合并）的用例请 request `real_valuation_services`。
@@ -20,10 +22,12 @@ import pytest
 # 原始 classmethod 描述符：必须在任何补丁之前捕获（模块导入时即取）
 from backend.services import index_valuation_service as _ivs
 from backend.services import market_temperature_service as _mts
+from backend.services import us_market_timing_service as _umts
 
 _IV_GET_VALUATIONS = _ivs.IndexValuationService.__dict__["get_valuations"]
 _OTC_GET_STATUS_MAP = _ivs.OtcTradeStatusService.__dict__["get_status_map"]
 _MT_GET_TEMPERATURE = _mts.MarketTemperatureService.__dict__["get_temperature"]
+_UMT_GET_PANEL = _umts.UsMarketTimingService.__dict__["get_panel"]
 
 
 @pytest.fixture
@@ -47,6 +51,19 @@ def real_temperature_service(monkeypatch):
     return _mts
 
 
+@pytest.fixture
+def real_us_timing_service(monkeypatch):
+    """驱动 UsMarketTimingService 本体（缓存/冷却/降级），网络层仍由用例 stub
+
+    本服务真正的网络入口是模块级的 `_fetch_all`（同步函数，跑在 run_with_timeout 里），
+    用例 monkeypatch 它即可覆盖缓存、失败冷却与 VIX 降级三条路径，仍然零真实请求。
+    """
+    monkeypatch.setattr(
+        _umts.UsMarketTimingService, "get_panel", _UMT_GET_PANEL
+    )
+    return _umts
+
+
 @pytest.fixture(autouse=True)
 def _block_heavy_network(monkeypatch):
     import backend.services.index_valuation_service as _iv
@@ -62,11 +79,18 @@ def _block_heavy_network(monkeypatch):
     async def _empty_temp(force: bool = False):
         return None
 
+    async def _empty_us_panel(force: bool = False):
+        return None
+
     monkeypatch.setattr(_iv.OtcTradeStatusService, "get_status_map", _empty_map)
     monkeypatch.setattr(_iv.IndexValuationService, "get_valuations", _empty_vals)
     # 市场温度计（中证800 PE+PB 月频）：与指数估值同一个乐咕域名，同样必须屏蔽
     import backend.services.market_temperature_service as _mts
     monkeypatch.setattr(_mts.MarketTemperatureService, "get_temperature", _empty_temp)
+    # 美股择时面板（新浪 .INX/.NDX 全历史日线 + CBOE VIX 全历史 CSV）：单次 3 个大请求，
+    # 与温度计同级屏蔽；需要驱动本体时用 real_us_timing_service + stub _fetch_all
+    import backend.services.us_market_timing_service as _umt
+    monkeypatch.setattr(_umt.UsMarketTimingService, "get_panel", _empty_us_panel)
     # 雪球基本信息交叉源（每次标签刷新逐基金请求）
     import backend.services.fund_tag_service as _ft
     monkeypatch.setattr(_ft, "fetch_xq_basic", lambda code: None)

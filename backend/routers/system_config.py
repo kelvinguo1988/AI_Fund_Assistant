@@ -397,6 +397,21 @@ async def market_temperature(force: bool = False):
     return ApiResponse(data=await MarketTemperatureService.get_temperature(force=force))
 
 
+@router.get("/us-market-timing")
+async def us_market_timing(force: bool = False):
+    """美股择时风险面板（标普500 / 纳斯达克100，美元价月频趋势 + VIX）
+
+    只读、市场层：状态 → **本月动作**（月频节奏规则：停买 / 减仓评估 / 恢复条件 / 别做），
+    但**不输出权益比例** —— 2026-10-11 回放里
+    三档矩阵相对静态同权的超额仅 +0.11pp/年（标普）到 −1.25pp/年（纳指100），
+    未过预注册判据，见 docs/US_TIMING_REPLAY_2026-10.md §7。
+    上游成本 = 3 个请求（新浪 .INX/.NDX + CBOE VIX），类级缓存 1h + 失败冷却 120s；
+    VIX 取不到时降级为只报趋势（vix_available=false）。
+    """
+    from backend.services.us_market_timing_service import UsMarketTimingService
+    return ApiResponse(data=await UsMarketTimingService.get_panel(force=force))
+
+
 # ── 特性开关（场内/场外提示模块，2026-08-31）──────────────────────────
 
 _FEATURE_KEYS = {"etf_hints_enabled": True, "otc_hints_enabled": True}

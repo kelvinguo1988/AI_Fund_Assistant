@@ -835,6 +835,14 @@ async def init_db() -> None:
                     sort_order=18,
                     created_at=now,
                 ),
+                # 2026-10-11：美股择时风险面板一行（只报趋势/VIX，不输出仓位建议）
+                ReportConfig(
+                    name="美股择时面板(标普500/纳指100)",
+                    item_key="us_market_timing",
+                    enabled=True,
+                    sort_order=19,
+                    created_at=now,
+                ),
         ]
         # 逐条检查缺失的配置项，避免覆盖已有数据
         for cfg in default_report_configs:

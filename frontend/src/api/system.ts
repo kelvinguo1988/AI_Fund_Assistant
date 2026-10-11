@@ -14,6 +14,7 @@ import type {
   QualityConfigOut,
   QualityConfigUpdate,
   MarketTemperature,
+  UsMarketTiming,
 } from '../types';
 
 const BASE = '/api/system';
@@ -43,6 +44,10 @@ export const systemApi = {
   /** 中证800 市场温度计：后端为 null 表示乐咕当日取数失败（前端按「暂无数据」处理） */
   getMarketTemperature: () =>
     apiClient.get<ApiResponse<MarketTemperature | null>>(`${BASE}/market-temperature`, { timeout: 60000 }).then((r) => r.data),
+
+  /** 美股择时风险面板：3 个上游大请求 + 后端 1h 缓存，前端不轮询、不 force。null = 新浪侧取数失败 */
+  getUsMarketTiming: () =>
+    apiClient.get<ApiResponse<UsMarketTiming | null>>(`${BASE}/us-market-timing`, { timeout: 90000 }).then((r) => r.data),
 
   testConnectivity: () =>
     apiClient.get<ApiResponse<ConnectivityResult>>(`${BASE}/connectivity`).then((r) => r.data),

@@ -28,6 +28,11 @@ MARKET_ITEMS = {
     # market_temperature 2026-10-09 加入：中证800 温度计一行（市场环境区块内的行动参考）
     # 代价 = 乐咕 2 个请求，走 MarketTemperatureService 的 1h 类级缓存 + 120s 失败冷却
     "market_temperature",
+    # us_market_timing 2026-10-11 加入：美股择时风险面板一行（状态 → 本月动作 + VIX，不给权益比例）
+    # 动作是月频节奏规则（停买/减仓评估/恢复条件），仓位数字才被判据否掉的那一半
+    # 代价 = 新浪 .INX/.NDX + CBOE VIX 共 3 个请求，走 UsMarketTimingService 的同类缓存纪律；
+    # VIX 是境外源，失败时该行自动降级为只报趋势，不影响其余市场环境行
+    "us_market_timing",
 }
 # 基金维度项（top10_change 2026-08-29 / fund_daily_change 2026-08-31 加入：
 # 推送报告含前十大持仓当日涨跌 + 基金本身当日实时涨跌）
@@ -174,6 +179,18 @@ class PushService:
                                 regime_lines.append(line)
                         except Exception as te:
                             logger.warning(f"市场温度计生成失败: {te}")
+                    # 美股择时风险面板：同样独立 try —— 境外源抖动不能带走 A 股那几行
+                    if "us_market_timing" in enabled_items:
+                        try:
+                            from backend.services.us_market_timing_service import (
+                                UsMarketTimingService, format_us_timing_line,
+                            )
+                            panel = await UsMarketTimingService.get_panel()
+                            us_line = format_us_timing_line(panel)
+                            if us_line:
+                                regime_lines.append(us_line)
+                        except Exception as ue:
+                            logger.warning(f"美股择时面板生成失败: {ue}")
                     if regime_lines:
                         market_regime_md = "**市场环境**\n" + "\n".join(regime_lines)
                 except Exception as re_:
