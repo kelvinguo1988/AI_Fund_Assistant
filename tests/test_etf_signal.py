@@ -85,4 +85,18 @@ class TestScanPotential:
 
     def test_empty_map(self):
         result = scan_potential({}, set())
-        assert result == {"scanned": 0, "movers": [], "inflow": [], "unusual": []}
+        assert result == {
+            "scanned": 0, "snapshot_rows": 0, "skipped_no_fields": 0,
+            "movers": [], "inflow": [], "unusual": [],
+        }
+
+    def test_degraded_snapshot_reports_why_scanned_is_zero(self):
+        """全市场快照被腾讯降级行占满 → scanned=0 必须可自证（2026-10-17）"""
+        result = scan_potential({
+            "510300": _spot(volume_ratio=None, main_inflow_pct=None,
+                            turnover_rate=None, amount=None),
+            "510500": _spot(volume_ratio=None, main_inflow_pct=None,
+                            turnover_rate=None, amount=None),
+        }, set())
+        assert result["scanned"] == 0
+        assert (result["snapshot_rows"], result["skipped_no_fields"]) == (2, 2)

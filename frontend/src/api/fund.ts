@@ -131,11 +131,17 @@ export interface ETFScanItem {
 
 export interface ETFScanResult {
   scanned: number;
+  /** 收到的全市场快照行数（含被跳过的降级行） */
+  snapshot_rows?: number;
+  /** 快照里缺场内量价字段、未参与扫描的行数 */
+  skipped_no_fields?: number;
   movers: ETFScanItem[];
   inflow: ETFScanItem[];
   unusual: ETFScanItem[];
   pool_codes: string[];
   enabled?: boolean;
+  /** 功能开关关闭时的说明文案 */
+  reason?: string;
   error?: string;
 }
 

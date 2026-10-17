@@ -439,6 +439,26 @@ async def get_funds_realtime(
     return ApiResponse(data=data)
 
 
+def _spot_source_status() -> str:
+    """全市场快照不可用时，把熔断中的源与剩余秒数摊开（2026-10-17）
+
+    原文案固定写「约 10 分钟后自动恢复」，但实际冷却是按源各自 600s 续期的，
+    用户看到的等待时长与真相无关；扫描连续失败时这条是唯一线索。
+    """
+    import time as _t
+
+    from backend.services.fund_realtime_service import (
+        EM_SOURCE, TENCENT_SOURCE, FundRealtimeService,
+    )
+    now = _t.time()
+    parts = []
+    for src in (EM_SOURCE, TENCENT_SOURCE):
+        until = FundRealtimeService._source_fail_until.get(src, 0.0)
+        if until > now:
+            parts.append(f"{src} 熔断中（剩余 {int(until - now)} 秒）")
+    return "、".join(parts)
+
+
 @router.get("/etf-scan", response_model=ApiResponse[dict])
 async def etf_scan(db: AsyncSession = Depends(get_db)):
     """潜力场内基金扫描 — 全市场 ETF 量价/资金三榜单（模块 B）
@@ -451,8 +471,15 @@ async def etf_scan(db: AsyncSession = Depends(get_db)):
     # 开关关闭：不发起全市场请求（省资源）
     from backend.services.fund_realtime_service import _feature_flag
     if not await _feature_flag(db, "etf_hints_enabled", default=True):
-        return ApiResponse(data={"enabled": False, "scanned": 0, "movers": [],
-                                 "inflow": [], "unusual": [], "pool_codes": []})
+        # 2026-10-17 根因修复：关闭态此前只返回 scanned=0 且无任何说明字段，
+        # 前端渲染出「扫描全市场 0 只 ETF / 当前无符合条件的 ETF」——
+        # 用户把"功能被关"读成了"策略没选出东西"
+        return ApiResponse(data={
+            "enabled": False,
+            "reason": "「场内基金提示与扫描」开关处于关闭状态，请到 系统设置 → 功能开关 打开后再扫描",
+            "scanned": 0, "snapshot_rows": 0, "skipped_no_fields": 0,
+            "movers": [], "inflow": [], "unusual": [], "pool_codes": [],
+        })
 
     # 基金池代码集合（交叉标注 已持有）
     pool = (await db.execute(select(Fund).where(Fund.status == "active"))).scalars().all()
@@ -463,10 +490,16 @@ async def etf_scan(db: AsyncSession = Depends(get_db)):
     # 2026-08-31 修复：快照拿不到（东财限连+熔断）原静默返回空列表，
     # 用户无法区分"无符合条件"与"数据源不可用"
     if not spot_map:
+        cooled = _spot_source_status()
         return ApiResponse(data={
-            "enabled": True, "scanned": 0, "movers": [], "inflow": [],
+            "enabled": True, "scanned": 0, "snapshot_rows": 0, "skipped_no_fields": 0,
+            "movers": [], "inflow": [],
             "unusual": [], "pool_codes": list(pool_codes),
-            "error": "ETF 全市场快照不可用——数据源被限流或熔断中（约 10 分钟后自动恢复），稍后重新扫描",
+            "error": (
+                "ETF 全市场快照不可用"
+                + (f"：{cooled}" if cooled else "（数据源被限流或上游拒绝连接）")
+                + "——稍后重新扫描；全市场快照需东财分页拉取，腾讯降级链路不含量价字段，不做替代"
+            ),
         })
 
     result = scan_potential(spot_map, pool_codes)

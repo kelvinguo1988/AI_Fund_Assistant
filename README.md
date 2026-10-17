@@ -81,7 +81,7 @@ AI_Fund_Assistant/
 - **市场温度计（中证800，只作行动参考）**：`backend/services/market_temperature_service.py` 从乐咕取中证800 的 **PE + PB 月频全序列（238 点，2007-01 起）**，温度 = (PE 分位 + PB 分位)/2，**主口径为滚动 10 年分位**（同一份数据用扩展窗口当下是 41.0°，与主口径差 11.5° —— 窗口是这套数字最大的不确定性来源，所以卡片把参照值一并给出并标注不可跨口径比）；输出参考权益仓位（100−温度）、五档行动文案、与上一月末点的环比及 5°/10° 调仓迟滞。**上游成本 = 2 个请求**（PE 表自带点位列，无需额外取行情），类级缓存 1h + 失败冷却 120s，与指数估值共用乐咕限流预算。展示位两处：仪表盘「市场温度计」卡片 + 飞书「市场环境」区块一行（推送项 `market_temperature`，报告配置页可关）。**明确不进生产信号**：卡片同时显示「分档 → 其后 12 个月指数收益」的历史证据（用同一次取数现算，同时给重叠 n 与独立 n 两栏），全期非重叠独立观测只有 14 个、分档后每档个位数 —— 方向性成立但样本撑不起自动买卖；也不参与 `quality_filter` 的阈值折算，数字与推导见「市场温度计的历史回放口径」一节
 - **美股择时风险面板（标普500 + 纳斯达克100，给"本月动作"但不给仓位比例）**：`backend/services/us_market_timing_service.py` 取新浪 `.INX`/`.NDX` 美元价日线全历史 + CBOE VIX 官方 CSV，自己按 YYYY-MM 聚成**月末点**（不用 pandas `resample`——pandas 只是 akshare 的传递依赖、requirements 未 pin），趋势 = 末点收盘 vs **MA12**（MA18 只作对照），综合状态五档（趋势完好 / 主线上破位 / 趋势全面破位 / 两指数分化 / 样本不足）；**每档配一条「本月动作」**（载荷 `action`：做什么 / 恢复条件 / 别做什么），动作只控制**月频节奏**不给权益比例 —— `all_ok` = 本月不需要动作（也别因"趋势完好"临时加码），`main_break` = 暂停新增买入、**存量一份不卖**（不动存量就避开 <365 天 0.5% 赎回费档，也不吃 `ndx` −0.97pp/年 的负技巧），`both_break` = 停买 + 进入减仓评估窗口（**减多少由回撤承受力定，面板不给数字**；真要减先减持有满 1 年的份额，0.25% 而非 0.5%），`split` = 分敞口各自动（持纳指看纳指100，不许取平均或挑好看的），`warmup` = 明确不出行动参考；`next_check` 钉住"下一决策点 = 下一个月末收盘后"，月内盘中跌破/站回 MA12 都不作为动作依据。破位档的动作文案必须同屏假保护案例（2018-Q4 择时档比持有害 4.8pp）—— 只报保护不报少赚就是在推销择时；VIX 分四位（低位 ≤15 / 正常 / 偏高 ≤30 / 恐慌 >30）并带方向（±0.5 抖动带，防月末噪声）。**上游成本 = 3 个请求**（新浪 2 + CBOE 1），类级缓存 1h + 失败冷却 120s，命中缓存 0 请求；**VIX 单独 try**：它是境外源，失败只把面板标成 `vix_available=false` 降级为"只报趋势"，不进冷却、不带走趋势层。展示位两处：仪表盘**「美股市场」**卡片（卡顶就是「本月动作」横幅，状态色区分：绿=不用动 / 橙=停买 / 红=减仓评估 / 灰=无结论；与「A 股市场」分区，两块都是市场层参考）+ 飞书「市场环境」区块一行（`- 美股择时：<状态> → **<本月动作>** ｜ …`，推送项 `us_market_timing`，报告配置页可关；**趋势完好时不播代价，破位或加仓触发时必须播**）。**为什么没有仓位数字**：2026-10-11 预注册判据回放（人民币口径 + 本仓真实场外申赎费 + 减仓现金按 1.5% 计息）判外部模板的三档矩阵（100/75/50）**不过** —— 相对"静态同权重"基线的超额只有标普 +0.11pp/年（噪声级）、纳指100 −1.25pp/年；破位的价值只在风险端（回撤 −55.8%→−42.0%、−25.6%→−18.6%），代价是年化少赚 0.5~3 个点。判据否掉的是"仓位该到哪个数"，没否掉"破位当月先停买"，所以留动作、去比例。唯一有统计底气的进攻动作是 `VIX>30 且已回落` 的逆向加仓提示（后 1 月 +2.64%/胜率 80%，但 22 年仅 n=5 ⇒ 卡片与推送都标"假设级"，仍上行那格含 −16.7% 的接刀月所以不点亮），触发时它会拼进动作正文，避免"横幅说停买、VIX 格子说可补"的自相矛盾。全部数字、复现脚本与判据见「美股择时风险面板的历史回放口径」一节与 `docs/US_TIMING_REPLAY_2026-10.md`
 - **场内 ETF 交易提示**：基金池内 ETF 的 buy/sell 信号叠加场内执行提示——溢价追高警示（价格 > IOPV 1%）、折价低成本窗口、流动性不足阻断（日成交额 < 1000 万）、放量流出预警（量比 > 2 且主力净流出）、放量流入确认；数据来自全市场 ETF 快照，零新增请求
-- **潜力 ETF 扫描**：/etf-scan 页面单次请求扫全市场 ~1600 只 ETF，三榜单（量价齐升/资金流入 Top20/换手异动），与基金池交叉标注「已持有」，一键加池；场外基金无盘中量价数据不适用
+- **潜力 ETF 扫描**：/etf-scan 页面单次请求扫全市场 ~1600 只 ETF，三榜单（量价齐升/资金流入 Top20/换手异动），与基金池交叉标注「已持有」，一键加池；场外基金无盘中量价数据不适用。**空结果三态可分辨**（2026-10-17）：开关关闭→橙色「到 系统设置 → 功能开关 打开」且不出表格；快照不可用→红色错误带**实际熔断源与剩余秒数**；快照到手但全是无字段降级行→黄色说明「收到 N 行、其中 M 行缺场内量价字段被跳过」；只有真正参与排名却未命中阈值才显示「当前 N 只参与排名，无一命中该榜量价阈值」
 - **错误日志与告警**：系统功能报错自动记录（限流/超时/网络/数据缺失分类，60s 节流去重；保留期 30 天且上限 2000 条，写入时自动清理超期记录）；**数据源被限流是最关键分类**，记录触发模块与接口（如 `akshare.stock_zh_a_spot_em`、`realtime.eastmoney`、`patch.nid_auth`），用于排查哪个模块触发限制。前端右上角铃铛实时告警（60s 轮询未读徽标，点击看最近 10 条）；系统设置页支持分类筛选、**下载日志文件**与清空
 - **提示功能开关**：系统设置页两个独立开关——「场内提示与扫描」「场外提示与高低估」，关闭后对应模块不再生成提示且**不发起其数据源请求**（省资源），立即生效
 - **主动基金高低估近似映射**：基准为宽基组合的主动基金，取基准中占比最高的支持指数近似映射（≥70% 视为直接跟踪、20~70% 标注"近似"、<20% 不提示）；固收+/偏债 基金权益占比低自动排除
@@ -89,9 +89,10 @@ AI_Fund_Assistant/
 - **重仓股重叠度与组合 X 光**：基金 PK 选定基金自动计算共同重仓排行（Jaccard 重叠矩阵）；**组合 X 光透视**（借鉴 fundadvisor portfolio_xray 可解释扣分制）——持仓穿透到个股（HHI/等效持股数）、两两基金重叠矩阵、经理/公司单点依赖告警（经理两档：≥50% 罚 15、≥35% 罚 8；公司 ≥60% 罚 10）、100 分制多样化评分（逐项引用扣分原因），REST `/api/funds/xray` + PK Tab + AI Skill 三通道
 - **调仓建议自进化**：调仓工单（Agent「调仓分析」任务与「AI 每日简报」两条投递路径，`GET /api/ai/agent/rebalance` 只读不记账）落库 → **满 30 个净值日**后回填 → 双口径命中率 → 止盈/止损阈值保守校准（上下限约束）。
   - **双口径并存**（Q7）：`hit_abs` 绝对涨跌（牛市近乎恒真，量的是 beta）与 `hit_excess` 相对沪深300 同区间超额（量的是选基能力）都落库，校准只用当前口径，默认 `excess`；口径开关 `system_config.advice_hit_mode`（改回 `abs` 即整链回滚旧口径，历史两列都在，无需重算）；
+  - **超额基准只用于与沪深300 可比的标的**（Q15）：`advice_log.benchmark_kind` 在**落库那一刻**按 `fund_asset_class` 锁死（`hs300_excess` / `abs`），QDII 海外、债券、商品、货币记 `abs` —— 它们的 `benchmark_change_pct` 与 `hit_excess` 一律留 **NULL**（"没比"而不是"与 0% 比"），既不参与超额命中率分母（`stats()` 的分侧计数本就排除 NULL），也不进 `calibrate()`，避免用沪深300 的涨跌去评价一只美元债基、再把阈值往错误方向收。`GET /api/analysis/advice-stats` 增 `by_kind`（`hs300_comparable` / `abs_only`）分栏，手动回填返回 `abs_only_evaluated`；`benchmark_kind` 为 NULL = 改造前的旧行 = 按可比处理（回滚语义）。复盘链同步：`review_service` 的超额口径跳过 `abs` 样本并在摘要里点名"另有 N 只与沪深300 不可比（海外/债券/商品）未计入该分母"，基准列显示「仅绝对涨跌」；改前 `advice_log` 为 0 行，是零成本统一口径的窗口。
   - 窗口固定为「建议日 → 其后第 30 个净值日」，未走完的样本本轮跳过（同一批样本不会每轮被重复拉净值）；同基金同日同方向只记一条，回填按基金去重取数、基金之间随机等待 10~30s，**不新增上游请求**；
   - 每周六 01:00 自动回填（无到期样本时 0 请求），也可 `POST /api/analysis/advice-eval` 手动；`GET|PUT /api/analysis/advice-hit-mode` 读写口径；持仓页「建议命中率与阈值校准」卡同时显示两个口径的命中数并标出校准用的是哪个。
-- **调仓工单的权重口径与执行成本**（Q10）：四清单权重按**市值**三档推导 —— 实时净值市值 → 成本市值 → 份额×组合平均单位价值，每只标 `weight_basis` 并把缺档的代码列进 caveat（旧口径 `shares*cost_nav or 1.0` 的哨兵会把漏填成本的那只压到 ≈0.006% 权重）。净值**只读** `FundRealtimeService.peek_cached_nav()`（7 天龄上限的既有估值缓存，未命中不回退拉取）⇒ **权重计算零新增上游请求**。卖出/换仓附**持有期与阶梯赎回费**：唯一输入是 `user_positions.first_buy_date`（可空，持有期按自然日），费率阶梯 `[[7,1.5],[365,0.5],[null,0.25]]`，适用费率 ≥`redemption_fee_penalize_pct`（默认 1.0 ⇒ 只有 7 日内 1.5% 那档拦人）的卖出**降级为观望**并给出"再持有几日出档"，未填首买日一律显示"持有期未知，未做赎回费约束"（**不默认 0 天**，那会把全池建议拦光）。回滚键 `redemption_fee_enabled=0`（工单逐字回到旧样子）；阶梯是 list 值，配置页不渲染，经 `quality_filter_config` JSON 覆盖
+- **调仓工单的权重口径与执行成本**（Q10）：四清单权重按**市值**三档推导 —— 实时净值市值 → 成本市值 → 份额×组合平均单位价值，每只标 `weight_basis` 并把缺档的代码列进 caveat（旧口径 `shares*cost_nav or 1.0` 的哨兵会把漏填成本的那只压到 ≈0.006% 权重）。净值**只读** `FundRealtimeService.peek_cached_nav()`（7 天龄上限的既有估值缓存，未命中不回退拉取）⇒ **权重计算零新增上游请求**。卖出/换仓附**持有期与阶梯赎回费**：唯一输入是 `user_positions.first_buy_date`（可空，持有期按自然日），费率阶梯**按份额档位分别取**（Q15，7 档：场内 ETF / 货币基金 / 纯债 A / 纯债 C / QDII 海外 / 权益 A / 权益 C，档位判定唯一真相在 `backend/utils/fund_asset_class.py`，工单每行带 `fee_profile` + `fee_profile_label`）。权益 A 类默认 `[[7,1.5],[365,0.5],[null,0.25]]`；适用费率 ≥`redemption_fee_penalize_pct`（默认 1.0 ⇒ 权益 A 只有 7 日内 1.5% 那档拦人）的卖出**降级为观望**并给出"再持有几日出档"。旧口径把这套权益阶梯套到所有基金，于是**场内 ETF（只有券商佣金、无赎回费）与满 30 天普遍 0 费的债券/C 类**也被按 0.5%/0.25% 计费，把本可执行的卖出误降级成观望 —— 现这些 0 费档走 `ZERO_FEE_NOTES`（不惩罚、文案单独说明"场内份额卖出只有券商佣金，未计入"），C 类/债券各自的短持有期档仍能正常拦人。未填首买日一律显示"持有期未知，未做赎回费约束"（**不默认 0 天**，那会把全池建议拦光）。回滚键两个：`redemption_fee_enabled=0`（工单逐字回到旧样子）、`redemption_fee_ladder`（单条列表 = 全档共用旧行为）；`redemption_fee_ladder` 是 list、`redemption_fee_ladders` 是 dict，配置页都不渲染，需经 `quality_filter_config` JSON 覆盖。
 - **影子评分层（2C 新口径的取证地基）**：同一轮分析用两套口径各算一次，**新口径只写 `analysis_results.shadow_score/shadow_direction/shadow_variant/shadow_detail` 四个可空新列**（启动迁移、不回填历史），生产 `weighted_score/signal_direction/operation_advice` 保持旧口径 —— 2A/2B 之后评分结构要改（Q2/Q3/Q4/Q1），而库里样本只有 6 个信号日，改完无法证明变好，所以先并行对照。影子吃的是**质量过滤修正后**的同一份因子输入，分差只反映口径差异；三类失败（开关关闭 / 变体注册表为空 / 变体内部抛异常）一律收敛成"没有影子"并记 warning，**影子崩了不会崩生产那一行**（实测：崩变体后生产列照常落库）。附带两个元数据新列 `pool_size`（本轮截面样本基金数，同一个 2.5 分在 50 只池和 8 只池不是一回事）与 `factor_coverage`（有效权重和/总权重）。上游成本 **0 新增请求**（配置一轮读一次 DB、加权纯 Python、报表 3 条本地 SQL（日期/明细/休市日各一次，全是本地表））。
   - 新口径按名注册进 `backend/engines/shadow_scoring.py` 的变体表即可参与对照，不必再改分析链；开关与变体名在 `system_config.shadow_scoring_enabled / shadow_variant`（回滚 = 置 0，关闭时影子列显式写 NULL，不留上一轮的旧对照）。开关默认**开**：判据一要连续 5 个交易日的对照样本才有结论，而开着是零上游请求、零生产信号影响。
   - **2C 新口径已注册为变体 `caliber_2c`**（`backend/engines/shadow_variants.py`，生产未切）：市场三因子退出加权和 + 参考权重成对下移（影子侧 8.3 → 6.0；只清权重不改 ref 会让 `scale=total/ref` 掉到 6.0/8.3=0.72（源码注释里的 0.78 是「只清市场三因子」那一步），等于把门槛一起缩 28%）+ 趋势改乘性位（只收 short/mid/accel，先查 `data_valid`）+ 单簇权重上限（默认 35%×8.3≈2.905，当前动量簇 2.9 不触发，是后续配权的护栏）+ 覆盖率折算门槛 + 五档只渲染措辞。覆盖率低于 `shadow_2c_min_coverage` 时影子方向记 **`skip`**（"新口径本轮不落库"，不洗成观望）。4 个参数在后端归到「影子口径2C」分组，越界自动钳位并在 `shadow_detail.params_clamped` 留痕。⚠️ **已知缺口**：前端 `QualityConfig.tsx` 的 `CATEGORY_ORDER` 只列了 9 组，这一组渲染不出来（不在清单里的分类会被分组逻辑丢掉），当前只能经 `quality_filter_config` JSON 改。
@@ -167,6 +168,8 @@ npm run dev   # http://localhost:5173（API 默认代理到 8000）
 
 # 测试与构建（CI 闸门跑的就是这两条）
 PYTHONPATH=. python -m pytest -q
+TZ=UTC python3 -m pytest -q          # 本机回归必须再按 UTC 跑一遍：runner 是 UTC，
+                                     # 东八区本机跑绿 ≠ CI 绿（时间断言要与落库时钟同源）
 cd frontend && npx tsc --noEmit && npm run build
 ```
 
@@ -245,7 +248,7 @@ cd frontend && npx tsc --noEmit && npm run build
 - **推送渠道**：/push 配置飞书机器人 Webhook（支持签名密钥），多渠道可选。
 - **数据源连通性**：/system 一键测试东财系列域名 + AI API 可达性。
 - **数据源运行时健康**：/system 上方卡片显示当前哪些源在冷却（剩余秒数）、调度器哪个计划已触发当日熔断、各缓存的新鲜度与 TTL —— 全部读自进程内存，**零网络请求**（`GET /api/system/data-source-health`）。排查"仪表盘一片空"先看这里，不要反复点连通性测试去捅正在冷却的源。
-- **质量过滤**：/quality-config 48 个数值参数分 10 组（前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值调节、持有期与赎回费、固定偏置、影子口径2C，含场外申购降级开关 `otc_pause_veto_buy`），改动下次分析生效；`threshold_ref_total_weight` 配置后买卖阈值随因子总权重等比折算（本库已配 8.3，边界锚定当前口径）。两类不在页面上渲染的值需经 `quality_filter_config` JSON 覆盖：list 型（如赎回费阶梯 `redemption_fee_ladder`）、以及「影子口径2C」那一组 4 参数（前端 `CATEGORY_ORDER` 只列了 9 组，这是已知缺口）。
+- **质量过滤**：/quality-config 49 个数值参数分 10 组（前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值调节、持有期与赎回费、固定偏置、影子口径2C，含场外申购降级开关 `otc_pause_veto_buy` 与市场三因子适用范围开关 `market_factors_a_share_only`），改动下次分析生效；`threshold_ref_total_weight` 配置后买卖阈值随因子总权重等比折算（本库已配 8.3，边界锚定当前口径）。三类不在页面上渲染的值需经 `quality_filter_config` JSON 覆盖：list 型（赎回费阶梯回滚键 `redemption_fee_ladder`）、dict 型（分档阶梯 `redemption_fee_ladders`，渲染入口只接受 `isinstance(default_val, (int, float))` 的键）、以及「影子口径2C」那一组 4 参数（前端 `CATEGORY_ORDER` 只列了 9 组，这是已知缺口）。
 
 ---
 
@@ -253,7 +256,7 @@ cd frontend && npx tsc --noEmit && npm run build
 
 ### 默认因子集（11 个，总权重 8.3，评分钳位 ±8.5）
 
-自研基金因子（7 个，基于基金净值序列）+ 市场环境因子（3 个，全池共享 MarketRegimeService 快照）+ MACD。
+自研基金因子（7 个，基于基金净值序列）+ 市场环境因子（3 个，共享 MarketRegimeService 快照；**只对 A 股标的表态**，见下）+ MACD。
 
 | # | 因子 | code | 权重 | 标准化 | 数据/公式 |
 |---|------|------|------|--------|----------|
@@ -270,6 +273,18 @@ cd frontend && npx tsc --noEmit && npm run build
 | 11 | 资金面 | market_fund_flow | 0.5 | 无（规则） | 两融余额 7 日变化率 |
 
 每因子评分 -1.0 ~ +1.0，加权求和。市场因子快照缺失时降级中性 0 分。
+
+**市场三因子只给 A 股标的打分**（Q15）：#9–#11 读的是 A 股环境（沪深300 PE 分位、全市场涨跌家数比、两融余额变化），
+合计 1.8/8.3 ≈ **22% 权重**。此前它们对纳指 QDII、美元债、黄金 ETF 同样加分或减分 —— 用 A 股天气给海外基金打分，
+既进不了选股逻辑又会把总分拽离该标的的真实驱动。现在 `market_factors_a_share_only=1`（默认）时，非 A 股标的
+（`fund_asset_class.classify_asset` 判为 overseas/bond/commodity/money_market）这三个因子记
+`data_valid=False` + score 0，**不加分也不减分**：
+- 用"不表态"而不是"跳过因子"，是因为 `total_weight` 由因子配置的 weight 直接求和（与 `data_valid` 无关）⇒
+  `scale = total_weight / threshold_ref_total_weight` 这把尺子不随基金类型漂移，买卖阈值仍锚定 8.3 口径；
+- 代价体现在 `factor_coverage`（有效权重和/总权重）上 —— 海外标的约 0.78，仪表盘与分歧报表据此提示"该只基金只有这些因子在说话"；
+- 三者 `normalization="none"` 必须保持：截面 Z-score 会把"全池同分"重算成 0 或 NaN，那样就分不清"不表态"和"中性"；
+- 回滚：`quality_filter_config` 里置 `market_factors_a_share_only: 0` ⇒ 全池共用（旧行为）。缺资产类别标记（`asset_class` 为空）
+  的基金按"适用"处理，即改造前行为。
 
 **17 个计算函数里只有 7 个真的读 `signal_rules`**：默认 11 因子中是 4 个 —— #4 `drawdown_recovery` 与 #9–#11 三个市场因子
 （映射写在 DB 里，可在因子页编辑）；扩展因子里是 `price_percentile` / `fed_model` / `momentum_6m` 三个。
@@ -367,7 +382,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/funds/realtime` | GET | 实时净值预估（场外 fundgz/持仓自算，场内 ETF 行情；force 跳过缓存） |
 | `/api/funds/export` | GET | 基金池导出 JSON（与 import 配套迁移/备份） |
 | `/api/funds/extended-detail` | GET | 基金扩展详情（累计收益走势 / 规模变动 / 持有人结构 / 资产配置，仅活跃基金） |
-| `/api/funds/etf-scan` | GET | 全市场 ETF 扫描三榜单（量价齐升/资金流入/换手异动，交叉标注已持有） |
+| `/api/funds/etf-scan` | GET | 全市场 ETF 扫描三榜单（量价齐升/资金流入/换手异动，交叉标注已持有）。返回体自带空原因字段：`enabled`/`reason`（开关关闭）、`error`（快照不可用，含熔断源与剩余秒数）、`snapshot_rows`/`skipped_no_fields`（收到多少行、多少行因缺场内量价字段未参与排名） |
 | `/api/funds/holding-overlap` | GET | 重仓股重叠度排行（基金 PK 页抱团识别） |
 | `/api/funds/xray` | GET | 组合 X 光：个股穿透 HHI / 两两 Jaccard 重叠 / 经理公司集中度 / 多样化评分 |
 | `/api/funds/concept-map/*` | GET/POST/DELETE | 概念板块成分映射：progress 进度 / import 起步数据 / fetch 手动抓取 / export 导出 / 清空 |
@@ -381,8 +396,8 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/analysis/market-regime` | GET | 市场环境快照（PE 分位 / 涨跌家数比 / 两融 7 日变化） |
 | `/api/analysis/compare` | GET | 基金 PK（2~10 只：双窗口年化/回撤/夏普 + Beta/Alpha/信息比率 + 规模与机构占比） |
 | `/api/analysis/advice-eval` | POST | 回填到期建议的实际表现并尝试阈值校准（每周六 01:00 自动跑，无到期样本时 0 请求；这里的手动入口同一条链） |
-| `/api/analysis/advice-stats` | GET | 建议命中率与阈值校准状态（`by_mode` 里 `abs`/`excess` 双口径并存，历史两列都已在库） |
-| `/api/analysis/advice-hit-mode` | GET/PUT | 命中口径读写：`excess`=相对沪深300超额（默认）/ `abs`=绝对涨跌旧口径（Q7 回滚键，只影响此后回填） |
+| `/api/analysis/advice-stats` | GET | 建议命中率与阈值校准状态（`by_mode` 里 `abs`/`excess` 双口径并存，历史两列都已在库；`by_kind` 拆出与沪深300 可比 / 仅绝对涨跌两只分母，Q15） |
+| `/api/analysis/advice-hit-mode` | GET/PUT | 命中口径读写：`excess`=相对沪深300超额（默认）/ `abs`=绝对涨跌旧口径（Q7 回滚键，只影响此后回填；QDII/债券/商品的 `benchmark_kind=abs` 由代码档位单独决定，不受该开关影响） |
 | `/api/backtest/{id}` | GET | 信号回测（含有效性评分） |
 | `/api/factors` | GET/POST | 因子列表 / 新建；配套 `/api/factors/{id}` PUT 编辑 / DELETE 删除（两者对不存在的 id 一律 404。删除**不校验权重**：直接删掉一个还带权重的 active 因子会让总权重从 8.3 往下掉，而阈值按 `total_weight / threshold_ref_total_weight` 等比折算 ⇒ 门槛跟着缩，等于变相放宽信号。要下线一个因子先把权重置 0 或停用（加权只读 `status="active"` 的因子，停用即置 `disabled`） |
 | `/api/factors/export` | GET | 因子导出 JSON |
@@ -416,7 +431,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 | `/api/schedules` | GET/POST | 调度计划列表 / 新建；配套 `/api/schedules/{id}` PUT/DELETE |
 | `/api/system` | GET/PUT | 系统配置（AI 开关、模型、API Key） |
 | `/api/system/scoring-config` | GET/PUT | 评分阈值配置 |
-| `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（**API 元数据** 48 个数值参数分 10 组：前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值、持有期与赎回费、固定偏置、影子口径2C；含场外申购降级开关。页面按 `CATEGORY_ORDER` 只渲染 9 组，「影子口径2C」与 list 型键如 `redemption_fee_ladder` 都不在页面上，需经 `quality_filter_config` JSON 覆盖） |
+| `/api/system/quality-config` | GET/PUT | 质量过滤参数配置（**API 元数据** 49 个数值参数分 10 组：前置否决棺材钉/心电图/清盘、净值新鲜度、因子修正、动态阈值、市场环境阈值、持有期与赎回费、固定偏置、影子口径2C；含场外申购降级开关与市场三因子适用范围开关 `market_factors_a_share_only`。页面按 `CATEGORY_ORDER` 只渲染 9 组，「影子口径2C」与非数值型键（list 型 `redemption_fee_ladder`、dict 型 `redemption_fee_ladders`）都不在页面上，需经 `quality_filter_config` JSON 覆盖） |
 | `/api/system/error-logs` | GET/DELETE | 错误日志查询（分类/模块筛选）/ 清空；配套 `/error-logs/count` 未读徽标、`/error-logs/download` 下载、`POST /error-logs` 前端异常上报 |
 | `/api/system/feature-flags` | GET/PUT | 提示功能开关（「场内提示与扫描」「场外提示与高低估」，关闭即停发对应数据源请求） |
 | `/api/system/index-valuations` | GET | 宽基指数高低估分位卡片（该指数 PE 在乐咕**月频全历史序列**的分位 + 样本月点数；`?force=true` 突破 1h 缓存）；配套 `/api/system/market-temperature` GET 中证800 市场温度计（PE+PB 滚动 10 年分位 → 参考权益仓位 + 五档行动参考 + 分档历史证据，同样 `?force=`，**只读展示用，不产出基金级信号**） |
@@ -477,7 +492,7 @@ Skill 是一段可启停的**系统提示词扩展包**，用于给 AI 对话注
 - AI API 基础 URL（`ai_base_url`）
 - 系统设置页提供可视化配置卡片，支持预设模型快速切换
 - 评分阈值（`scoring_thresholds`，五档对称阈值 JSON，末档 heavy_sell 为 catch-all `min_score=-8.5`，对齐钳位下界；旧值 -6.4 由启动迁移自动归一）
-- 质量过滤参数（`quality_filter_config`，48 个数值参数覆盖 10 组：棺材钉 / 心电图 / 清盘 / 净值新鲜度 / 因子修正 / 动态阈值 / 市场环境阈值 / 持有期与赎回费 / 固定偏置 / 影子口径2C；list 型的 `redemption_fee_ladder` 也在这一份 JSON 里覆盖）
+- 质量过滤参数（`quality_filter_config`，49 个数值参数覆盖 10 组：棺材钉 / 心电图 / 清盘 / 净值新鲜度 / 因子修正 / 动态阈值 / 市场环境阈值 / 持有期与赎回费 / 固定偏置 / 影子口径2C；非数值键同样在这份 JSON 里覆盖：list 型回滚键 `redemption_fee_ladder`、dict 型分档阶梯 `redemption_fee_ladders`）
 - ⚠️ **关键约束**：`quality_filter_config.base_sell_threshold` 必须等于五档阈值的中性下界 **-1.5**（对应「适度减仓 / 卖出」）。若写成 `-3.0`，`(-3.0, -1.5]` 整个区间会被错归「观望」，导致**永久不出现卖出信号**。当前配置：`{"base_buy_threshold": 1.5, "base_sell_threshold": -1.5, "threshold_ref_total_weight": 8.3}`（参考总权重配置后，买卖阈值随 active 因子总权重等比折算，调权重不再平移边界；详见文末「修复记录」）。
 - 调休/节假日同步配置（键名 → 默认值）：
   - `holiday_sync_url` → `https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json`（数据源地址，`{year}` 占位符在抓取时替换为年份；可选 timor.tech 等兼容格式）
@@ -562,6 +577,12 @@ arm64 镜像直接构建失败 —— 别把它当"精简镜像"清理掉。
     （"全 None + 刚刚更新"会让故障伪装成数据已最新）
 14. **缺数据必须可区分**：因子 `data_valid=False`（数据不足取的中性 0）从计算一路透传到落库 JSON、schema、报告、AI/Skill 上下文与推送；
     市场环境的估值分位随 `valuation_sample_points` 一起出，否则两个 0.4 不是同一个置信度
+15. **防封禁白名单跟着上游主机走**：`eastmoney_patch._TARGET_DOMAINS` 决定哪些请求获得 UA 轮换 / `nid18` Cookie / Referer / 抖动 / 兜底超时。
+    akshare 的接口散在 push2、push2his、**push2delay**、datacenter(-web)、api.fund、fundf10 等多个主机上，**接一条新 akshare 接口就要核对它实际打的主机在不在名单里** ——
+    漏配不报错，只会静默裸 UA 直连，被 RST 后表现为"该功能恒空"。同一主机名同步进 `connectivity_service.TARGETS`，否则连通性诊断看不到这一路。
+    推论：**任何对上游的手工探测必须走应用内已打补丁的链路**，`curl`/裸 `requests` 探测会把探测机自己打进黑名单
+16. **空结果要能自证原因**：任何"0 条"端点都得把 *为什么是 0* 放进返回体（关闭→`reason`、源不可用→`error` 带熔断源与剩余秒数、
+    收到但无字段→`snapshot_rows`/`skipped_no_fields`），前端逐态渲染。同形的空态会把"功能被关"读成"策略没选出东西"
 
 ---
 
@@ -914,3 +935,167 @@ arm64 镜像直接构建失败 —— 别把它当"精简镜像"清理掉。
   13:13 重启后 **CBOE 真实取数失败一次** —— 卡片自动显示"VIX 缺数（境外源失败，已降级为只报趋势）"、
   趋势与本月动作照常下发，降级路径在真实故障下也验过（VIX 单独 try ⇒ 不设 120s 冷却，缓存到期或 `?force` 重取时自动恢复）；
   面板走缓存复用（第二次取数时刻 `13:09:08` 未变 ⇒ 本轮 **0 新增上游请求**）。
+
+---
+
+## 修复记录（2026-10-17 第五轮全量审查：三处把「A 股口径」套到所有基金上）
+
+第五轮审查（框架 / 逻辑 / 功能模块 / 策略 / 代码质量，项目同时管 A 股与美股基金）**没有框架级 P0**，
+落地的三项来自同一个从未被检验的隐含假设 —— **库里的基金都是 A 股股权类**。按用户裁定的顺序实施（#1 赎回费 → #2 基准 → #3 市场因子），
+全部改完再统一测试。
+
+- **单一真相 `backend/utils/fund_asset_class.py`**（新增，**零上游请求**：只用库里已有的名称/官方类型/标签/代码文本）：
+  `classify_asset(name, fund_type_official, tags, code)` 判序 **货币 → 商品 → `96` 前缀互认 → 海外关键词 → 债券 → 回落 A 股股权类**，
+  对外只给五个出口：`a_share_market_proxy`（#3 市场三因子是否适用）、`hs300_comparable` / `benchmark_kind`（#2 基准是否可比）、
+  `fee_profile` / `share_class`（#1 费率取哪一档）。三件事共用一份判据，否则"什么算 A 股股权类"会在质量过滤、命中率、赎回费里各写一套。
+  两条踩过的坑写在源码里：**`tags` 只辅助货币/商品，不参与海外判定**（标签是"持仓暴露"，池内 6 只 `混合型-偏股` 因"含港股/QDII跨境"
+  被误判成海外，白占 QDII 档费率并退出 A 股因子，而官方类型才是资产类别真相）；**商品判在债券之前**（黄金 ETF 的官方类型是 `指数型-其他`，
+  而 `债券型-混合二级` 必须走债基阶梯）。识别不出来一律回落 `a_share_equity` = 改造前行为 —— 宁可保留旧行为，也不让信号无声漂移。
+- **池内现状**（本地开发库 57 只 active 实查，纯 SQL）：A 股股权 47 / 海外 6 / 商品 3 / 债券 1 ⇒ **10 只（17.5%）**此前同时被
+  套着 A 股基准、A 股市场因子与权益 A 类赎回费；费率档位落点：场内 7 / 权益 C 27 / 权益 A 18 / QDII 4 / 债券 C 1。
+
+### #1 赎回费阶梯按份额档位分档（原来全池一条 `[[7,1.5],[365,0.5],[∞,0.25]]`）
+
+- **7 档阶梯**（`backend/ai/holding_fee.py:DEFAULT_FEE_LADDERS`，可在 `quality_filter_config.redemption_fee_ladders` 覆盖）：
+  场内份额与货币基金 **全持有期 0%**；债券型 `<7天 1.5% / <30天 0.5% / ≥30天 0.1%`；债券C 与 权益C `<7天 1.5% / <30天 0.5% / ≥30天 0%`；
+  QDII/海外 与 权益A 沿用 `[[7,1.5],[365,0.5],[∞,0.25]]`。
+- **误判在哪**：惩罚闸门是"适用费率 ≥ `redemption_fee_penalize_pct` ⇒ 卖出降级为观望"。默认 1.0% 时，**场内 ETF 持有 3 天被按 1.5% 赎回费拦人**
+  （它根本没有赎回费，只有券商佣金）；而一旦把惩罚档配到 0.5%/0.25%，债券与 C 类满 30 天的份额也被按不存在的费率拦下并给出"再等 N 日出档"。
+- **0 费不是"没数据"**：0 费档走 `ZERO_FEE_NOTES` 点名原因（`场内份额：卖出不产生基金赎回费（只有券商佣金，未计入）` / `货币基金：赎回免费率`），
+  工单每行带 `fee_profile` + `fee_profile_label`（持仓 chip 显示「赎回费按『债券C类』档算」），阶梯全文由后端 `ladders_text` 生成
+  （同值档位合并点名），**前端不复制口径字符串**，避免两处翻译漂移。
+- **回滚**：`redemption_fee_enabled=0` 整段撤掉（工单逐字回到 Q10 旧样子）；`redemption_fee_ladder` 写成单条列表 ⇒ 全档共用同一条 = 改造前行为；
+  无真实持仓（等权近似）或 `fund=None` 回落 `equity` 档，未填首买日仍显示"持有期未知，未做赎回费约束"。
+
+### #2 命中率与复盘的沪深300 基准只在可比域用
+
+- `advice_log` 新增 `benchmark_kind`，在**落库那一刻**由同库 `funds` 表文本判据锁死（`hs300_excess` / `abs`）—— 口径跟着当时的资产类别走，
+  事后改基金池或标签不会重写历史样本的判定依据。海外/债券/商品/货币记 `abs`。
+- **不可比样本的 `benchmark_change_pct` 与 `hit_excess` 一律留 NULL，不写 0**：写 0 等于"与 0% 比"，那会把一只美元债基的命中判成 A 股牛市的函数。
+  而 `stats()` 的分侧计数本来就排除 NULL ⇒ **超额分母自动只剩可比样本，`calibrate()` 零改动继承这个过滤**，不需要新增特判。
+  `record_outcome` 的 `comparable = kind != abs and bench_change is not None` 同样守住"拿不到基准也不写错值"（缺基准时退化成绝对口径，不是"与 0 比"）。
+- **回填与展示**：`abs` 样本回填时不再取基准序列（省一次共享缓存的读）；`GET /api/analysis/advice-stats` 加 `by_kind`
+  （`hs300_comparable` / `abs_only`），手动回填返回 `abs_only_evaluated`，持仓页据此显示两个分母而不是让用户猜命中率是拿什么算的。
+- **复盘链同步**（Q11 的超额口径）：`_signal_hit_stats` 跳过 `abs` 样本并计 `excess["abs_only_skipped"]`，摘要点名
+  「另有 N 只与沪深300 不可比（海外/债券/商品）未计入该分母 —— 绝对口径量的是市场方向（beta），这一行才量得出选基能力」，
+  明细基准列 `abs` → 「仅绝对涨跌」（旧行 `NULL` → `—`）。
+- **零成本窗口**：改造前 `advice_log` 为 **0 行**，不需要迁移历史；`benchmark_kind IS NULL` = 改造前的行 = 按可比处理（回滚语义与 `advice_hit_mode` 一致，
+  两个开关互不覆盖：`advice_hit_mode` 只管"校准用哪一列"，QDII/债券走 `abs` 由代码档位决定）。
+
+### #3 市场三因子只给 A 股标的表态
+
+- 三因子（大盘估值分位 0.8 + 市场情绪 0.5 + 资金面 0.5）读的是**A 股体温**，合计 **1.8/8.3 ≈ 22% 权重**，足以翻转阈值边缘的信号；
+  此前对纳指 QDII、美元债、黄金 ETF 同样加减分。现在 `market_factors_a_share_only=1`（默认）时，非 A 股标的在
+  `calculate_market_valuation / calculate_market_sentiment / calculate_market_fund_flow` 首行早退，记 **`data_valid=False` + 0 分**。
+- **用"不表态"而不是"跳过因子"**：`total_weight` 由因子配置的 weight 直接求和、与 `data_valid` 无关 ⇒
+  `scale = total_weight / threshold_ref_total_weight` 这把尺子不因某只基金退出市场择时而漂移（买卖阈值仍锚定 8.3 口径）；
+  代价如实反映在 `factor_coverage`（海外标的 ≈ 6.5/8.3 = 0.78）。三者 `normalization="none"` 必须保持：截面 Z-score 会把"全池同分"重算掉，
+  那就分不清"不表态"和"中性"了。**生产权重与阈值一个都没动。**
+- 开关由 `analysis_service._inject_regime_params` 经 `params["_market_factors_a_share_only"]` 注入，资产类别标记由
+  `_tag_asset_class(fund, fd)` 在两条取数路径上打（并发批处理 + 流式各一处）；**缺键/缺标记一律按适用**（外部直调因子、历史数据 = 改造前行为）。
+- 回滚：`quality_filter_config` 置 `market_factors_a_share_only: 0` ⇒ 全池共用。与 2C 影子口径不冲突：`caliber_2c` 是"市场三因子对**所有**基金退出加权和"（影子侧，ref 成对下移 8.3→6.0），
+  #3 是"生产侧对**非 A 股**标的不表态（权重仍在分母）"，两件事并存、不互相抵消。
+
+### 回归与取证
+
+- **上游成本 0 新增请求**（三项判据只用库内 `funds` 表文本与既有 `MarketRegimeSnapshot`），并写成静态测试 `test_no_upstream_requests_added` 守住；
+  未放宽任何限流 / jitter / 退避 / 冷却 / 熔断参数。
+- `TZ=UTC python3 -m pytest -q` **956 passed**（837 → +119：新增 `tests/test_asset_class_calibers.py` 119 例，A 池内真实文本快照 /
+  B 阶梯解析与渲染 / C `_fee_policy`+`_fee_gate` 九种情形 / D 基准口径落库与回填、`calibrate` 不受不可比样本影响、存量库加列迁移 /
+  E 市场因子 gate 与阈值折算 / F 复盘跳过与披露 / G 源码接线计数 + 零上游请求），`tsc --noEmit` 干净，`npm run build` ✓。
+- 两处既有断言按新口径同步：`tests/test_advice_hit_mode.py` 的 `record_outcome` 返回值增 `benchmark_kind`；
+  `tests/test_positions_rebalance.py` 的阶梯文案改成合并点名后的多档文本。
+- 质量过滤参数 48 → **49 个数值参数**（新增 `market_factors_a_share_only`，归「市场环境阈值」组，后端 `PARAM_META` 仍 10 组）；
+  `redemption_fee_ladders` 是 dict、`redemption_fee_ladder` 是 list，都不在配置页渲染，需经 `quality_filter_config` JSON 覆盖。
+  实查 `/quality-config` 页面只渲染 **45** 个数值输入：「影子口径2C」组的 4 项不在前端 `CATEGORY_ORDER` 里（待裁定），其余 9 组全在。
+
+**实跑（不是单测）暴露并已修掉的两处** —— 都属于"新库/干净临时库看不见，存量库或空数据才炸"这一类：
+
+- **存量库迁移写错表**：`advice_learning_service._init` 原先把两张表的加列一起 `ALTER TABLE advice_outcomes`，
+  于是**新建库**（`_SCHEMA` 直接建齐）一切正常，只有**存量库**在 `stats()` 里炸 `no such column: a.benchmark_kind`
+  → `GET /api/analysis/advice-stats` 500。现改为 `_MIGRATIONS` 按表配对（`advice_outcomes` 补 `hit_abs/hit_excess`，
+  `advice_log` 补 `benchmark_kind`），且 `ALTER` 失败时先查 `PRAGMA table_info` 确认列真不在才继续吞掉异常 —— 别把 SQL 错误咽成"已存在"。
+  回归用 `TestLegacyDbMigration`（构造改造前的老 schema）钉住：返回的加列集合、幂等、per-table 反向断言、迁移后 `stats()` 可用。
+- **空分析窗口把"没算过"渲染成"约束已关闭"**：`RebalanceService.analyze()` 里 `fee_policy` 原先算在早退之后，
+  近 30 天无分析记录时返回 `fee_policy: {}`，前端那一行显示"赎回费约束已关闭（redemption_fee_enabled=0）"—— 假的口径宣称。
+  费用阶梯量的是**配置**而不是这一轮有没有记录，故把 `self._fee_policy(...)` 上移到所有早退之前（并删掉后面重复计算的那次），
+  前端守卫同时改成 `rb?.fee_policy?.ladders`：拿不到阶梯就整行不显示，而不是显示"已关闭"。
+  `tests/test_positions_rebalance.py::test_no_analysis_rows` 补断言 `fee_policy["enabled"] is True` 且 `ladders` 非空。
+
+**浏览器实测取证**（dev server :5173 + uvicorn :8000，`/positions` → 「调仓建议」，信号窗口 120 天取真实库数据）：
+
+- 工单头部渲染 `赎回费按份额档位分列（7 档），≥1% 降级观望`，其 Tooltip 逐字给出七档阶梯 + 三个参数名（`redemption_fee_ladders` /
+  `redemption_fee_penalize_pct` / `redemption_fee_enabled=0` 回滚路径）；持仓 chip 的 Tooltip 由后端 `fee_profile_label` 同源渲染：
+  013149 → `持有期未知｜赎回费按「债券C类」档算`、162719 → `…「权益A类」档算`（道琼斯石油按"商品优先于海外"落商品类，商品场外沿用权益 A 阶梯，与 QDII 档数值相同）。
+- 卖出行的费用降级文案、`按份额档位`工单原文段、以及命中率卡「另有 N 条基准不可比（海外/债券/商品），未计入超额分母」这一行，
+  因 `advice_log` 现为 0 行、真实样本还不足以触发，改用**打桩响应**验证前端契约渲染（其余字段仍走真实端点）。
+- 控制台只剩两条既有 React Router future-flag 警告与一条 `validateDOMNesting`（`ListCard` 里 Chip 落在 Typography 的 `<p>` 内，
+  `9d0c5e1a` 起就有，不属本轮改动）；本轮未新增错误。
+
+---
+
+## 修复记录（2026-10-17 续：潜力 ETF 扫描恒「0 条数据」—— 三层根因）
+
+用户报告：`/etf-scan` 打开就是「扫描全市场 0 只 ETF」＋「当前无符合条件的 ETF」，看不出是没选出来还是没数据。
+排查结论是**三件事叠在一起**，而页面把它们渲染成了同一个样子。
+
+### 根因一：功能开关本身是关的（配置直因，不是代码 bug）
+
+`system_config.etf_hints_enabled = "false"`（开发库该行写入于 2026-09-24，生产同样为 false），
+端点第一行短路。唯一写入者是 `PUT /api/system/feature-flags`（系统设置页「场内提示与扫描」）。
+**但短路返回体里一个说明字段都没有**：`{"enabled": false, "scanned": 0, "movers": [], ...}`，
+而前端 `ETFScanPage.tsx` 从来只读 `scanned/movers/inflow/unusual/error`，**从不读 `enabled`** —— 于是"功能被关"被渲染成"策略没选出东西"。
+
+### 根因二：三态同形的可观测性缺陷
+
+开关关闭 / 快照不可用 / 真无符合条件三种完全不同的状态共用一套空表格文案；
+且熔断态错误文案写死「约 10 分钟后自动恢复」，与真实冷却（按源各自 600s、每次失败续期）无关。
+
+### 根因三：akshare 的 ETF 快照域名根本不在防封禁白名单里（把开关打开后仍然 0 的那一层）
+
+- 现场：开关置 true 后 `scanned=0`，`error="ETF 全市场快照不可用"`，`/api/system/data-source-health` 显示 `realtime.eastmoney` 在冷却；
+- 链路事实：本仓锁定的 akshare 1.18.63 里，`fund_etf_spot_em` 打的是 **`push2delay.eastmoney.com/api/qt/clist/get`**
+  （`akshare/fund/fund_etf_em.py:51`），经 `fetch_paginated_data`（`akshare/utils/func.py:18`，`pz=100` 分页、页间 `random.uniform(0.5,1.5)` 睡眠）
+  → `session.get(url, params=params, timeout=timeout)`（`akshare/utils/request.py:52`）**不带任何 headers**
+  ⇒ 出网 UA 是裸 `python-requests/2.x`；
+- 而 `backend/patch/eastmoney_patch.py` 的 `_TARGET_DOMAINS` 历史上只列了 fund / fundf10 / api.fund / push2 / push2his / datacenter(-web)，
+  **没有 push2delay** ⇒ 那 ~14 个分页请求把 UA 轮换、`nid18` Cookie、0.5~2s 抖动、兜底 20s 超时**整套防封禁措施全绕空**。
+  旧 `error_logs` 里 `akshare.fund_etf_spot_em rate_limit`（2026-10-02 15:38、16:55）就是同一条链路在报警，只是当时没人往域名名单上想；
+- 列映射本身没问题：`f8 换手率 / f10 量比 / f184 主力净流入-净占比 / f402 基金折价率 / f441 IOPV / f297 数据日期`
+  与 `_get_etf_spot()` 读取的中文列名逐一对得上，所以不是"字段解析错导致榜单空"。
+
+### 改动（四处，均为可观测性与域名，不动任何防封禁强度）
+
+1. `_TARGET_DOMAINS` 补 `push2delay.eastmoney.com`（`backend/patch/eastmoney_patch.py:33-36`），
+   并同步进连通性诊断目标 `connectivity_service.TARGETS`（`backend/services/connectivity_service.py:21-23`）——
+   否则"一键连通性测试"永远看不到扫描实际依赖的那一路。
+2. `scan_potential()` 返回值加 `snapshot_rows` / `skipped_no_fields`（`backend/services/etf_signal_service.py:120-194`）：
+   腾讯降级行不含量比/换手，会被 `_row_with_fields` 整批跳过，以前 `scanned=0` 把"收到 1366 行但全无字段"和"根本没收到"混为一谈。
+3. `/api/funds/etf-scan`：关闭态给 `reason`（指向系统设置里的开关名）；不可用态由新增的 `_spot_source_status()`
+   把**正在熔断的源名与剩余秒数**写进 `error`（`backend/routers/fund.py:442-505`）。
+4. 前端按态渲染（`frontend/src/pages/ETFScanPage.tsx:97-190` + `api/fund.ts` 的 `ETFScanResult`）：
+   关闭→橙色提示且不渲染表格；不可用→红色错误 + 「快照不可用，见上方提示」；降级快照→黄色「收到 N 行、其中 M 行缺场内量价字段被跳过」；
+   参与排名但未命中→「当前 N 只参与排名，无一命中该榜量价阈值（不是数据源问题）」。
+
+### 取证
+
+- **单测**（零真实上游请求：`_get_etf_spot` 全部 monkeypatch，关闭态用例把快照入口换成"调用即失败"以锁定短路不发请求）：
+  新增 `tests/test_etf_scan_states.py`（三态返回体 + 计数口径 6 例）、`tests/test_url_safety.py::TestEastmoneyPatchInjection`
+  （3 例：push2delay 命中即注入 Mozilla UA + `nid18` Cookie + 兜底超时；仿冒主机不注入凭据；Referer 只给 fundf10）、
+  `TestEastmoneyHostMatch.test_push2delay_matched`，`tests/test_etf_signal.py` 补降级快照自证例。
+  `TZ=UTC pytest -q` ⇒ **967 passed**；`tsc --noEmit` 与 `npm run build` 均 exit 0。
+- **浏览器实测四态**（vite :5173 + uvicorn :8000，dev server 未停）：① 关闭态只见橙色提示、无 Tabs 无表格；
+  ② 熔断态红字实跑文案「ETF 全市场快照不可用：eastmoney 熔断中（剩余 520 秒）…」；
+  ③ 降级快照态（页面侧 XHR 桩到本地临时端口，桩服务用完即删、未进仓库）显示「收到 1366 行快照，全部缺场内量价字段 → 未参与排名」；
+  ④ 正常榜单态两行数据、`已持有` chip、`加池` 按钮、涨跌幅/换手/量比/成交额格式均无回归。控制台无新增错误。
+- **本轮未能证实的一条（诚实标注）**：今天（2026-10-17 周六）本机对东财 push2/push2delay **全部 `RemoteDisconnected`**——
+  排查过程中用 `curl` 裸探测上游（不经补丁）把开发机自己打进了黑名单，这是应当避免的操作，教训已写进「关键设计原则 15」。
+  因此"补丁生效后东财是否放行 push2delay 分页"**只能等交易日+冷却解除后复验**；应用侧日志显示链路行为正确：
+  `fund_etf_spot_em 疑似被限连 (attempt 1/2) … 跳过重试直接降级（防加重封禁）` → `数据源 [eastmoney] 熔断 600s`，即失败即退，没有重试风暴。
+
+### 交易日复验清单
+
+1. 系统设置 → 功能开关 打开「场内提示与扫描」（**生产库当前仍是 false，属配置变更，需你确认后再动**）；
+2. `/etf-scan` 应 `scanned > 0` 且三榜单有内容；若仍空，看返回体是 `error`（源问题，看熔断剩余秒数）还是 `skipped_no_fields≈snapshot_rows`（拿到的是降级行）；
+3. `/api/system/data-source-health` 与 `/api/funds/etf-scan` 各一次即可，别连续重扫（全市场快照 = ~14 个分页请求，60s 缓存内重复点击只是在烧防封禁预算）。
+

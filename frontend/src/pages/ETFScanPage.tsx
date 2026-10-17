@@ -97,11 +97,30 @@ const ETFScanPage: React.FC = () => {
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {loading && !result && <CircularProgress sx={{ mb: 2 }} />}
 
-      {result && (
+      {/* 三态分离（2026-10-17）：开关关闭 / 快照不可用 / 真无符合条件 —— 此前同形 */}
+      {result && result.enabled === false && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {result.reason ?? '「场内基金提示与扫描」开关处于关闭状态，请到 系统设置 → 功能开关 打开后再扫描。'}
+        </Alert>
+      )}
+
+      {result && result.enabled !== false && (
         <>
-          <Alert severity="info" sx={{ mb: 2 }}>
-            扫描全市场 {result.scanned} 只 ETF（量价特征排名，仅供参考不构成投资建议）；
-            标注「已持有」的在你的基金池中，可一键加入池内。
+          <Alert severity={result.scanned > 0 || error ? 'info' : 'warning'} sx={{ mb: 2 }}>
+            {result.scanned > 0 ? (
+              <>
+                扫描全市场 {result.scanned} 只 ETF（量价特征排名，仅供参考不构成投资建议）；
+                标注「已持有」的在你的基金池中，可一键加入池内。
+              </>
+            ) : error ? (
+              <>快照不可用，见上方提示。</>
+            ) : (
+              <>
+                开关已开但本次无可扫描行情：收到 {result.snapshot_rows ?? 0} 行快照，
+                其中 {result.skipped_no_fields ?? 0} 行缺场内量价字段（非东财全市场源）被跳过。
+                全市场快照需交易日重扫。
+              </>
+            )}
           </Alert>
           <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
             <Tab label={`📈 量价齐升 (${result.movers.length})`} />
@@ -158,7 +177,13 @@ const ETFScanPage: React.FC = () => {
                 ))}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} align="center">当前无符合条件的 ETF</TableCell>
+                    <TableCell colSpan={9} align="center">
+                      {result.scanned > 0
+                        ? `当前 ${result.scanned} 只参与排名，无一命中该榜量价阈值（不是数据源问题）`
+                        : (result.snapshot_rows ?? 0) > 0
+                          ? `收到 ${result.snapshot_rows} 行快照，全部缺场内量价字段 → 未参与排名`
+                          : '本次无可用行情快照，未做任何排名'}
+                    </TableCell>
                   </TableRow>
                 )}
               </TableBody>

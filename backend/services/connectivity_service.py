@@ -18,6 +18,9 @@ TARGETS: list[dict[str, str]] = [
     {"name": "push2.eastmoney.com", "url": "https://push2.eastmoney.com"},
     {"name": "anonflow2.eastmoney.com", "url": "https://anonflow2.eastmoney.com"},
     {"name": "push2his.eastmoney.com", "url": "https://push2his.eastmoney.com"},
+    # 潜力 ETF 扫描（akshare fund_etf_spot_em）的实际域名：2026-10-17 该域不在
+    # 东财补丁白名单导致扫描恒 0，连通性诊断里却没有这一路 → 补上避免再靠猜
+    {"name": "push2delay.eastmoney.com", "url": "https://push2delay.eastmoney.com"},
     {"name": "datacenter-web.eastmoney.com", "url": "https://datacenter-web.eastmoney.com"},
 ]
 

@@ -30,6 +30,10 @@ _TARGET_DOMAINS = [
     "api.fund.eastmoney.com",  # 场外净值降级接口 lsjz — 缺此域则 UA/NID/Referer 全不注入
     "push2.eastmoney.com",
     "push2his.eastmoney.com",
+    # akshare 1.18.63 的 fund_etf_spot_em（全市场 ETF 快照，潜力扫描唯一数据源）
+    # 走 push2delay；缺此域则那 ~14 个分页请求裸 UA + 无 NID + 无抖动，
+    # 恒被 RST → /api/funds/etf-scan 永远 scanned=0（2026-10-17 根因）
+    "push2delay.eastmoney.com",
     "datacenter-web.eastmoney.com",
     "datacenter.eastmoney.com",
 ]

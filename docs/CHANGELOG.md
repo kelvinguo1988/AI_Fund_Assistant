@@ -31,6 +31,76 @@
 - [新功能] `fund_quarterly` 落库链路补齐：「刷新数据」写 pingzhongdata 扩展缓存时同源解析资产配比/规模/持有人结构/申购赎回，按报告期 upsert（规模优先 `Data_fluctuationScale` 亿元→元，内部人份额 = 内部持有比例 × 总份额），生效日期按披露截止（季报 +2 月、半年报/年报 +3 月）取当月首个工作日。此前该表恒空，第零层质量过滤的清盘否决/规模冲击/仓位漂移/机构认可度四项长期按中性处理。零额外网络请求，本地回灌实测 56 只基金 / 361 个报告期
 - [新功能] 场外实时估值改为仓位感知：持仓加权只覆盖股票仓位的一部分，未覆盖的 `R_stock - 覆盖率` 份额按当日指数涨跌补齐（`est_model=position_aware`，R_stock 取最新已生效季报），替代原先"覆盖率<50% 才混合指数"的粗口径；缺季报仓位时回退旧归一法/指数混合，仪表盘 tooltip 同步标注
 
+### 2026-10-17 续：潜力 ETF 扫描恒「0 条数据」— 三层根因（域名白名单 + 空态可观测性）
+
+用户视角只有一个现象："扫出来 0 条"。实际是**配置关 + 返回体同形 + 上游域名不在防封禁白名单**三层叠加，逐条推导见 README「修复记录（2026-10-17 续）」。
+
+- [修复] `eastmoney_patch._TARGET_DOMAINS` 补 `push2delay.eastmoney.com`：本仓锁定的 akshare 1.18.63 里 `fund_etf_spot_em`（全市场 ETF 快照，/etf-scan 的唯一数据源）打的正是这个主机（`akshare/fund/fund_etf_em.py:51` → `utils/func.py:18` → `utils/request.py:52` 的 `session.get(url, params, timeout)`，**完全不传 headers**）。域名不在名单 = 那 ~14 个分页请求把随机 UA / `nid18` Cookie / 抖动 / 兜底超时整套绕空，裸 `python-requests` UA 直连 → 被 RST → 扫描恒 0。旧 `error_logs` 的 `akshare.fund_etf_spot_em rate_limit`（2026-10-02 15:38、16:55）早已报警，只是当时没人往域名名单上想。**域名漏配不抛异常，只表现为功能静默为空**——故新增 `TestEastmoneyPatchInjection`（3 例）把"命中即注入"钉成合约：push2delay 必须拿到 Mozilla UA + `nid18=` + 兜底 timeout，仿冒主机必须拿不到凭据，Referer 只给 fundf10
+- [改进] 同一主机名同步进 `connectivity_service.TARGETS`，让「一键连通性测试」能看到扫描实际依赖的那一路
+- [改进] `/api/funds/etf-scan` 空结果必须自证原因：关闭态新增 `reason`（指向「系统设置 → 功能开关」的具体开关名）；熔断态由新增 `_spot_source_status()` 输出**实际在冷却的源与剩余秒数**（旧文案写死"约 10 分钟后自动恢复"，与按源各自 600s 续期的真实冷却无关）；`scan_potential()` 返回值加 `snapshot_rows` / `skipped_no_fields`，把"收到 1366 行但全是无字段降级行"和"根本没收到快照"分开
+- [改进] `ETFScanPage` 四态分别渲染（此前关闭态/熔断态/降级快照态/真无符合态同形）：橙色提示（且不再渲染 Tabs 与表格）/ 红色错误 / 黄色"收到 N 行、其中 M 行缺场内量价字段被跳过" / "当前 N 只参与排名，无一命中该榜量价阈值（不是数据源问题）"
+- [测试] 新增 `tests/test_etf_scan_states.py`（6 例，含"开关关闭时不得发起全市场快照请求"的调用即失败断言）+ 上述域名注入例 + 降级快照计数例；`TZ=UTC pytest -q` **967 passed**，`tsc --noEmit` 与 `npm run build` exit 0。浏览器实测四态（含页面侧 XHR 桩出降级快照态，临时桩用完即删、未进仓库），控制台无新增错误
+- [注意] **上游放行本身今日未能证实**：2026-10-17 为周六，且排查过程中以 `curl` 裸探测东财 push2/push2delay（不经补丁）把开发机 IP 打进黑名单，全链路 `RemoteDisconnected`。应用侧行为正确（`疑似被限连 (attempt 1/2) … 跳过重试直接降级（防加重封禁）` → `数据源 [eastmoney] 熔断 600s`，无重试风暴）。**待交易日复验**：开关联动后 `/etf-scan` 应 `scanned > 0`；同时确立约定——任何对上游的手工探测必须走应用内已打补丁的链路（README「关键设计原则 15」）
+- [配置] 生产库 `etf_hints_enabled` 仍为 `"false"`，属配置变更、未擅自改动；开发库本轮为取证被置为 true（保持开启）。扫描只在交易日有意义
+
+### 2026-10-17 生产回看（NAS 12 日实数据）：三只代表性回测与运行时缺口
+
+按"只跑 3 只代表性单只回测"的口径取证（每只 1 次上游净值请求，不改生产配置），逐条推导见会话报告，此处记结论。
+
+- [结论] `backtest_fee_pct` 生产生效值反推 ≈0.59%（= 默认 `DEFAULT_ROUND_TRIP_FEE_PCT` 0.6）。004011 策略相对静态半仓的跑输可精确分解为 **≈94% 摩擦成本 / ≈6% 择时**：问题在换手，不在信号方向 ⇒ 动信号之前先动费率与换手假设
+- [发现] **市场三因子是单边卖出压制器**：剔除市场层并按 ±1.5 重分档，216 条记录里 31 条（14.4%）改变信号类别，且全池同分（`normalization="none"`）不携带选基信息；是否让市场层退出"卖出"侧**待裁定**，未擅自改
+- [发现] **估值链路在生产空转**：`market_valuation` 缺 `valuation_percentile` ⇒ 中性 0 + `data_valid=False` ⇒ 动态阈值 216/216 恒 ±1.5；指数估值缓存 age 已达 10.7 天（`otc_hints_enabled` 关闭时端点直接短路，缓存永不刷新）
+- [发现] **命中率闭环 0 样本**：`advice_log` 只能由 `record_advice=True` 写入，生产唯二调用点在调仓 Agent 上下文与 `build_brief_payload`②，而 NAS 只有一条 `analysis_push` 调度 ⇒ 开 `ai_daily_brief` 才能攒样本（有 LLM token 成本，**待授权**）
+- [发现] 截面样本 38→25 只、每日约 16 只基金缺席且无埋点；`pool_size_at=0` 之类是 `Fund.created_at` 口径的**诚实标注**而非串数据（503 行 `fund_id↔fund_code` 一对一零冲突，已核实）
+- [待裁定清单]（均未擅自实施）市场层是否退出卖出侧、`classify_asset` 是否读 `benchmark_text` 归档偏债/固收+、回测费率是否按 `fee_profile` 取档、是否开 `ai_daily_brief`、判据一验收口径是否改用"2C 更保守"、`QualityConfig.tsx` `CATEGORY_ORDER` 补「影子口径2C」组、`013149`/`162719` `first_buy_date` 补录
+
+### 2026-10-17 第五轮全量审查：资产类别三口径（#1 赎回费分档 / #2 基准分域 / #3 市场因子只给 A 股表态）
+
+三项同源于一个从未被检验的隐含假设：**库里的基金都是 A 股股权类**。本地开发库 57 只 active 实查（纯 SQL）：
+A 股股权 47 / 海外 6 / 商品 3 / 债券 1 ⇒ **10 只（17.5%）**同时被套着 A 股基准、A 股市场因子与权益 A 类赎回费。
+裁定与回滚键见 `docs/QUANT_DECISIONS_2026-10.md` §6，逐条推导见 README「修复记录（2026-10-17 第五轮全量审查）」。
+
+- [新功能] `backend/utils/fund_asset_class.py` —— 资产类别判定**唯一真相**（`classify_asset` 判序 货币→商品→`96` 互认→海外关键词→债券→回落 A 股股权类），
+  五个出口：`a_share_market_proxy` / `hs300_comparable` / `benchmark_kind` / `fee_profile` / `share_class`。只用库内名称/官方类型/标签/代码文本，
+  **零上游请求**。踩坑记录在源码：`tags` 只辅助货币/商品、**不参与海外判定**（池内 6 只 `混合型-偏股` 因"含港股/QDII跨境"标签被误判海外）；
+  商品判在债券之前（黄金 ETF 官方类型是 `指数型-其他`）。识别不出来一律回落 A 股股权类 = 改造前行为
+- [修复] **#1 赎回费阶梯按份额档位分 7 档**（`holding_fee.DEFAULT_FEE_LADDERS`：场内/货币全期 0%、债券 `<7 1.5 / <30 0.5 / ≥30 0.1`、
+  债券C 与 权益C `<7 1.5 / <30 0.5 / ≥30 0`、QDII 与 权益A 沿用 `[[7,1.5],[365,0.5],[∞,0.25]]`）。旧口径把权益 A 阶梯套给全池，
+  惩罚闸门（`redemption_fee_penalize_pct`）于是会**把可执行的卖出误降级成观望**：默认 1.0% 时场内 ETF 持有 3 天被按不存在的 1.5% 赎回费拦人，
+  配到 0.5%/0.25% 时债券与 C 类满 30 天的份额也被拦并给出"再等 N 日出档"。0 费档走 `ZERO_FEE_NOTES` 点名原因（"场内份额卖出只有券商佣金，未计入"），
+  工单每行带 `fee_profile`/`fee_profile_label`，阶梯全文由后端 `ladders_text` 合并同值档位生成，前端不复制口径字符串。
+  回滚：`redemption_fee_enabled=0`（整段撤掉）、`redemption_fee_ladder` 单条列表 = 全档共用（改造前行为）
+- [修复] **#2 超额基准只在可比域用沪深300**：`advice_log` 新增 `benchmark_kind`，落库那一刻由同库 `funds` 表判据锁死；
+  海外/债券/商品/货币记 `abs`，其 `benchmark_change_pct` 与 `hit_excess` **留 NULL 而不是写 0**（写 0 = "与 0% 比"，会把美元债基的命中判成 A 股牛市函数），
+  `stats()` 分侧计数既已排除 NULL ⇒ 超额分母自动只剩可比样本、**`calibrate()` 零改动继承过滤**；`record_outcome` 加
+  `comparable = kind != abs and bench_change is not None` 守卫（缺基准时退化为绝对口径而不是错判）。
+  `advice-stats` 新增 `by_kind`（`hs300_comparable` / `abs_only`）、手动回填返回 `abs_only_evaluated`；`abs` 样本回填不再取基准序列。
+  复盘链同步（Q11）：`_signal_hit_stats` 跳过 `abs` 并计 `excess["abs_only_skipped"]`，摘要点名"另有 N 只与沪深300 不可比…未计入该分母"，
+  明细基准列 `abs`→「仅绝对涨跌」、旧行 `NULL`→`—`。改前 `advice_log` **0 行** ⇒ 无需迁移历史
+- [修复] **#3 市场三因子只给 A 股标的表态**：`market_valuation/market_sentiment/market_fund_flow`（合计 1.8/8.3 ≈ **22% 权重**，足以翻转阈值边缘信号）
+  此前对纳指 QDII、美元债、黄金 ETF 同样按 A 股情绪加减分。现在非 A 股标的在三个函数首行早退，记 `data_valid=False` + 0 分。
+  **用"不表态"而不是"跳过因子"**：`total_weight` 由因子 weight 求和、与 `data_valid` 无关 ⇒ `scale = total_weight / ref` 这把尺子不随基金类型漂移，
+  代价如实落在 `factor_coverage`（海外标的 ≈6.5/8.3=0.78）。三者 `normalization="none"` 必须保持（截面 Z-score 会把"全池同分"重算掉，分不清"不表态"与"中性"）。
+  **生产权重与阈值一个都没动**。开关 `market_factors_a_share_only`（默认 1）由 `analysis_service._inject_regime_params` 注入，
+  资产标记由 `_tag_asset_class` 在并发/流式两条取数路径打；缺键、缺标记、`asset_class=""` 一律按适用 = 改造前行为
+- [修复] **实跑才暴露的两处**（单测用干净临时库，看不见这两类）：
+  ① `advice_learning_service._init` 原先把两张新列一起 `ALTER TABLE advice_outcomes`，新建库由 `_SCHEMA` 直接建齐所以无感，
+  **存量库**在 `stats()` 里炸 `no such column: a.benchmark_kind` → `GET /api/analysis/advice-stats` 500。现改为 `_MIGRATIONS` 按表配对
+  （`advice_outcomes` 补 `hit_abs/hit_excess`、`advice_log` 补 `benchmark_kind`），`ALTER` 冲突时先 `PRAGMA table_info` 复核列真不在才吞异常，
+  否则原样抛出 —— 不把 SQL 错误咽成"已存在"；② `RebalanceService.analyze()` 的 `fee_policy` 原先算在早退之后，30 天内无分析记录时返回
+  `{}`，前端把"没算过"渲染成"赎回费约束已关闭"（假口径宣称）。费用阶梯量的是配置，故上移到所有早退之前并删掉重复计算，
+  前端守卫同步改成 `rb?.fee_policy?.ladders`（拿不到阶梯整行不显示），`test_no_analysis_rows` 补 `enabled is True` + `ladders` 非空断言
+- [改进] 质量过滤**数值参数 48 → 49**（新增 `market_factors_a_share_only`，归「市场环境阈值」组，后端 `PARAM_META` 仍 10 组，
+  实查 `/quality-config` 页渲染 9 组 45 个输入 —— 「影子口径2C」那 4 项不在前端 `CATEGORY_ORDER` 里，待裁定）；
+  `redemption_fee_ladders`（dict）与 `redemption_fee_ladder`（list）都不经 `/api/system/quality-config` 渲染（入口只接受 `int/float`），需 `quality_filter_config` JSON 覆盖；
+  前端 `position.ts`/`PositionsPage.tsx` 只加字段与 chip/tooltip，档位判定全部在后端
+- [测试] 新增 `tests/test_asset_class_calibers.py` **119 例**（A 池内真实文本快照锁口径 / B 阶梯解析与渲染 / C `_fee_policy`+`_fee_gate` 九种情形 /
+  D 基准口径落库、回填、`calibrate` 不受不可比样本影响、NULL 旧行仍按可比、存量库老 schema 的加列迁移 / E 市场因子 gate 双开关与阈值折算 / F 复盘跳过与披露 / G 源码接线计数 + 零上游请求静态检查）；
+  两处既有断言同步（`test_advice_hit_mode` 的 `record_outcome` 返回值加 `benchmark_kind`、`test_positions_rebalance` 的阶梯文案）。
+  `TZ=UTC pytest -q` **956 passed**（837 → +119），`tsc --noEmit` 干净，`npm run build` ✓；未放宽任何限流/jitter/退避/冷却/熔断参数。
+  浏览器实测（`:5173` `/positions` 真实库、窗口 120 天）取到七档阶梯 tooltip、「赎回费按「债券C类」档算」chip 文案与「≥1% 降级观望」口径行；命中率卡的
+  「另有 N 条基准不可比」那行因 `advice_log` 0 行改用打桩响应验证前端契约；控制台仅两条既有 Router future-flag 警告与 `ListCard` 里 Chip-in-`<p>` 的既有 `validateDOMNesting`
+
 ### 2026-10-02 NAS 历史取证：落库自证契约（有效权重随因子分值落库）
 
 **取证结论先说**：NAS 库 287 行历史报告**只能证明自洽，不能证明口径正确**。可验证的部分——`operation_advice` 文案里的（原始/偏置）与 `weighted_score` 逐行一致、方向 vs ±1.5 动态阈值零违反、`signal_strength→equity_ratio` 全对；证明不了的部分——`original_score` / `dynamic_buy_threshold` / `dynamic_sell_threshold` / `quality_warnings` / `pool_size` / `factor_coverage` **287 行全 NULL**（这批 P0 地基列是 2026-09-23 之后才加的，NAS 跑的历史早于它），回测 batch `enabled=false` 且 results 空、建议命中率 evaluated=0，48 项质量配置全部等于代码默认值（生产从未覆盖过）。因此"因子/评分/质量/回测设计和配置值是否正确"目前**没有历史证据**，只能靠新落库的自证字段从下一轮开始积累。

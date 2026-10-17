@@ -125,16 +125,22 @@ def scan_potential(spot_map: dict[str, dict], pool_codes: set[str]) -> dict:
         pool_codes: 基金池内代码集合（交叉标注）
 
     Returns:
-        {movers, inflow, unusual, scanned}
+        {movers, inflow, unusual, scanned, snapshot_rows, skipped_no_fields}
         榜单项含 in_pool 标记与完整场内字段
+
+    scanned=0 的可解释性（2026-10-17）：腾讯降级快照行不含量比/换手等场内字段，
+    会被 _row_with_fields 整批跳过。把"快照收到多少行"和"其中多少行缺字段"
+    分别落进返回值，前端才能区分「源只给了裸行情」与「真的没有符合条件的 ETF」。
     """
     scanned = 0
+    skipped_no_fields = 0
     movers: list[dict] = []
     inflow: list[dict] = []
     unusual: list[dict] = []
 
     for code, row in spot_map.items():
         if not _row_with_fields(row):
+            skipped_no_fields += 1
             continue
         scanned += 1
         pct = row.get("pct")
@@ -180,6 +186,8 @@ def scan_potential(spot_map: dict[str, dict], pool_codes: set[str]) -> dict:
 
     return {
         "scanned": scanned,
+        "snapshot_rows": len(spot_map),
+        "skipped_no_fields": skipped_no_fields,
         "movers": movers[:30],
         "inflow": inflow[:SCAN_INFLOW_TOP],
         "unusual": unusual[:30],

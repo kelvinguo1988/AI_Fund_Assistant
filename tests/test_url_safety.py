@@ -1,6 +1,7 @@
-"""SSRF 防护回归测试 — 连通性/调休同步的 URL 白名单校验"""
+"""SSRF 防护回归测试 — 连通性/调休同步的 URL 白名单校验 + 东财补丁注入合约"""
 
 import pytest
+import requests
 
 from backend.services.connectivity_service import _validate_public_url
 
@@ -159,6 +160,19 @@ class TestEastmoneyHostMatch:
         assert _target_host("https://fund.eastmoney.com/pingzhongdata/004011.js") == "fund.eastmoney.com"
         assert _target_host("https://api.fund.eastmoney.com/f10/lsjz") == "api.fund.eastmoney.com"
 
+    def test_push2delay_matched(self):
+        """akshare 1.18.63 的 fund_etf_spot_em 走 push2delay（潜力扫描唯一源）
+
+        2026-10-17 根因：该域不在 _TARGET_DOMAINS → 那 ~14 个分页请求裸 UA、
+        无 NID、无抖动，恒被 RST，/api/funds/etf-scan 永远 scanned=0。
+        """
+        from backend.patch.eastmoney_patch import _target_host
+        assert _target_host(
+            "https://push2delay.eastmoney.com/api/qt/clist/get"
+        ) == "push2delay.eastmoney.com"
+        # 仿冒主机同样不得命中（域名前缀相邻不构成豁免）
+        assert _target_host("https://push2delay.eastmoney.com.attacker.net/x") is None
+
     def test_case_and_port_normalized(self):
         from backend.patch.eastmoney_patch import _target_host
         assert _target_host("https://FUNDf10.EastMoney.com:443/x") == "fundf10.eastmoney.com"
@@ -177,3 +191,59 @@ class TestEastmoneyHostMatch:
         from backend.patch.eastmoney_patch import _target_host
         assert _target_host("https://localhost/fund.eastmoney.com") is None
         assert _target_host("") is None
+
+
+class TestEastmoneyPatchInjection:
+    """补丁对目标域真正注入防封禁头（零真实网络：original_request 被替换）
+
+    2026-10-17：潜力 ETF 扫描恒 0 数据的根因是 akshare 的 fund_etf_spot_em
+    走 push2delay 且**完全不带 headers**（裸 python-requests UA），
+    而该域不在 _TARGET_DOMAINS → 防封禁链路整体绕空。域名加进去了还不够，
+    这里锁定"命中即注入"这条合约。
+    """
+
+    def _capture(self, monkeypatch, url):
+        from backend.patch import eastmoney_patch as ep
+
+        captured = {}
+
+        def fake_original(self, method, url, **kwargs):
+            captured["method"] = method
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            resp = requests.Response()
+            resp.status_code = 200
+            resp._content = b"{}"
+            return resp
+
+        ep.apply_patch()
+        monkeypatch.setattr(ep, "original_request", fake_original)
+        monkeypatch.setattr(ep, "_get_nid", lambda ua: "TEST-NID-TOKEN")
+        monkeypatch.setattr(ep.time, "sleep", lambda s: None)
+        requests.get(url)
+        return captured
+
+    def test_push2delay_gets_ua_nid_and_timeout(self, monkeypatch):
+        from backend.patch.eastmoney_patch import DEFAULT_REQUEST_TIMEOUT
+
+        cap = self._capture(
+            monkeypatch, "https://push2delay.eastmoney.com/api/qt/clist/get?pn=1&pz=100"
+        )
+        h = cap["kwargs"]["headers"]
+        assert h["User-Agent"].startswith("Mozilla"), "裸 python-requests UA 必被 RST"
+        assert h["Cookie"] == "nid18=TEST-NID-TOKEN"
+        # 无界超时会挂死默认线程池，补丁必须兜底注入
+        assert cap["kwargs"]["timeout"] == DEFAULT_REQUEST_TIMEOUT
+
+    def test_offlist_host_gets_no_credentials(self, monkeypatch):
+        """非白名单域不得注入 UA/NID —— 仿冒主机拿不到令牌"""
+        cap = self._capture(monkeypatch, "https://eastmoney.com.attacker.net/fund.eastmoney.com/x")
+        assert "Cookie" not in cap["kwargs"].get("headers", {})
+
+    def test_referer_only_for_fundf10(self, monkeypatch):
+        cap = self._capture(monkeypatch, "https://push2.eastmoney.com/api/qt/ulist.np/get")
+        assert cap["kwargs"]["headers"].get("Referer") is None
+        cap2 = self._capture(
+            monkeypatch, "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code=510300"
+        )
+        assert "fundf10.eastmoney.com" in cap2["kwargs"]["headers"]["Referer"]
