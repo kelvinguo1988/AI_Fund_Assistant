@@ -30,6 +30,7 @@
 | Q12 | factor_audit：重叠前瞻收益 + IR 未年化 + 无多重比较校正 + 无样本外（§3.7 P2） | **非重叠采样 + IR 年化标注 + Bonferroni 提示** | 否（只影响诊断结论） | 是（诊断表加口径列） | ✅ |
 | Q13 | P3 死配置与口径不一致打包（§3.7 P3） | **一次清扫**：signal_rules 死配置、MACD 文档、两种分位定义、size_stability 量纲、`pb` 字段 | 否 | 是（因子页禁编辑死字段） | ✅ |
 | Q14 | 工程闸门：CI 无一条 `run:`、无 ruff/mypy/eslint/pre-commit（§体检基线） | **先补"测试+构建"两条 job**，再考虑 lint | 否 | 否 | ✅ |
+| Q15 | **（第五轮审查 2026-10-17 追加）** 三处把"A 股口径"套到所有基金：① 全池一条权益 A 类赎回费阶梯（场内 ETF 无赎回费也被拦、债券/C 类满 30 天 0 费被虚报成本）；② 命中率与复盘对 QDII/债券/商品也用沪深300 基准并喂给 `calibrate()`；③ A 股市场三因子（22% 权重）给海外/商品/债基加减分 | **按 `fund_asset_class` 单一真相分域**：#1 阶梯分 7 档 / #2 不可比样本超额列留 NULL / #3 非 A 股标的记 `data_valid=False` 不表态（详见 §6） | 是（非 A 股标的的分数与卖出建议） | 是（持仓工单显示费率档位与基准口径） | ✅ 已裁定、按 #1→#3 顺序开发完成并实跑取证 |
 
 推荐实施顺序：**Q6 → Q7 → Q8 → Q9 → Q10 → Q11 → Q4 → Q1 → Q2 → Q3 → Q5 → Q12 → Q13 → Q14**。
 理由：Q6–Q11 属于"验证口径自身有问题"，先把尺子校准，再调因子（Q1–Q4），否则调参结论
@@ -51,6 +52,7 @@
 | Q12 因子诊断 IC 口径（2D） | ✅ 已开发并回归实测 | `backend/ai/factor_audit.py`：`daily_ic(..., overlapping=False)` 按 horizon 每 h 个有效交易日取一个**非重叠**样本（重叠时 `IR=mean/std` 被自相关放大 ≈√h）；`days`（独立周期数）与 `n_days_valid`（重叠口径原始长度）并存、`sampling` 标注口径；`rank_ic_ir_annualized = IR × √(252/h)`；`t_two_sided_p` / `ic_p_value` 用正则化不完全贝塔函数算双侧 Student-t；`benjamini_hochberg` 对同窗口全因子做多重比较校正 → `rank_ic_q_bh` + `significant`（**实现选 BH 而非 §0 建议的 Bonferroni**：一次审计要同时看 11 个因子 × 多个 horizon，Bonferroni 在真信号弱时会把结论全压成"不显著"，等于没有结论）；`MIN_IC_PERIODS_FOR_CONCLUSION=8` 以下只出过程数字、不出"哪个因子更好"的结论并写进 caveats；`summary_md` 扩到 11 列且口径行随采样模式变化；诊断 Agent 预设任务提示词同步要求引用非重叠周期 / BH q / 年化 IR；**全部在已落库样本上做纯 Python 统计，零上游请求** | `FactorAuditService.audit(overlapping_ic=True)` 回退逐日重叠旧口径（报表会明确标"逐日重叠周期"）；IC 序列零方差时 IR/p/q/significant 一律 None，绝不显示"✓" |
 | Q13 死配置与口径清扫（2D） | ✅ 已开发 | `factor_engine.SIGNAL_RULES_INERT_FACTORS`（10 个计算函数从不读 DB `signal_rules` 的因子，判据可机检：源码不含 `rules_from_params`）+ `signal_rules_effective()`；`calculate_all` 注入规则前先查该表，死配置不再无谓注入；`database._clear_inert_signal_rules()` 启动幂等迁移清掉存量规则数组 + 5 个种子因子的 seed 置 `[]`；`FactorOut.signal_rules_effective` 经 `/api/factors` 透出，因子页对无效因子打「规则不适用」chip 并说明得分来源；`backend/utils/stats.py::percentile_rank_inclusive` 统一分位定义（含当前值；此前 `index_valuation_service` 用严格 `<`、`market_regime_service` 用 `<=`，同一指数两处差 1 个点）；仪表盘分位线与策略极端档**改名并注释为两套不同分区**（`DASHBOARD_PE_LOW/HIGH_PERCENTILE` 30/70 vs `extreme_*_valuation_pct` 0.15/0.85），改一边不影响另一边；MACD 文档删掉从未实现的"放量"档；`size_stability` 文档写明量纲（深交所"基金份额"是份，需 × 最新净值换成元才匹配 2 亿~50 亿档）与**当前未启用**，适配器改为落元序列；删除无人消费且标注错误的 `FundData.pb`（实为 csindex 市盈率2）与 `volume_history` | 纯文档 / 死字段 / 未启用因子，**生产信号零变化**；迁移幂等且只清死配置因子，4 个真读规则的因子（`drawdown_recovery` + 3 个 market）有反向用例保护；回滚 = revert |
 | Q14 CI 工程闸门（2D） | ✅ 已开发 | 新增 `.github/workflows/ci.yml`：`backend-tests`（python 3.9 对齐后端 Dockerfile，`pip install -r backend/requirements.txt`，`PYTHONPATH=.` 跑 `pytest -q`）+ `frontend-build`（node 20 对齐前端 Dockerfile，`npm ci && npm run build`）；此前 `.github/workflows/` 只有 `docker-publish.yml` 且**0 条 `run:`** —— 从未拦过任何东西；测试本身零上游请求、无需 .env，所以 CI 不会撞限流红线；lint / type-check（ruff、mypy、eslint）有意留到 **Q14b**，不与本次功能改动混在一个闸门里 | 删掉该文件即回滚；`tests/test_dead_config.py::TestCiActuallyGates` 断言两条 job 的 `run:` 里确实有 pytest 与 `npm run build`、工具链版本与 Dockerfile 一致，防止再次退化成"看起来有 CI"的纸面配置 |
+| Q15 资产类别三口径（第五轮审查 2026-10-17） | ✅ 已开发、实跑修掉两处存量库缺陷并浏览器实测（#1 赎回费分档 / #2 基准分域 / #3 市场因子只给 A 股表态） | 单一真相 `backend/utils/fund_asset_class.py`（`classify_asset`/`a_share_market_proxy`/`hs300_comparable`/`benchmark_kind`/`fee_profile`/`share_class`，只用库内文本，**零上游请求**）；#1 `holding_fee.DEFAULT_FEE_LADDERS`（7 档）+ `parse_fee_ladders`/`ladders_text`/`ZERO_FEE_NOTES` + `rebalance._fee_profile_of/_fee_policy/_fee_gate`；#2 `advice_log.benchmark_kind`（落库即锁）+ `resolve_benchmark_kind` + `record_outcome` 的 `comparable` 守卫 + `stats()["by_kind"]` + 回填 `abs_only_evaluated` + 复盘 `_signal_hit_stats` 跳过与 `_bench_cell`；#3 `factor_engine._market_proxy_applies/_market_out_of_scope`（三函数首行早退）+ `analysis_service._inject_regime_params`/`_tag_asset_class`；质量过滤 **48→49 个数值参数**（新增 `market_factors_a_share_only`，后端 `PARAM_META` 仍 10 组；配置页实渲染 9 组 45 项，「影子口径2C」4 项待裁定）；`tests/test_asset_class_calibers.py` 119 例。推导与不变量见 §6 | #1 `redemption_fee_enabled=0`（整段撤）或 `redemption_fee_ladder` 写单条列表（全档共用 = 旧行为）；#2 `benchmark_kind IS NULL` = 改造前的行 = 按可比处理（改前 `advice_log` 0 行，无需迁移），`advice_hit_mode` 只管"校准用哪列"、与本项互不覆盖；#3 `market_factors_a_share_only=0` ⇒ 全池共用，params 缺键 / `asset_class=""` 一律按适用 = 旧行为 |
 
 ---
 
@@ -950,6 +952,64 @@ Q12/Q13/Q14 按 §2 建议（诊断口径、死配置清扫、CI 只补 pytest +
 
 **开发顺序不变**：2A 度量（Q6 → Q7 → Q11）→ 2B 防御（Q8 → Q9 → Q10）→ 2C 评分结构（先 §3 影子，达标后 Q2+Q3+Q4+Q1 同批切）→ 2D 卫生（Q5/Q12/Q13/Q14）。
 2A/2B 不改生产买卖信号，可先行开发；2C 必须等影子列与差异报表就位。
+
+## 6. 第五轮全量审查（2026-10-17）：Q15 资产类别三口径
+
+审查范围是"框架 / 逻辑 / 功能模块 / 策略 / 代码质量"，项目同时管 **A 股与美股（含 QDII、商品、债券）**基金。
+结论：**没有框架级 P0**；三项需要修的缺陷同源 —— 代码里有一串隐含假设"**库里的基金都是 A 股股权类**"，
+而它从未被检验。取证（只读 SQL，本地开发库）：57 只 active 中 A 股股权 47 / 海外 6 / 商品 3 / 债券 1
+⇒ **10 只（17.5%）**同时被套着 A 股基准、A 股市场因子与权益 A 类赎回费。
+
+用户裁定：**按建议顺序执行 #1 → #3，全部改完再统一测试**（不边改边测）。三项合并编号 **Q15**（同一份判据、同一批回归）。
+
+### 6.1 裁定与落点
+
+| # | 缺陷（改造前的行为） | 裁定 | 落点 | 回滚键 |
+|---|---|---|---|---|
+| **#1** | 赎回费阶梯全池一条 `[[7,1.5],[365,0.5],[∞,0.25]]`：场内 ETF（只有佣金、无赎回费）持有 3 天被按 1.5% 拦成"观望"；惩罚档配到 0.5%/0.25% 时，满 30 天普遍 0 费的债券/C 类也被拦并给出"再等 N 日出档" | **按份额档位分 7 档**，0 费档不惩罚且文案点名原因（0 费 ≠ 没数据） | `backend/utils/fund_asset_class.fee_profile` + `holding_fee.DEFAULT_FEE_LADDERS`/`parse_fee_ladders`/`ladders_text`/`ZERO_FEE_NOTES`，`rebalance._fee_profile_of/_fee_policy/_fee_gate`；工单每行 `fee_profile`+`fee_profile_label` | `redemption_fee_enabled=0`（整段撤掉，回到 Q10 工单）；`redemption_fee_ladder` 写单条列表 = 全档共用 = 改造前行为；`fund=None`（等权近似）回落 `equity` 档 |
+| **#2** | 命中率（Q7 `hit_excess`）与复盘（Q11 基准 + 2.7% 股息）对 QDII/债券/商品也用沪深300：海外基金量的是"美股跑赢 A 股"，债基量的是"牛市里卖出必命中"，再喂给 `store.calibrate()` 把阈值往错方向收 | **基准分域**：只有 A 股股权类可用沪深300 超额；其余记 `abs`，**超额列留 NULL 而不是写 0** | `advice_log.benchmark_kind`（落库即锁）+ `resolve_benchmark_kind`（读同库 `funds` 文本，零上游请求）+ `record_outcome` 的 `comparable` 守卫 + `stats()["by_kind"]` + 回填 `abs_only_evaluated`；复盘 `_signal_hit_stats` 跳过 `abs`、`excess["abs_only_skipped"]`、`_bench_cell` | `benchmark_kind IS NULL` = 改造前的行 = 按可比处理（无需迁移，改前 `advice_log` 为 **0 行**）；`advice_hit_mode=abs` 仍是 Q7 的整链回滚，与 #2 互不覆盖（前者管"校准用哪一列"，后者管"哪些样本进超额分母"） |
+| **#3** | A 股市场三因子（估值分位 0.8 + 情绪 0.5 + 资金面 0.5，合计 **1.8/8.3 ≈ 22%**）不看标的：给纳指 QDII、美元债、黄金 ETF 按 A 股情绪加减分，足以翻转阈值边缘信号 | **只对 A 股标的表态**：非 A 股记 `data_valid=False` + 0 分，**不加分也不减分**；不动生产权重与阈值 | `factor_engine._market_proxy_applies/_market_out_of_scope`（三个函数首行早退）+ `analysis_service._inject_regime_params`/`_tag_asset_class`（并发与流式两条路径）+ `QUALITY_CONFIG.market_factors_a_share_only=1` | `market_factors_a_share_only=0` ⇒ 全池共用；params 缺键、`asset_class` 为空一律按适用 = 改造前行为 |
+
+### 6.2 三条必须在后续改动里保住的不变量
+
+1. **"不表态"必须走 `data_valid`，不能走"跳过因子"**：`quality_filter.build_result` 的
+   `total_weight = Σ 因子配置 weight`（与 `data_valid` 无关），跳过会让 `scale = total_weight / threshold_ref_total_weight`
+   随基金类型漂移 —— 等于给海外基金偷偷换了一把更松的尺子。不表态的代价如实落在 `factor_coverage`（海外 ≈ 6.5/8.3 = 0.78）。
+2. **市场三因子的 `normalization="none"` 不可改**：截面 Z-score 会把"全池同分"重算成 0/NaN，那样就分不清"因子不表态"和"环境中性"。
+   这也是 §0.1 里 Q13 死配置清扫保住的一条（种子与 `_build_factor_seeds()` 有测试互验）。
+3. **判据只用文本，零上游请求**：资产类别、基准口径、费率档位三处判定都只读库里已有的 `name/fund_type_official/tags/code/fund_type`
+   （`tests/test_asset_class_calibers.py::test_no_upstream_requests_added` 静态守护）。若以后要接"官方费率表"，
+   必须先按 §2 预算规则算清每轮新增请求数，不得以"更准"为名直接接上。
+
+### 6.3 与 2C 影子口径（Q2）的关系：并存，不互相抵消
+
+- **Q2（影子侧）**：市场三因子对**所有**基金退出加权和，`threshold_ref_total_weight` 成对 8.3 → 6.0，只写在 `shadow_*` 列。
+- **#3（生产侧）**：市场三因子仍在分母里，只是对**非 A 股标的**不表态（0 分 + `data_valid=False`），生产 `ref` 仍 8.3。
+- 两者若同时生效，海外基金的市场三因子既不计入影子加权和、又在生产侧不表态 —— 不冲突，但**切 2C 时不要按 #3 的口径去重读 ref**，
+  成对原则（§5.1 更正 1）只按"移出加权和的配置权重"算。
+
+### 6.4 回归（2026-10-17）
+
+`TZ=UTC python3 -m pytest -q` **956 passed**（837 → +119，新增 `tests/test_asset_class_calibers.py` A–G 七节 119 例），
+`tsc --noEmit` 干净，`npm run build` ✓（两条命令的退出码各自 `echo` 打出来看，不看管道后的）。质量过滤数值参数 48 → **49**（后端 `PARAM_META` 仍 10 组，配置页 9 组 45 项）。
+未放宽任何限流 / jitter / 退避 / 冷却 / 熔断参数；本轮零新增上游请求。
+
+### 6.5 实跑补修与浏览器取证（2026-10-17）
+
+单测跑的是 `tmp_path` 上的**干净新库**（`_SCHEMA` 一次建齐），两处缺陷只有"存量库 + 真实空数据窗口"才现形，实跑 curl 与浏览器才抓到：
+
+| 症状 | 根因 | 修法 | 钉住的测试 |
+| --- | --- | --- | --- |
+| `GET /api/analysis/advice-stats` **500**：`no such column: a.benchmark_kind` | `advice_learning_service._init` 把两张表的加列一起 `ALTER TABLE advice_outcomes` —— 老库的 `advice_log` 永远补不到 `benchmark_kind`，新库却看不出问题 | `_MIGRATIONS = (("advice_outcomes", 命中列), ("advice_log", 口径列))` 按表配对；`ALTER` 抛 `OperationalError` 时先 `PRAGMA table_info` 复核列真不在，否则原样抛出（不把 SQL 错误咽成"已存在"） | `TestLegacyDbMigration`：用改造前的老 schema 建库 → 加列集合、幂等（第二次返回 `[]`）、per-table 反向断言、迁移后 `stats()["by_kind"]` 可用 |
+| 工单头部显示"赎回费约束已关闭（redemption_fee_enabled=0）"，而配置里其实是开启 | `fee_policy` 算在 `analyze()` 的早退之后，30 天内无分析记录就返回 `{}`，前端把"没算过"当"已关闭"渲染 —— 假的口径宣称 | 费用阶梯量的是**配置**不是本轮记录：`self._fee_policy(...)` 上移到所有早退之前（并删掉后面重复计算那次）；前端守卫 `rb?.fee_policy?.ladders` 让"拿不到阶梯"整行不显示 | `test_no_analysis_rows` 补 `fee_policy["enabled"] is True` + `ladders` 非空 |
+
+浏览器取证（`:5173/positions` → 调仓建议，窗口 120 天走真实开发库；命中率卡的 `abs_only` 那一行因 `advice_log` 0 行改用打桩响应验证前端契约）：
+
+- 工单头 `赎回费按份额档位分列（7 档），≥1% 降级观望`，Tooltip 逐字列出七档阶梯与三个参数名（`redemption_fee_ladders` / `redemption_fee_penalize_pct` / `redemption_fee_enabled`）；
+- 持仓 chip Tooltip：`013149 → 持有期未知｜赎回费按「债券C类」档算`、`162719 → …「权益A类」档算`
+  （道琼斯石油按"商品判在海外之前"落 `commodity`，场外商品沿用权益 A 阶梯 —— 与 QDII 档数值相同，展示档位名不同而已）；
+- 真实库 `as_of=2026-07-22 / holdings_mode=positions`，两条 `caveats` 点名"权重按成本市值估算"与"未填首买日不做费用约束（不默认 0 天）"；
+- 控制台：仅两条既有 React Router future-flag 警告，加一条 `ListCard` 里 Chip 落进 `Typography` 的 `<p>` 的既有 `validateDOMNesting`（`9d0c5e1a` 起存在，本轮未新增错误）。
 
 ---
 

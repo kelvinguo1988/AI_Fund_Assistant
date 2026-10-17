@@ -14,6 +14,12 @@
   基金侧含分红而基准不含，等于白记约 2.7pp/年 的"超额"
 - 信号复盘：区间首日前最近一次分析信号 vs 区间实际涨跌，绝对与超额两个同向率都出
   （绝对口径在上涨市里近乎恒真，量的是 beta；超端口径才量得出选基能力）
+- **超额只统计基准可比的基金**（2026-10-17 审查 #2）：海外/QDII、债券、商品基金与
+  沪深300 不在同一市场，把它们记进超额分母量到的是市场相关性而不是选基能力
+  （牛市里"卖出债基"必被判成没命中）。它们仍进绝对口径，`signal_stats.excess`
+  的分母只留 A 股股权类，被摘掉多少只在 `excess_skipped` 里点名。
+  组合层的 `excess_pct` 仍是"整个基金池 vs 沪深300"——那是既有的组合视图，口径写死在
+  `basis_note` 里，不悄悄改。
 
 生效口径随报告一起返回（`report.caliber` + 三行口径头），三处消费方共用
 `caliber_service`，见 docs/QUANT_DECISIONS_2026-10.md §5.1。
@@ -31,6 +37,8 @@ from backend.data_sources.base import guess_fund_type
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.schemas.analysis import FundReviewItem, ReviewReport
+from backend.utils.fund_asset_class import (
+    BENCHMARK_ABS, BENCHMARK_HS300_EXCESS, benchmark_kind, classify_asset)
 from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
@@ -106,7 +114,9 @@ class ReviewService:
         items: list[FundReviewItem] = []
         for fund, series, err in results:
             item = FundReviewItem(
-                fund_code=fund.code, fund_name=fund.name or fund.code, error=err
+                fund_code=fund.code, fund_name=fund.name or fund.code, error=err,
+                benchmark_kind=benchmark_kind(classify_asset(
+                    fund.name, fund.fund_type_official, fund.tags, fund.code)),
             )
             if series:
                 nav_start, nav_end = _slice_range(series, start_date, end_date)
@@ -183,9 +193,14 @@ class ReviewService:
         Q11：只报绝对涨跌会把上涨市里近乎恒真的命中率当成选基能力（量的是 beta）。
         因此同时给出**超额口径**（个基区间涨跌 − 基准同区间涨跌），`hit_rate` 仍是
         绝对口径（旧字段/旧前端语义不变），超额口径挂在 `excess` 子字典下。
+
+        审查 #2：超额口径的分母只收 `benchmark_kind == hs300_excess` 的基金。
+        `benchmark_kind` 为空（外部构造的条目、改造前的调用）按可比处理，
+        与 `utils/fund_asset_class` 的"没判过 = 保持改造前行为"同一约定。
         """
         stats = {"buy_total": 0, "buy_hits": 0, "sell_total": 0, "sell_hits": 0}
         excess = {"buy_total": 0, "buy_hits": 0, "sell_total": 0, "sell_hits": 0}
+        skipped_abs = 0
 
         def _rate(b: dict) -> Optional[float]:
             total = b["buy_total"] + b["sell_total"]
@@ -205,6 +220,9 @@ class ReviewService:
             if sign * it.growth_pct > 0:
                 stats[f"{bucket}_hits"] += 1
             if benchmark_growth_pct is not None:
+                if it.benchmark_kind == BENCHMARK_ABS:
+                    skipped_abs += 1
+                    continue
                 excess[f"{bucket}_total"] += 1
                 if sign * (it.growth_pct - benchmark_growth_pct) > 0:
                     excess[f"{bucket}_hits"] += 1
@@ -213,6 +231,7 @@ class ReviewService:
         if benchmark_growth_pct is not None:
             excess["hit_rate"] = _rate(excess)
             excess["benchmark_growth_pct"] = benchmark_growth_pct
+            excess["abs_only_skipped"] = skipped_abs
             stats["excess"] = excess
         return stats
 
@@ -273,14 +292,24 @@ class ReviewService:
             )
         ex = ss.get("excess") or {}
         if ex.get("hit_rate") is not None:
+            skipped = ex.get("abs_only_skipped") or 0
+            skip_note = (
+                f"，另有 {skipped} 只与沪深300 不可比（海外/债券/商品）未计入该分母"
+                if skipped else ""
+            )
             lines.append(
                 f"- 信号复盘（超额口径，基准 {ex['benchmark_growth_pct']:+.2f}%）：命中率 **{ex['hit_rate']}%**"
                 f"（buy {ex['buy_hits']}/{ex['buy_total']}，sell {ex['sell_hits']}/{ex['sell_total']}）"
+                f"{skip_note}"
                 "—— 绝对口径量的是市场方向（beta），这一行才量得出选基能力"
             )
+        lines.append(
+            "> 基准口径：超额一律对沪深300（价格指数 + 折算股息），只统计 A 股股权类基金；"
+            "组合区间收益与「跑赢/跑输基准」仍是**全池等权**，池里有海外/债券/商品时该数字含市场差异，仅作参考。"
+        )
         lines += ["", "### 区间涨跌明细", "",
-                  "| 基金 | 区间涨跌 | 评分变化 | 信号(始→末) |",
-                  "|------|----------|----------|-------------|"]
+                  "| 基金 | 区间涨跌 | 评分变化 | 信号(始→末) | 基准口径 |",
+                  "|------|----------|----------|-------------|------------|"]
         for it in r.items:
             growth = f"{it.growth_pct:+.2f}%" if it.growth_pct is not None else "—"
             score = (
@@ -289,11 +318,21 @@ class ReviewService:
                 else "—"
             )
             sig = f"{it.signal_start or '—'}→{it.signal_end or '—'}"
-            lines.append(f"| {it.fund_name}({it.fund_code}) | {growth} | {score} | {sig} |")
+            bench = _bench_cell(it.benchmark_kind)
+            lines.append(f"| {it.fund_name}({it.fund_code}) | {growth} | {score} | {sig} | {bench} |")
         return "\n".join(lines)
 
 
 # ── 模块级纯函数（可单测）─────────────────────────────────────────────
+
+def _bench_cell(kind: Optional[str]) -> str:
+    """明细表的「基准口径」列文案（未判定/None = 改造前语义，按可比处理）"""
+    if kind == BENCHMARK_ABS:
+        return "仅绝对涨跌"
+    if kind == BENCHMARK_HS300_EXCESS:
+        return "沪深300超额"
+    return "—"
+
 
 def _nearest_on_or_before(
     series: list[tuple[str, float]], day: str

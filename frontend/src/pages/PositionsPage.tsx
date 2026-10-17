@@ -98,9 +98,11 @@ const AdviceLearningCard: React.FC<{
     if (!s || !s.total) return '—';
     return `${(s.hits / s.total * 100).toFixed(0)}%（${s.hits}/${s.total}）`;
   };
+  // 审查 #2：沪深300 尺子量不到海外/债券/商品，这些样本只进绝对口径
+  const absOnly = stats?.by_kind.abs_only ?? 0;
   const rows: { mode: 'excess' | 'abs'; label: string; tip: string }[] = [
-    { mode: 'excess', label: '超额口径', tip: '与沪深300 比同区间涨跌：卖出后跑输=命中、买入后跑赢=命中，量的是选基能力' },
-    { mode: 'abs', label: '绝对口径', tip: '只看基金自身涨跌：卖出后下跌=命中。上涨市里几乎恒真，量的是市场 beta' },
+    { mode: 'excess', label: '超额口径', tip: '与沪深300 比同区间涨跌：卖出后跑输=命中、买入后跑赢=命中，量的是选基能力。分母只含基准可比的 A 股股权类样本（海外/债券/商品不套用沪深300 尺子）' },
+    { mode: 'abs', label: '绝对口径', tip: '只看基金自身涨跌：卖出后下跌=命中。上涨市里几乎恒真，量的是市场 beta；这是全池样本，含基准不可比的基金' },
   ];
   return (
     <Card sx={{ mt: 2 }}>
@@ -151,6 +153,11 @@ const AdviceLearningCard: React.FC<{
                 </Box>
                 <Typography variant="body2">卖出命中 {fmt(r.mode === 'excess' ? stats.by_mode.excess.sell : stats.by_mode.abs.sell)}</Typography>
                 <Typography variant="body2">买入命中 {fmt(r.mode === 'excess' ? stats.by_mode.excess.buy : stats.by_mode.abs.buy)}</Typography>
+                {r.mode === 'excess' && absOnly > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    另有 {absOnly} 条基准不可比（海外/债券/商品），未计入超额分母
+                  </Typography>
+                )}
               </Box>
             ))}
             <Box>
@@ -454,11 +461,12 @@ const PositionsPage: React.FC = () => {
                   navigator.clipboard.writeText(rbMd).then(() => notify('工单已复制', 'success'));
                 }}>复制工单</Button>
               )}
-              {rb?.fee_policy && (
-                <Tooltip title="阶梯来自可配参数 redemption_fee_ladder；惩罚档是 redemption_fee_penalize_pct；关闭开关 redemption_fee_enabled=0 回到旧工单">
+              {rb?.fee_policy?.ladders && (
+                <Tooltip title={`逐档位生效阶梯：${rb.fee_policy.ladder_text}。场内份额卖出只有券商佣金（未计入）。`
+                  + '参数 redemption_fee_ladders 按档位覆盖；写回旧的单条 redemption_fee_ladder = 全档共用（回滚路径），惩罚档 redemption_fee_penalize_pct，开关 redemption_fee_enabled=0 回到无费用约束的旧工单'}>
                   <Typography variant="caption" color="text.secondary" sx={{ cursor: 'help' }}>
                     {rb.fee_policy.enabled
-                      ? `赎回费阶梯 ${rb.fee_policy.ladder_text}，≥${rb.fee_policy.penalize_pct}% 降级观望`
+                      ? `赎回费按份额档位分列（${Object.keys(rb.fee_policy.ladders).length} 档），≥${rb.fee_policy.penalize_pct}% 降级观望`
                       : '赎回费约束已关闭（redemption_fee_enabled=0）'}
                   </Typography>
                 </Tooltip>
@@ -551,7 +559,7 @@ const PositionsPage: React.FC = () => {
                             h.weight_basis === 'market' ? '实时净值市值'
                               : h.weight_basis === 'cost' ? '成本市值（净值未命中）'
                               : h.weight_basis === 'shares' ? '份额估算（无净值无成本）'
-                              : '等权近似'}｜${h.holding_days == null ? '持有期未知' : `持有 ${h.holding_days} 天`}`}>
+                              : '等权近似'}｜${h.holding_days == null ? '持有期未知' : `持有 ${h.holding_days} 天`}｜赎回费按「${h.fee_profile_label || '—'}」档算`}>
                           <Chip size="small" variant="outlined" label={`${h.name} ${h.weight_pct}%`} sx={{ height: 22 }} />
                         </Tooltip>
                       ))}

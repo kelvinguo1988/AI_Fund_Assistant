@@ -24,6 +24,7 @@ import numpy as np
 
 from backend.data_sources.base import FundData
 from backend.engines.factor_engine import FactorScoreResult
+from backend.utils.fund_asset_class import a_share_market_proxy
 from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,33 @@ QUALITY_CONFIG = {
     # 阶梯 [持有自然日上界(不含), 费率%]，None 上界 = 长期基础费率。
     # list 值不会被 /api/system/quality-config 渲染，需要改口径时写进
     # system_config 的 quality_filter_config JSON 覆盖即可（merge_quality_config 收 list）
+    #
+    # 旧的全局单条阶梯（第五轮审查 #1 之前唯一口径）：保留为**回滚键** ——
+    # 只要 `redemption_fee_ladders` 缺失或写成列表，全档共用这一条，
+    # 行为与改造前完全一致。
     "redemption_fee_ladder": [[7, 1.5], [365, 0.5], [None, 0.25]],
+    # 按基金档位的阶梯（审查 #1）：一条全局阶梯套全池会把场内 ETF（无赎回费只有
+    # 佣金）、债券/C 类（满 30 天普遍免赎回费）按权益 A 类计费，惩罚档闸门于是把
+    # 本可直接执行的卖出误降级成观望。键与 utils.fund_asset_class.FEE_PROFILE_* 对应。
+    # 同样不被配置页渲染；改口径写进 quality_filter_config JSON 覆盖。
+    "redemption_fee_ladders": {
+        "equity": [[7, 1.5], [365, 0.5], [None, 0.25]],
+        "equity_c": [[7, 1.5], [30, 0.5], [None, 0.0]],
+        "bond": [[7, 1.5], [30, 0.5], [None, 0.1]],
+        "bond_c": [[7, 1.5], [30, 0.5], [None, 0.0]],
+        "qdii": [[7, 1.5], [365, 0.5], [None, 0.25]],
+        "exchange_traded": [[None, 0.0]],
+        "money_market": [[None, 0.0]],
+    },
+
+    # ── A 股市场口径的适用范围（第五轮审查 #3）──
+    # 1=市场环境三因子（大盘估值分位/市场情绪/资金面）与极端估值阈值调节
+    #   只作用于 A 股标的；海外/QDII/商品/债基记 data_valid=False，
+    #   由因子覆盖率折算承担（不进加权求和，也不动它们的买卖阈值）。
+    #   沪深300 的 PE 分位、涨跌家数比、两市融资余额对一只纳指基金没有意义，
+    #   旧行为是照抄同一个 A 股读数加减分。
+    # 0=回滚：恢复改造前 —— 全池共用 A 股市场读数。
+    "market_factors_a_share_only": 1,
 }
 
 
@@ -193,7 +220,9 @@ PARAM_META: dict[str, tuple[str, str]] = {
     "extreme_low_valuation_buy_decrement":  ("市场环境：低估时买入阈值下调量",     "市场环境阈值"),
     "redemption_fee_enabled":            ("持有期与赎回费：卖出/换仓建议是否做费用约束（0=关闭）", "持有期与赎回费"),
     "redemption_fee_penalize_pct":       ("持有期与赎回费：适用费率≥此值(%) 的卖出降级为观望", "持有期与赎回费"),
-    "redemption_fee_ladder":             ("持有期与赎回费：阶梯 [[天数,费率%]…]（配置页不渲染，见文档）", "持有期与赎回费"),
+    "redemption_fee_ladder":             ("持有期与赎回费：全局单条阶梯 [[天数,费率%]…]（配置页不渲染，见文档）", "持有期与赎回费"),
+    "redemption_fee_ladders":            ("持有期与赎回费：按档位阶梯 {档位: [[天数,费率%]…]}（配置页不渲染，见文档）", "持有期与赎回费"),
+    "market_factors_a_share_only":       ("市场环境三因子：仅作用于 A 股标的（0=全池共用，回滚旧行为）", "市场环境阈值"),
     # ── 影子口径 2C：只改 `analysis_results.shadow_*` 的对照结果，生产信号完全不读 ──
     "shadow_2c_cluster_cap_pct":          ("影子2C：每簇权重上限 %（0=关闭簇上限，不影响生产信号）", "影子口径2C"),
     "shadow_2c_cluster_cap_base_weight":  ("影子2C：簇上限基准总权重（与阈值参考权重解耦）", "影子口径2C"),
@@ -817,12 +846,25 @@ def _resolve_regime(regime_snapshot=_SENTINEL):
     return get_current_regime()
 
 
+def _regime_adjust_applies(cfg: dict, asset_class: str) -> bool:
+    """A 股估值分位是否该调节这只基金的买入阈值（第五轮审查 #3）
+
+    与 `factor_engine._market_proxy_applies` 同一个开关（`market_factors_a_share_only`）、
+    同一份资产类别口径：市场择时要么整段只对 A 股标的生效，要么整段关掉回到旧行为，
+    不允许"因子侧中性了、阈值侧还在给它加减"。
+    """
+    if not int(cfg.get("market_factors_a_share_only", 1) or 0):
+        return True
+    return a_share_market_proxy(asset_class or "")
+
+
 def compute_dynamic_thresholds(
     size_shock: bool,
     drift: bool,
     cfg: dict = QUALITY_CONFIG,
     regime_snapshot=_SENTINEL,
     total_weight: Optional[float] = None,
+    asset_class: str = "",
 ) -> tuple[float, float]:
     """计算每只基金的专属买入/卖出阈值
 
@@ -836,6 +878,10 @@ def compute_dynamic_thresholds(
     Args:
         regime_snapshot: 市场环境快照（任务隔离传递；None 时回退模块级全局）
         total_weight: 当前激活因子总权重（None 时不折算）
+        asset_class: 该基金的资产类别（`utils.fund_asset_class.ASSET_*`）。
+            `market_factors_a_share_only=1` 且它不是 A 股股权类时**跳过估值分位调节**
+            —— 沪深300 处在历史高位，不构成"一只债基/纳指基金该更谨慎买入"的理由。
+            空串 = 调用方没判过 → 照旧调节（改造前行为）。
 
     Returns: (buy_threshold, sell_threshold)
     """
@@ -855,7 +901,7 @@ def compute_dynamic_thresholds(
     # 市场环境调节：快照缺失/分位缺失时不调节
     regime = _resolve_regime(regime_snapshot)
     pct = getattr(regime, "valuation_percentile", None) if regime is not None else None
-    if pct is not None:
+    if pct is not None and _regime_adjust_applies(cfg, asset_class):
         if pct >= cfg["extreme_high_valuation_pct"]:
             buy += cfg["extreme_high_valuation_buy_increment"] * scale
         elif pct <= cfg["extreme_low_valuation_pct"]:
@@ -1052,9 +1098,13 @@ class QualityFilter:
         size_shock: bool,
         drift: bool,
         total_weight: Optional[float] = None,
+        asset_class: str = "",
     ) -> tuple[float, float]:
-        """计算动态阈值"""
-        return compute_dynamic_thresholds(size_shock, drift, self.cfg, total_weight=total_weight)
+        """计算动态阈值（asset_class 为空 = 不做市场调节的适用范围判定）"""
+        return compute_dynamic_thresholds(
+            size_shock, drift, self.cfg, total_weight=total_weight,
+            asset_class=asset_class,
+        )
 
     def decide(
         self,
@@ -1119,9 +1169,11 @@ class QualityFilter:
         result.size_shock_triggered = self.check_size_shock(quarterly_history, today)
         drift, _ = self.check_drift(quarterly_history, today)
         result.drift_triggered = drift
+        asset_class = getattr(fund_data, "asset_class", "") or ""
         result.dynamic_buy_threshold, result.dynamic_sell_threshold = compute_dynamic_thresholds(
             result.size_shock_triggered, drift, self.cfg, regime_snapshot,
             total_weight=sum(float(f.get("weight", 1.0) or 0.0) for f in active_factors),
+            asset_class=asset_class,
         )
 
         if drift:
@@ -1131,7 +1183,7 @@ class QualityFilter:
         # 极端市场环境提示（估值分位触发阈值调节时）
         regime = _resolve_regime(regime_snapshot)
         pct = getattr(regime, "valuation_percentile", None) if regime is not None else None
-        if pct is not None:
+        if pct is not None and _regime_adjust_applies(self.cfg, asset_class):
             if pct >= self.cfg["extreme_high_valuation_pct"]:
                 result.extreme_valuation_triggered = True
                 result.market_regime_warning = (

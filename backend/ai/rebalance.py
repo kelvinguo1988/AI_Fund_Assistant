@@ -25,14 +25,16 @@ from sqlalchemy.orm import aliased
 
 from backend.ai.factor_audit import whipsaw_counts
 from backend.ai.holding_fee import (
-    days_to_next_fee_tier, fee_pct_for_holding, holding_days_between,
-    ladder_text, parse_fee_ladder,
+    PROFILE_LABELS, ZERO_FEE_NOTES, days_to_next_fee_tier, fee_pct_for_holding,
+    holding_days_between, ladder_for_profile, ladders_text,
+    parse_fee_ladders,
 )
 from backend.engines.quality_filter import merge_quality_config
 from backend.models.analysis_result import AnalysisResult
 from backend.models.fund import Fund
 from backend.models.fund_holding import FundHolding
 from backend.models.user_position import UserPosition
+from backend.utils.fund_asset_class import fee_profile
 from backend.utils.timezone import beijing_today
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,16 @@ def _is_qdii(fund: Fund) -> bool:
     return "QDII" in blob
 
 
+def _fee_profile_of(fund: Fund) -> str:
+    """这只基金按哪条赎回费阶梯算（纯文本判定，零上游请求）
+
+    档位名与中文名同源 `holding_fee.PROFILE_LABELS`：键给机器读（前端可筛），
+    中文名给人读 —— 不在前端再抄一份映射，避免两处档位名漂移。
+    """
+    return fee_profile(fund.name, fund.fund_type_official, fund.tags,
+                       fund.code, fund.fund_type)
+
+
 def _positive_float(value) -> Optional[float]:
     try:
         f = float(value)
@@ -115,7 +127,7 @@ class RebalanceReport:
     watch: list = field(default_factory=list)
     constraints: dict = field(default_factory=dict)
     caveats: list = field(default_factory=list)
-    # 生效中的赎回费口径（Q10-C）：{enabled, penalize_pct, ladder_text}
+    # 生效中的赎回费口径（Q10-C + 审查 #1）：{enabled, penalize_pct, ladder_text, ladders}
     fee_policy: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -135,8 +147,9 @@ class RebalanceReport:
         ]
         if self.fee_policy.get("enabled"):
             lines.append(
-                f"赎回费阶梯：{self.fee_policy.get('ladder_text', '')}"
-                f"（适用费率 ≥{self.fee_policy.get('penalize_pct'):g}% 的卖出降级为观望）"
+                f"赎回费阶梯（按份额档位）：{self.fee_policy.get('ladder_text', '')}"
+                f"（适用费率 ≥{self.fee_policy.get('penalize_pct'):g}% 的卖出降级为观望；"
+                "场内份额卖出只有券商佣金，未计入）"
             )
         elif self.fee_policy:
             lines.append("赎回费阶梯：已关闭（redemption_fee_enabled=0），卖出建议不含持有期约束")
@@ -193,6 +206,10 @@ class RebalanceService:
         window_days = max(min(int(window_days), 250), 7)
         report = RebalanceReport(window_days=window_days)
         db = self.db
+        # 费用口径先算：工单头部那一行"赎回费按份额档位分列（N 档）"量的是**配置**，
+        # 不是这一轮有没有分析记录。留成空 dict 会让前端把"没算过"渲染成"约束已关闭"。
+        fee_policy = self._fee_policy(await merge_quality_config(db))
+        report.fee_policy = fee_policy
 
         funds = (await db.execute(
             select(Fund).where(Fund.status == "active").order_by(Fund.code)
@@ -230,8 +247,6 @@ class RebalanceService:
             select(UserPosition, Fund).join(Fund, UserPosition.fund_id == Fund.id)
         )).all()
         positions = {p.fund_id: p for p, _f in pos_rows}
-        fee_policy = self._fee_policy(await merge_quality_config(db))
-        report.fee_policy = fee_policy
         if positions:
             report.holdings_mode = "positions"
             raw_w, weight_basis = await self._position_valuations(positions, fund_by_id)
@@ -292,7 +307,7 @@ class RebalanceService:
                     aggravators.append(f"质量警告：{'、'.join(warnings[:3])}")
                 if flips_by_code.get(f.code, 0) >= 2:
                     aggravators.append(f"近{window_days}天翻转 {flips_by_code[f.code]} 次")
-                fee = self._fee_gate(fee_policy, positions.get(fid), report.as_of)
+                fee = self._fee_gate(fee_policy, positions.get(fid), report.as_of, f)
                 # 执行成本闸门（Q10-C）：短期高费率时"该卖"不等于"值得卖"
                 if fee["punitive"]:
                     why = (f"持有 {fee['holding_days']} 天，赎回费 {fee['estimated_fee_pct']:g}% "
@@ -363,8 +378,11 @@ class RebalanceService:
                 "qdii": _is_qdii(fund_by_id[fid]),
                 # 权重怎么来的 + 现在持有了多久（Q10：用户要能一眼看出哪个权重是估的）
                 "weight_basis": weight_basis.get(fid),
+                # 赎回费档位（审查 #1）：让用户一眼看出这只按哪条阶梯算
+                "fee_profile": (fp := _fee_profile_of(fund_by_id[fid])),
+                "fee_profile_label": PROFILE_LABELS.get(fp, ""),
                 "holding_days": self._fee_gate(fee_policy, positions.get(fid),
-                                               report.as_of)["holding_days"],
+                                               report.as_of, fund_by_id[fid])["holding_days"],
             }
             for fid in held_ids if fid in fund_by_id
         ]
@@ -375,22 +393,26 @@ class RebalanceService:
 
     @staticmethod
     def _fee_policy(cfg: dict) -> dict:
-        """生效中的赎回费口径：开关 / 惩罚档 / 阶梯文本
+        """生效中的赎回费口径：开关 / 惩罚档 / 分档阶梯文本
 
         `redemption_fee_enabled=0` 是 Q10-C 的回滚键：关掉后卖出建议不再有任何持有期
         约束（也不再标注费率），回到只有评分与恶化佐证的旧工单。
+
+        阶梯按档位取自 `redemption_fee_ladders`（审查 #1）；配置写成旧的单条列表时
+        全档共用同一条，等价于改造前的单一阶梯 —— 那是这一项的回滚路径。
         """
         enabled = int(cfg.get("redemption_fee_enabled", 1) or 0) != 0
         try:
             penalize = float(cfg.get("redemption_fee_penalize_pct", 1.0))
         except (TypeError, ValueError):
             penalize = 1.0
-        ladder = parse_fee_ladder(cfg.get("redemption_fee_ladder"))
+        ladders = parse_fee_ladders(cfg.get("redemption_fee_ladders"),
+                                   cfg.get("redemption_fee_ladder"))
         return {
             "enabled": enabled,
             "penalize_pct": penalize,
-            "ladder": [[b, p] for b, p in ladder],
-            "ladder_text": ladder_text(ladder),
+            "ladders": {k: [[b, p] for b, p in v] for k, v in ladders.items()},
+            "ladder_text": ladders_text(ladders),
         }
 
     @staticmethod
@@ -475,26 +497,36 @@ class RebalanceService:
                     f"（{'、'.join(unknown[:5])}）—— 未填按「未知」处理，不默认 0 天")
 
     @staticmethod
-    def _fee_gate(policy: dict, pos, as_of: str) -> dict:
+    def _fee_gate(policy: dict, pos, as_of: str, fund: Optional[Fund] = None) -> dict:
         """一只持仓的持有期/赎回费判定：字段 + 是否落惩罚档 + 文案
 
         三种"没有信息"要分清：`redemption_fee_enabled=0`（回滚，整段口径撤掉，
         工单回到旧样子）、不是真实持仓（等权近似模式，压根没有持有期）、
         未填首次买入日 → holding_days=None（不做费用约束、**不默认 0 天**，那会把
         池子里所有建议都拦掉，但要在卖出理由里点名"持有期未知"）。
+
+        阶梯按基金档位取（审查 #1）：场内份额与货币基金没有赎回费，债券/C 类满 30 天
+        普遍归零 —— 套用权益 A 类的 0.5%/0.25% 会让惩罚档把可执行的卖出误判成观望。
+        0 费档不能只写"赎回费 0%"（用户分不清是免费还是没数据），文案点名档位原因。
         """
         out = {"holding_days": None, "estimated_fee_pct": None, "punitive": False,
-               "wait_days": 0, "notes": []}
+               "wait_days": 0, "notes": [], "fee_profile": None}
         if pos is None or not policy.get("enabled"):
             return out
+        profile = _fee_profile_of(fund) if fund is not None else None
+        out["fee_profile"] = profile
         days = holding_days_between(pos.first_buy_date, _as_date(as_of))
         out["holding_days"] = days
-        ladder = parse_fee_ladder(policy.get("ladder"))
+        ladder = ladder_for_profile(policy.get("ladders") or {}, profile or "equity")
         pct = fee_pct_for_holding(days, ladder)
         if pct is None:
             out["notes"] = ["持有期未知（未填首次买入日），未做赎回费约束"]
             return out
         out["estimated_fee_pct"] = pct
+        zero_note = ZERO_FEE_NOTES.get(profile or "")
+        if zero_note and pct <= 0.0:
+            out["notes"] = [f"持有 {days} 天：{zero_note}"]
+            return out
         if float(policy.get("penalize_pct", 1.0)) > 0 and pct >= float(policy["penalize_pct"]):
             out["punitive"] = True
             out["wait_days"] = days_to_next_fee_tier(days, ladder)

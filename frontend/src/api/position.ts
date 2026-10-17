@@ -59,6 +59,10 @@ export interface RebalanceRow {
   // 持有期与赎回费（Q10-C）：null/undefined = 未填首买日或非真实持仓，未做费用约束
   holding_days?: number | null;
   estimated_fee_pct?: number | null;
+  /** 这只按哪条阶梯算（审查 #1）：equity/equity_c/bond/bond_c/qdii/exchange_traded/money_market */
+  fee_profile?: string | null;
+  /** 档位中文名（后端 PROFILE_LABELS 同源，前端不再抄一份映射） */
+  fee_profile_label?: string | null;
 }
 
 /** 换仓配对：卖侧的持有期/费率一并带出，分差大但要付 1.5% 短期费时看得见 */
@@ -77,7 +81,8 @@ export interface RebalanceSwap {
 export interface RebalanceFeePolicy {
   enabled: boolean;
   penalize_pct: number;
-  ladder: [number | null, number][];
+  /** 按份额档位分列的阶梯（键：equity/equity_c/bond/bond_c/qdii/exchange_traded/money_market） */
+  ladders: Record<string, [number | null, number][]>;
   ladder_text: string;
 }
 
@@ -151,6 +156,8 @@ export interface AdviceStats {
     abs: { sell: AdviceSide; buy: AdviceSide };
     excess: { sell: AdviceSide; buy: AdviceSide };
   };
+  /** 样本按基准可比性拆分：abs_only = 海外/债券/商品（不套沪深300 尺子，只进绝对口径） */
+  by_kind: { hs300_comparable: number; abs_only: number };
   params: Record<string, number>;
 }
 
@@ -160,6 +167,8 @@ export interface AdviceEvalResult {
   evaluated: number;
   skipped_window_incomplete?: number;
   benchmark_missing?: number;
+  /** 基准不可比（海外/债券/商品）按绝对口径判定的条数（审查 #2） */
+  abs_only_evaluated?: number;
   pending: number;
   funds_fetched?: number;
   calibration?: { adjusted: boolean; changes: { key: string; from: number; to: number }[] };

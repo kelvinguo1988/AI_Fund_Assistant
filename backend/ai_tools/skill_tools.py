@@ -51,6 +51,8 @@ async def _run_advice_stats(db: AsyncSession, **kwargs) -> dict:
         f"by_mode.excess = 相对沪深300 同区间（建议日→其后第 30 个净值日）超额命中，"
         f"衡量选基能力，是当前校准阈值使用的口径（hit_mode={stats['hit_mode']}）；"
         "by_mode.abs = 绝对涨跌命中，牛市里普遍虚高，只可用于对照，不要单独作为结论。"
+        f"by_kind = 样本按基准可比性拆分（abs_only={stats['by_kind']['abs_only']} 条为"
+        "海外/债券/商品，与沪深300 不同域，只进绝对口径、不进超额分母）。"
         "evaluated 为已判定样本数，不足 30 条时应明确告知用户命中率尚不具统计意义。"
     )
     return {"advice_stats": stats}

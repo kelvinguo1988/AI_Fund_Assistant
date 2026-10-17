@@ -41,6 +41,7 @@ from backend.schemas.analysis import (
     AnalysisExportItem, AnalysisExportPayload, AnalysisImportResult,
 )
 from backend.services.error_log_service import log_source_failure
+from backend.utils.fund_asset_class import classify_asset
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +86,13 @@ def _is_slow_nav_disclosure(fund: Fund) -> bool:
     return "QDII" in blob or str(fund.code or "").startswith("96")
 
 
-def _inject_regime_params(params_json, snapshot) -> dict:
+def _inject_regime_params(params_json, snapshot, market_a_share_only: bool = False) -> dict:
     """把市场环境快照注入因子 params（_ 前缀 = 引擎内部字段，不落库）
 
     calculate_all 接受 dict 或 JSON 字符串形式的 params；这里返回 dict，
     快照对象以 "_regime_snapshot" 键原样传递给市场环境因子。
+    `market_factors_a_share_only`（审查 #3）随快照一起注入，让市场因子知道
+    自己是否只对 A 股标的表态。
     """
     import json as _json
     try:
@@ -99,7 +102,19 @@ def _inject_regime_params(params_json, snapshot) -> dict:
     if not isinstance(params, dict):
         params = {}
     params["_regime_snapshot"] = snapshot
+    params["_market_factors_a_share_only"] = bool(market_a_share_only)
     return params
+
+
+def _tag_asset_class(fund: Fund, fd: FundData) -> FundData:
+    """给取回的基金数据打资产类别标（审查 #2/#3 的 gate 依据，纯文本判定零上游请求）
+
+    识别不出来回落 A 股股权类 —— 与 `utils/fund_asset_class` 的口径一致：
+    宁可保留改造前的行为，也不要因为名称文本没写"海外"就悄悄关掉某只基金的市场因子。
+    """
+    fd.asset_class = classify_asset(
+        fund.name, fund.fund_type_official, fund.tags, fund.code)
+    return fd
 
 
 @dataclass
@@ -245,6 +260,7 @@ class AnalysisService:
                 fd = await self.data_source.get_fund_data(
                     fund.code, fund_type=getattr(fund, "fund_type", None)
                 )
+                _tag_asset_class(fund, fd)
                 reason = _no_nav_reason(fd)
                 if reason:
                     _log_missing_nav(fund, reason)
@@ -390,6 +406,7 @@ class AnalysisService:
                 fd = await self.data_source.get_fund_data(
                     fund.code, fund_type=getattr(fund, "fund_type", None)
                 )
+                _tag_asset_class(fund, fd)
                 reason = _no_nav_reason(fd)
                 if reason:
                     _log_missing_nav(fund, reason)
@@ -532,9 +549,14 @@ class AnalysisService:
         except Exception as e:
             logger.warning(f"市场环境快照获取失败，市场因子将使用中性分: {e}")
             regime_snapshot = None
-        # 市场环境因子不依赖 fund_data，通过 params 注入快照（_ 前缀 = 引擎内部字段）
+        # 市场环境因子不依赖 fund_data，通过 params 注入快照（_ 前缀 = 引擎内部字段）；
+        # 审查 #3：市场三因子只对 A 股标的表态，开关与质量过滤同源（默认开）
+        market_factors_a_share_only = (
+            int(merged_qf_config.get("market_factors_a_share_only", 1) or 0) != 0
+        )
         regime_factors = [
-            {**f, "params": _inject_regime_params(f.get("params"), regime_snapshot)}
+            {**f, "params": _inject_regime_params(
+                f.get("params"), regime_snapshot, market_factors_a_share_only)}
             if f.get("code", "").startswith("market_") else f
             for f in active_factors
         ]

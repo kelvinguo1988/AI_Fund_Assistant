@@ -152,8 +152,10 @@ class TestHitModeStorage:
     def test_record_outcome_writes_both_columns(self, tmp_path):
         store = _store(tmp_path)
         advice_id = store.log_advice("000001", "buy", "测试买入", 1.0)
-        out = store.record_outcome(advice_id, "buy", 1.0, 5.0)
-        assert out == {"hit": 0, "hit_abs": 1, "hit_excess": 0, "mode": "excess"}
+        # 测试库没有 funds 表 → 回落改造前口径（基准可比），结果里带上口径键
+        assert store.record_outcome(advice_id, "buy", 1.0, 5.0) == {
+            "hit": 0, "hit_abs": 1, "hit_excess": 0, "mode": "excess",
+            "benchmark_kind": mod.BENCHMARK_HS300_EXCESS}
 
         store.set_hit_mode("abs")
         out2 = store.record_outcome(advice_id, "buy", 1.0, 5.0)

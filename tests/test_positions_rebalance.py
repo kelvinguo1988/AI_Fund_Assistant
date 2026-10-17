@@ -300,6 +300,10 @@ class TestRebalanceEngine:
         await db_session.commit()
         rpt = await RebalanceService(db_session).analyze(otc_status_map={})
         assert any("无分析记录" in v for v in rpt.caveats)
+        # 费用口径是**配置**，不随"这一轮没有分析记录"消失：空 dict 会被前端渲染成
+        # "约束已关闭"，而真实的关闭只可能是 redemption_fee_enabled=0
+        assert rpt.fee_policy["enabled"] is True
+        assert rpt.fee_policy["ladders"]
 
     @pytest.mark.asyncio
     async def test_summary_md_contains_lists(self, db_session):
@@ -546,7 +550,11 @@ class TestFeeGateInReport:
         assert rpt.sells[0]["reasons"][-1] == "持有 100 天，适用赎回费 0.5%"
         assert rpt.sells[0]["estimated_fee_pct"] == 0.5
         assert rpt.swaps[0]["sell_fee_pct"] == 0.5 and rpt.swaps[0]["sell_holding_days"] == 100
-        assert "赎回费阶梯：<7天 1.5%" in rpt.summary_md()
+        # 口径行按份额档位分列（审查 #1）：卖出A 是场外权益 A 类档，场内那档 0 费同列展示
+        md = rpt.summary_md()
+        assert "赎回费阶梯（按份额档位）：" in md
+        assert "QDII/海外、权益A类：<7天 1.5% / <365天 0.5% / ≥365天 0.25%" in md
+        assert "场内份额、货币基金：全持有期 0%" in md
 
     @pytest.mark.asyncio
     async def test_missing_first_buy_date_says_unknown_not_zero(self, db_session, clean_nav_cache):

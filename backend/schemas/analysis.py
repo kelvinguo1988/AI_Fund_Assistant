@@ -100,6 +100,9 @@ class FundReviewItem(BaseModel):
     signal_end: Optional[str] = None
     contribution_pct: Optional[float] = None  # 等权贡献 = growth/N
     error: Optional[str] = None             # 净值获取失败原因
+    # 基准口径（第五轮审查 #2）：hs300_excess=计入超额统计 / abs=只看绝对涨跌
+    # 海外/债券/商品基金与沪深300 不可比，它们仍进绝对口径，但不进超额分母
+    benchmark_kind: Optional[str] = None
 
 
 class ReviewReport(BaseModel):

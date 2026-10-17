@@ -32,6 +32,9 @@ class FundData:
     code: str                            # 基金代码
     name: str = ""                       # 基金名称
     date: str = ""                       # 数据日期 YYYY-MM-DD
+    # 资产类别（utils.fund_asset_class.ASSET_*）：由调用方按 Fund 名称/官方类型打标。
+    # 空串 = 没判过 → 市场因子/阈值调节一律按改造前的"A 股口径全池通用"行为处理
+    asset_class: str = ""
     # ── 估值指标 ──
     pe: Optional[float] = None           # 市盈率（中证指数"市盈率1"）；Q13：原 pb 字段实为
                                          #   csindex"市盈率2"（滚动 PE）却标成"市净率"，且全仓

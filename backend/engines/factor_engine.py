@@ -23,6 +23,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from backend.data_sources.base import FundData
+from backend.utils.fund_asset_class import a_share_market_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -693,6 +694,32 @@ def _regime_field(name: str, params: Optional[dict] = None) -> Optional[float]:
     return getattr(regime, name, None)
 
 
+def _market_proxy_applies(fund_data: FundData, params: Optional[dict] = None) -> bool:
+    """A 股大盘读数是否适用于该标的（第五轮审查 #3）
+
+    沪深300 PE 分位、全市场涨跌家数、两市融资余额三组读数都是 **A 股市场**的体温。
+    把它们套在纳指 QDII / 纯债 / 黄金 ETF 上不是"中性参考"，而是给一只与 A 股无关的
+    基金按 A 股情绪加减分（合计权重 1.8/8.3 ≈ 22%，足以翻转阈值边缘的信号）。
+
+    开关来自质量过滤配置 `market_factors_a_share_only`，由 analysis_service 经
+    `params["_market_factors_a_share_only"]` 注入；**缺键按适用处理** ——
+    外部直接调因子函数（旧调用方、单测）不该因为没传开关就改变行为。
+    """
+    if not (params or {}).get("_market_factors_a_share_only"):
+        return True
+    return a_share_market_proxy(getattr(fund_data, "asset_class", "") or "")
+
+
+def _market_out_of_scope(code: str, name: str, direction: str) -> FactorScoreResult:
+    """标的与 A 股市场读数不同域：记中性 0 分 + `data_valid=False`
+
+    走 `data_valid` 而不是"跳过该因子"：权重与 `total_weight` 都不变，动态阈值
+    折算比例 (`total_weight / threshold_ref_total_weight`) 因此不会因为这只基金
+    退出市场择时而漂移 —— 该因子对它**不表态**，而不是给它换个尺子。
+    """
+    return FactorScoreResult(code, name, 0.0, 0.0, direction, data_valid=False)
+
+
 def calculate_market_valuation(fund_data: FundData, params: Optional[dict] = None) -> FactorScoreResult:
     """大盘估值分位 — 负向（低分位=便宜=高分）
 
@@ -700,6 +727,8 @@ def calculate_market_valuation(fund_data: FundData, params: Optional[dict] = Non
     信号: ≤0.2→1.0, ≤0.4→0.5, ≤0.6→0, ≤0.8→-0.5, >0.8→-1.0
     快照缺失时返回中性 0 分。
     """
+    if not _market_proxy_applies(fund_data, params):
+        return _market_out_of_scope("market_valuation", "大盘估值分位", "negative")
     pct = _regime_field("valuation_percentile", params)
     if pct is None:
         return FactorScoreResult("market_valuation", "大盘估值分位", 0.0, 0.0, "negative", data_valid=False)
@@ -721,6 +750,8 @@ def calculate_market_sentiment(fund_data: FundData, params: Optional[dict] = Non
     原始值: 全市场涨跌家数比 (up-down)/(up+down)，-1~1。
     信号: >0.5→1.0, >0.2→0.5, ≥-0.2→0, ≥-0.5→-0.5, else→-1.0
     """
+    if not _market_proxy_applies(fund_data, params):
+        return _market_out_of_scope("market_sentiment", "市场情绪", "positive")
     ratio = _regime_field("adv_decline_ratio", params)
     if ratio is None:
         return FactorScoreResult("market_sentiment", "市场情绪", 0.0, 0.0, "positive", data_valid=False)
@@ -742,6 +773,8 @@ def calculate_market_fund_flow(fund_data: FundData, params: Optional[dict] = Non
     原始值: 上交所融资融券余额 7 日变化率。
     信号: >0.03→1.0, >0.01→0.5, ≥-0.01→0, ≥-0.03→-0.5, else→-1.0
     """
+    if not _market_proxy_applies(fund_data, params):
+        return _market_out_of_scope("market_fund_flow", "资金面", "positive")
     change = _regime_field("margin_change_pct_7d", params)
     if change is None:
         return FactorScoreResult("market_fund_flow", "资金面", 0.0, 0.0, "positive", data_valid=False)
@@ -778,7 +811,8 @@ FACTOR_CALCULATORS: dict[str, Callable[[FundData, Optional[dict]], FactorScoreRe
     "return_risk_ratio": calculate_return_risk_ratio,
     "momentum_accel": calculate_momentum_accel,
     "trend_consistency": calculate_trend_consistency,
-    # 市场环境 3 因子（读模块级 regime 快照，所有基金同分）
+    # 市场环境 3 因子（读模块级 regime 快照，A 股标的同分；非 A 股标的按
+    # market_factors_a_share_only 记 data_valid=False → 不表态，见 _market_proxy_applies）
     "market_valuation": calculate_market_valuation,
     "market_sentiment": calculate_market_sentiment,
     "market_fund_flow": calculate_market_fund_flow,

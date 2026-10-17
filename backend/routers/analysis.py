@@ -497,7 +497,11 @@ async def update_return_caliber(
 
 @router.get("/advice-stats")
 async def advice_stats():
-    """调仓建议命中率统计与阈值校准状态（by_mode 里 abs/excess 两个口径并存）"""
+    """调仓建议命中率统计与阈值校准状态（by_mode 里 abs/excess 两个口径并存）
+
+    by_kind 另给样本按基准可比性的拆分：excess 分母只含基准可比（A 股股权类）样本，
+    海外/债券/商品只进绝对口径（审查 #2）。
+    """
     from backend.services.advice_learning_service import AdviceLearningStore
     store = AdviceLearningStore()
     return ApiResponse(data=store.stats())

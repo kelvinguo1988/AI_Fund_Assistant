@@ -149,8 +149,9 @@ def _build_factor_seeds() -> list[dict]:
         "signal_rules": json.dumps([]),
         "normalization": "none",
     },
-    # ── 市场环境 3 因子（读 MarketRegimeSnapshot，全池同分；绝对因子必须
-    # 用 normalization=none，截面标准化会把同分因子打成 0）──
+    # ── 市场环境 3 因子（读 MarketRegimeSnapshot，A 股标的同分；非 A 股标的按
+    # market_factors_a_share_only 记 data_valid=False 的 0 分不表态，见 factor_engine）──
+    # 绝对因子必须用 normalization=none，截面标准化会把同分因子打成 0
     {
         "name": "大盘估值分位", "code": "market_valuation", "data_fields": json.dumps(["market_regime"]), "direction": "negative",
         "weight": 0.8, "sort_order": 9,
@@ -569,14 +570,17 @@ async def init_db() -> None:
                 "system_prompt": (
                     "你是建议质量复盘助手。用户会给出调仓建议的历史命中率统计"
                     "（by_mode 下 excess/abs 两个口径各自的 sell/buy 总数与命中数）、"
-                    "当前口径 hit_mode 与校准参数（止盈/止损线）。\n"
+                    "当前口径 hit_mode、样本可比性拆分 by_kind 与校准参数（止盈/止损线）。\n"
                     "解读框架：\n"
                     "1. 口径优先级：结论一律以 excess（相对沪深300 同区间超额，建议日→其后第 30 个净值日）"
                     "为准；abs（绝对涨跌）只作对照，牛市中 abs 普遍虚高，单独引用 abs 会高估选基能力\n"
-                    "2. 样本量说明（该口径 total < 30 时明确'样本不足，阈值未被校准动过'）\n"
-                    "3. excess sell 命中率低 = 卖出信号选错标的（卖掉的反而跑赢基准），止损线应收紧\n"
-                    "4. excess buy 命中率低 = 买入信号追高跑输基准，止盈线应下调\n"
-                    "5. 引用具体数字并标注口径，不做无数据支撑的断言；所有内容仅供参考。"
+                    "2. 分母口径：excess 只统计基准可比的 A 股股权类样本；"
+                    "by_kind.abs_only（海外/债券/商品）与沪深300 不同域，只进 abs，"
+                    "引用 excess 时必须说明它量的是哪一批基金\n"
+                    "3. 样本量说明（该口径 total < 30 时明确'样本不足，阈值未被校准动过'）\n"
+                    "4. excess sell 命中率低 = 卖出信号选错标的（卖掉的反而跑赢基准），止损线应收紧\n"
+                    "5. excess buy 命中率低 = 买入信号追高跑输基准，止盈线应下调\n"
+                    "6. 引用具体数字并标注口径，不做无数据支撑的断言；所有内容仅供参考。"
                 ),
                 "enabled": True,
                 "tool_spec": json.dumps({
@@ -586,7 +590,7 @@ async def init_db() -> None:
             },
         ]
         # Q7（2026-10-02）口径升级：存量库的内置提示词只在"用户从未改过"时才替换
-        # （逐字比较 v1 文案），改过的保留；新库由下方补种直接写入新文案。
+        # （逐字比较旧文案），改过的保留；新库由下方补种直接写入新文案。
         _advice_skill = next(x for x in _native_skills if x["name"] == "调仓建议自进化")
         _advice_prompt_v1 = (
             "你是建议质量复盘助手。用户会给出调仓建议的历史命中率统计"
@@ -597,10 +601,23 @@ async def init_db() -> None:
             "3. buy 命中率低 = 买入信号追高，止盈线应下调\n"
             "4. 引用具体数字，不做无数据支撑的断言；所有内容仅供参考。"
         )
+        # 审查 #2 之前的 Q7 文案（未提 by_kind 分母口径）
+        _advice_prompt_v2 = (
+            "你是建议质量复盘助手。用户会给出调仓建议的历史命中率统计"
+            "（by_mode 下 excess/abs 两个口径各自的 sell/buy 总数与命中数）、"
+            "当前口径 hit_mode 与校准参数（止盈/止损线）。\n"
+            "解读框架：\n"
+            "1. 口径优先级：结论一律以 excess（相对沪深300 同区间超额，建议日→其后第 30 个净值日）"
+            "为准；abs（绝对涨跌）只作对照，牛市中 abs 普遍虚高，单独引用 abs 会高估选基能力\n"
+            "2. 样本量说明（该口径 total < 30 时明确'样本不足，阈值未被校准动过'）\n"
+            "3. excess sell 命中率低 = 卖出信号选错标的（卖掉的反而跑赢基准），止损线应收紧\n"
+            "4. excess buy 命中率低 = 买入信号追高跑输基准，止盈线应下调\n"
+            "5. 引用具体数字并标注口径，不做无数据支撑的断言；所有内容仅供参考。"
+        )
         _legacy = (await session.execute(
             select(AISkill).where(AISkill.name == "调仓建议自进化"))).scalars().all()
         for _sk in _legacy:
-            if _sk.system_prompt == _advice_prompt_v1:
+            if _sk.system_prompt in (_advice_prompt_v1, _advice_prompt_v2):
                 _sk.system_prompt = _advice_skill["system_prompt"]
                 _sk.description = _advice_skill["description"]
                 _sk.tool_spec = _advice_skill["tool_spec"]
