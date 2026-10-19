@@ -199,3 +199,107 @@ class TestTencentEtfParser:
         assert r["scanned"] == 1
         assert len(r["movers"]) == 1, "pct>2 + 量比>1.5 + 主买占比>0 应进量价齐升榜"
         assert r["movers"][0]["code"] == "510300"
+
+
+class TestDegradedPriorityByCallShape:
+    """东财不可用时的分流语义（2026-10-19 审查发现的性能回归护栏）
+
+    历史坑：两处失败分支原本"先全链路再按需"，东财熔断时仪表盘为了 3~10 只
+    ETF 也要付一次全市场 34 批扫描（实测 5.2s vs 按需 0.2s）。这里把调用形态
+    与优先级的关系钉死，防止将来又被"简化"回去。
+    """
+
+    @staticmethod
+    def _svc():
+        return _frs.FundRealtimeService.__new__(_frs.FundRealtimeService)
+
+    async def test_codes_given_prefers_on_demand_over_full_scan(self, monkeypatch):
+        """仪表盘估值（codes 给定）必须走单批按需，不许触发全市场扫描"""
+        calls = []
+
+        async def _on_demand(self, codes, now):
+            calls.append("on_demand")
+            return {"510300": {"name": "沪深300ETF", "price": 4.24, "pct": 0.09}}
+
+        async def _full(self):
+            calls.append("full")
+            raise AssertionError("codes 给定时不该付全市场扫描的代价")
+
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_on_demand", _on_demand,
+        )
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_full", _full,
+        )
+        svc = self._svc()
+        svc._source_available = lambda src: True  # type: ignore[method-assign]
+
+        out = await svc._get_etf_spot_degraded(["510300"], 0.0)
+        assert out and "510300" in out
+        assert calls == ["on_demand"]
+
+    async def test_codes_none_goes_full_scan(self, monkeypatch):
+        """榜单扫描（codes=None）必须走全链路——按需拿不到量价字段"""
+        calls = []
+
+        async def _on_demand(self, codes, now):
+            calls.append("on_demand")
+            return {}
+
+        async def _full(self):
+            calls.append("full")
+            return {"510300": {"name": "沪深300ETF", "volume_ratio": 0.75}}
+
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_on_demand", _on_demand,
+        )
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_full", _full,
+        )
+        svc = self._svc()
+        svc._source_available = lambda src: True  # type: ignore[method-assign]
+
+        out = await svc._get_etf_spot_degraded(None, 0.0)
+        assert out and "510300" in out
+        assert "full" in calls, "codes=None 必须触发全链路"
+        assert "on_demand" not in calls, "codes=None 不该先走按需（补不出量价）"
+
+    async def test_on_demand_failure_falls_back_to_full_scan(self, monkeypatch):
+        """按需失败 → 仍要退全链路（宁可慢也要有数，不能直接空）"""
+        async def _on_demand(self, codes, now):
+            return None
+
+        async def _full(self):
+            return {"510300": {"name": "沪深300ETF", "volume_ratio": 0.75}}
+
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_on_demand", _on_demand,
+        )
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_full", _full,
+        )
+        svc = self._svc()
+        svc._source_available = lambda src: True  # type: ignore[method-assign]
+
+        out = await svc._get_etf_spot_degraded(["510300"], 0.0)
+        assert out and "510300" in out
+
+    async def test_both_links_down_returns_none(self, monkeypatch):
+        """两条链路都不可用 → 诚实返回 None，不拿半张快照冒充全市场"""
+        async def _on_demand(self, codes, now):
+            return None
+
+        async def _full(self):
+            return None
+
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_on_demand", _on_demand,
+        )
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_full", _full,
+        )
+        svc = self._svc()
+        svc._source_available = lambda src: True  # type: ignore[method-assign]
+
+        assert await svc._get_etf_spot_degraded(None, 0.0) is None
+        assert await svc._get_etf_spot_degraded(["510300"], 0.0) is None

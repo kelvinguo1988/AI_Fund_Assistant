@@ -580,36 +580,13 @@ class FundRealtimeService:
                     return _cache
 
             if not self._source_available(EM_SOURCE):
-                # 东财熔断 → 腾讯全链路（2026-10-19 修复）：榜单需要量价字段，
-                # 腾讯按需（下面 codes 分支）只给 name/pct 不含量价 → codes=None
-                # 时原实现直接返回 None 是"东财挂了整个扫描就不可能"的死锁。
-                # 先试腾讯全市场链路；再不成才走腾讯按需（只缓存部分代码）。
-                if self._source_available(TX_ALL_SOURCE):
-                    full = await self._get_etf_spot_tencent_full()
-                    if full:
-                        return full
-                # 腾讯按需：只缓存这部分代码，**不**续期全量快照
-                # 时间戳（codes=None 需要全市场时上面已试过全链路）
-                if codes and self._source_available(TENCENT_SOURCE):
-                    quotes = await self._get_tencent_quotes(codes)
-                    if quotes:
-                        spot = {
-                            c: {
-                                "name": q.get("name", ""),
-                                "price": q.get("price"),
-                                "pct": q.get("pct"),
-                                "time": q.get("time", ""),
-                                "date": "",
-                            }
-                            for c, q in quotes.items()
-                        }
-                        base = FundRealtimeService._etf_spot_cache or {}
-                        base.update(spot)
-                        FundRealtimeService._etf_spot_cache = base
-                        self._mark_spot_entries("etf", spot.keys(), now)
-                        logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
-                        return spot
-                return None
+                # 东财熔断 → 腾讯兜底（2026-10-19 修复）：榜单需要量价字段，
+                # 腾讯按需只给 name/pct 不含量价 → codes=None 时原实现直接
+                # 返回 None 是"东财挂了整个扫描就不可能"的死锁。
+                # 按调用形态分流：codes=None（榜单要全市场量价）必须全链路；
+                # codes=[少量]（仪表盘估值只要价和涨幅）走单批按需，别为 5 只
+                # 基金付 34 批全市场扫描的代价。见 _get_etf_spot_degraded。
+                return await self._get_etf_spot_degraded(codes, now)
 
             try:
                 import akshare as ak
@@ -645,34 +622,64 @@ class FundRealtimeService:
             except Exception as e:
                 self._mark_source_fail(EM_SOURCE, str(e)[:80])
 
-            # 东财刷新失败(非熔断,比如临时 RemoteDisconnected)→ 腾讯全链路
-            # （2026-10-19：与熔断分支同口径，全市场列表场景优先全链路）
-            if self._source_available(TX_ALL_SOURCE):
-                full = await self._get_etf_spot_tencent_full()
-                if full:
-                    return full
+            # 东财刷新失败(非熔断,比如临时 RemoteDisconnected) → 与熔断分支
+            # 同口径的腾讯兜底（按调用形态分流优先级）
+            return await self._get_etf_spot_degraded(codes, now)
 
-            # 腾讯按需（与熔断分支同口径：不续期全量时间戳）
-            if codes and self._source_available(TENCENT_SOURCE):
-                quotes = await self._get_tencent_quotes(codes)
-                if quotes:
-                    spot = {
-                        c: {
-                            "name": q.get("name", ""),
-                            "price": q.get("price"),
-                            "pct": q.get("pct"),
-                            "time": q.get("time", ""),
-                            "date": "",
-                        }
-                        for c, q in quotes.items()
-                    }
-                    base = FundRealtimeService._etf_spot_cache or {}
-                    base.update(spot)
-                    FundRealtimeService._etf_spot_cache = base
-                    self._mark_spot_entries("etf", spot.keys(), now)
-                    logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
-                    return spot
+    async def _get_etf_spot_degraded(
+        self, codes: Optional[list[str]], now: float
+    ) -> Optional[dict[str, dict]]:
+        """东财不可用时的腾讯兜底：按调用形态决定先走哪条链路
+
+        为什么要分流（审查发现的性能回归）:
+          - codes=None  → 榜单扫描，需要全市场量价字段 → 必须走全链路（34 批）
+          - codes=[N 只] → 仪表盘估值只要 name/price/pct/time → 单批按需即可
+
+        修复前两处失败分支都是"先全链路再按需"，导致东财熔断时仪表盘为了
+        3~10 只 ETF 也要付一次全市场扫描（实测 5.2s → 按需 ~0.2s）。
+        这里反过来：codes 给定时先按需，按需失败才退全链路（宁可慢也要有数）。
+        """
+        if codes:
+            spot = await self._get_etf_spot_tencent_on_demand(codes, now)
+            if spot:
+                return spot
+        if self._source_available(TX_ALL_SOURCE):
+            full = await self._get_etf_spot_tencent_full()
+            if full:
+                return full
+        # 两条链路都不可用（或全链路覆盖不足）→ 诚实返回 None，
+        # 由调用方出"快照不可用"提示，不做半张快照冒充全市场
+        return None
+
+    async def _get_etf_spot_tencent_on_demand(
+        self, codes: list[str], now: float
+    ) -> Optional[dict[str, dict]]:
+        """腾讯按需报价：只取给定代码，**不**续期全量快照时间戳
+
+        只填 name/price/pct/time（腾讯按需链路不含量价字段），够仪表盘估值
+        用；榜单扫描必须走 _get_etf_spot_tencent_full。
+        """
+        if not codes or not self._source_available(TENCENT_SOURCE):
             return None
+        quotes = await self._get_tencent_quotes(codes)
+        if not quotes:
+            return None
+        spot = {
+            c: {
+                "name": q.get("name", ""),
+                "price": q.get("price"),
+                "pct": q.get("pct"),
+                "time": q.get("time", ""),
+                "date": "",
+            }
+            for c, q in quotes.items()
+        }
+        base = FundRealtimeService._etf_spot_cache or {}
+        base.update(spot)
+        FundRealtimeService._etf_spot_cache = base
+        self._mark_spot_entries("etf", spot.keys(), now)
+        logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
+        return spot
 
     async def _get_etf_spot_tencent_full(self) -> Optional[dict[str, dict]]:
         """腾讯全市场 ETF 快照（2026-10-19 根因修复）→ 与 _get_etf_spot 同 schema
