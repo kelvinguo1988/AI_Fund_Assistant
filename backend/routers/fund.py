@@ -498,12 +498,15 @@ async def etf_scan(db: AsyncSession = Depends(get_db)):
             "error": (
                 "ETF 全市场快照不可用"
                 + (f"：{cooled}" if cooled else "（数据源被限流或上游拒绝连接）")
-                + "——稍后重新扫描；全市场快照需东财分页拉取，腾讯降级链路不含量价字段，不做替代"
+                + "——稍后重新扫描。2026-10-19 已接入腾讯全链路兜底（东财挂时自动切换），"
+                "此提示说明东财与腾讯链路同时不可用（多为非交易时段或腾讯连接抖动）"
             ),
         })
 
     result = scan_potential(spot_map, pool_codes)
     result["pool_codes"] = list(pool_codes)
+    # 2026-10-19：告知前端本此快照来自哪个源（东财=主力口径 / 腾讯=主买口径）
+    result["source"] = next(iter(spot_map.values())).get("source") or "eastmoney"
     return ApiResponse(data=result)
 
 

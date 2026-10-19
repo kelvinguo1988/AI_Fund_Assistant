@@ -70,6 +70,10 @@ SOURCE_FAIL_COOLDOWN = 600.0
 EM_SOURCE = "eastmoney"
 SINA_SOURCE = "sina"
 TENCENT_SOURCE = "tencent"
+# 腾讯 ETF 全市场链路（2026-10-19）：榜单场景"清单一~30批行情"。
+# 独立熔断键：与共享 TENCENT_SOURCE 隔离——扫描批次失败若熔断共享源
+# 会连累全池 ETF/个股估值（2026-09-02 级联故障教训）。
+TX_ALL_SOURCE = "tencent_etf_full"
 
 TENCENT_URL = "http://qt.gtimg.cn/q={codes}"
 
@@ -576,8 +580,16 @@ class FundRealtimeService:
                     return _cache
 
             if not self._source_available(EM_SOURCE):
-                # 东财熔断 → 腾讯按需：只缓存这部分代码，**不**续期全量快照
-                # 时间戳（codes=None 需要全市场时不降级，宁可不给）
+                # 东财熔断 → 腾讯全链路（2026-10-19 修复）：榜单需要量价字段，
+                # 腾讯按需（下面 codes 分支）只给 name/pct 不含量价 → codes=None
+                # 时原实现直接返回 None 是"东财挂了整个扫描就不可能"的死锁。
+                # 先试腾讯全市场链路；再不成才走腾讯按需（只缓存部分代码）。
+                if self._source_available(TX_ALL_SOURCE):
+                    full = await self._get_etf_spot_tencent_full()
+                    if full:
+                        return full
+                # 腾讯按需：只缓存这部分代码，**不**续期全量快照
+                # 时间戳（codes=None 需要全市场时上面已试过全链路）
                 if codes and self._source_available(TENCENT_SOURCE):
                     quotes = await self._get_tencent_quotes(codes)
                     if quotes:
@@ -633,7 +645,14 @@ class FundRealtimeService:
             except Exception as e:
                 self._mark_source_fail(EM_SOURCE, str(e)[:80])
 
-            # 东财刷新失败 → 腾讯按需（与熔断分支同口径：不续期全量时间戳）
+            # 东财刷新失败(非熔断,比如临时 RemoteDisconnected)→ 腾讯全链路
+            # （2026-10-19：与熔断分支同口径，全市场列表场景优先全链路）
+            if self._source_available(TX_ALL_SOURCE):
+                full = await self._get_etf_spot_tencent_full()
+                if full:
+                    return full
+
+            # 腾讯按需（与熔断分支同口径：不续期全量时间戳）
             if codes and self._source_available(TENCENT_SOURCE):
                 quotes = await self._get_tencent_quotes(codes)
                 if quotes:
@@ -654,6 +673,116 @@ class FundRealtimeService:
                     logger.info(f"ETF 实时行情(腾讯按需): {len(spot)}/{len(codes)} 只")
                     return spot
             return None
+
+    async def _get_etf_spot_tencent_full(self) -> Optional[dict[str, dict]]:
+        """腾讯全市场 ETF 快照（2026-10-19 根因修复）→ 与 _get_etf_spot 同 schema
+
+        数据源:
+          清单: akshare fund_etf_fund_daily_em（fund.eastmoney.com 族，
+                与被封禁的 push2delay 不同集群，实测可用）→ 全市场 1686 只
+          行情: 腾讯 qt.gtimg.cn 批量 50/批 → name/price/pct/换手(f38)/
+                量比(f49)/成交额(f37万→元)/主买占比((外盘−内盘)/总量)
+
+        口径注记（数值细节见 backend/services/etf_spot_tencent.py 模块头）:
+          - f38/f49 与东财口径一致（4 样本逐一相等）；
+          - main_inflow_pct 实为主买占比，绝对值偏高 ~20pp，相对排名持平；
+            前端「资金流入榜」文案相应改为「主买占优榜」；
+          - iopv/premium_discount 恒 None → 折溢价提示自动跳过。
+
+        熔断: TX_ALL_SOURCE 独立键——清单或行情单批失败率 > 50% 才熔断
+              （共享 TENCENT_SOURCE 不动，防级联故障）。
+        缓存: 成功时写入 _etf_spot_cache 且续期 _etf_ts（它就是一张完整的
+              全市场快照，语义与东财版相同，可直接参与 60s TTL 共享）。
+        """
+        if not self._source_available(TX_ALL_SOURCE):
+            return None
+
+        import akshare as ak
+        from backend.data_sources.akshare_adapter import AKShareAdapter
+        from backend.services.etf_spot_tencent import (
+            TX_BATCH_GAP, TX_BATCH_SIZE, TX_FAIL_RATIO, TX_TIMEOUT,
+            parse_tencent_etf_batch, to_tencent_etf_code,
+        )
+
+        # 1. 全市场清单（fund.eastmoney.com 族未封禁）
+        try:
+            adapter = AKShareAdapter()
+            df = await adapter._call(
+                ak.fund_etf_fund_daily_em, _max_attempts=1, _timeout=25.0,
+            )
+        except Exception as e:
+            self._mark_source_fail(TX_ALL_SOURCE, f"清单失败: {str(e)[:60]}")
+            return None
+        if df is None or df.empty:
+            self._mark_source_fail(TX_ALL_SOURCE, "清单为空")
+            return None
+        codes = [c for c in df["基金代码"].astype(str) if c.isdigit()]
+        names = dict(zip(df["基金代码"].astype(str), df["基金简称"]))
+        if not codes:
+            self._mark_source_fail(TX_ALL_SOURCE, "清单无可识别代码")
+            return None
+
+        # 2. 腾讯批量行情（批内独立容错，失败率过半才熔断）
+        def _do_batch(codes_chunk: list[str]) -> dict[str, dict]:
+            url = TENCENT_URL.format(
+                codes=",".join(to_tencent_etf_code(c) for c in codes_chunk)
+            )
+            resp = requests.get(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+                timeout=TX_TIMEOUT,
+            )
+            resp.encoding = "gbk"
+            return parse_tencent_etf_batch(resp.text)
+
+        batches = [
+            codes[i:i + TX_BATCH_SIZE]
+            for i in range(0, len(codes), TX_BATCH_SIZE)
+        ]
+        spot: dict[str, dict] = {}
+        failed = 0
+        for chunk in batches:
+            try:
+                # 阻塞请求放线程，不卡事件循环
+                rows = await asyncio.to_thread(_do_batch, chunk)
+                if rows:
+                    spot.update(rows)
+            except Exception:
+                failed += 1
+            if len(chunk) == TX_BATCH_SIZE:   # 仅整批之间留间隔
+                await asyncio.sleep(TX_BATCH_GAP)
+        if not spot:
+            self._mark_source_fail(TX_ALL_SOURCE, "行情全部批次失败")
+            return None
+        if failed / len(batches) > TX_FAIL_RATIO:
+            # 有数据但过半失败：先交付可用部分，同时熔断下一轮的自动重试
+            self._mark_source_fail(TX_ALL_SOURCE, f"{failed}/{len(batches)} 批失败")
+        coverage = {c: v for c, v in spot.items() if c in names}
+        rows_out = coverage or spot
+        # 清单里给的名称优先（腾讯对某些 ETF 名称带后缀差异）
+        for c, row in rows_out.items():
+            nm = names.get(c)
+            if nm:
+                row["name"] = nm
+            row["date"] = ""
+            row["source"] = TX_ALL_SOURCE
+        if len(rows_out) >= 1000:
+            self._mark_source_ok(TX_ALL_SOURCE)
+            FundRealtimeService._etf_spot_cache = rows_out
+            FundRealtimeService._etf_ts = time.time()
+            self._update_quote_time(
+                next(iter(rows_out.values())).get("time", ""), trusted=True,
+            )
+            logger.info(
+                f"ETF 实时快照刷新(腾讯全链路): {len(rows_out)}"
+                f"/{len(codes)} 只 (batches={len(batches)} failed={failed})"
+            )
+            return rows_out
+        # 覆盖太少（<1000）当部分失败处理，不冒充全市场快照
+        self._mark_source_fail(
+            TX_ALL_SOURCE, f"覆盖过少 {len(rows_out)}/{len(codes)}"
+        )
+        return None
 
     async def _get_stock_spot(
         self, codes: Optional[list[str]] = None

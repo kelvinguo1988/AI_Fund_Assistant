@@ -22,6 +22,9 @@ from backend.models.system_config import SystemConfig  # noqa: E402
 from backend.routers.fund import etf_scan  # noqa: E402
 from backend.services import fund_realtime_service as _frs  # noqa: E402
 from backend.services.etf_signal_service import scan_potential  # noqa: E402
+from backend.services.etf_spot_tencent import (  # noqa: E402
+    parse_tencent_etf_batch, to_tencent_etf_code,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -69,13 +72,43 @@ class TestSourceUnavailableState:
         assert "剩余" in d["error"], "不能再写死「约 10 分钟」"
         assert "10 分钟后自动恢复" not in d["error"]
 
-    async def test_no_breaker_still_reports_honestly(self, db_session, monkeypatch):
+    async def test_tencent_fallback_success_returns_source_and_full_scan(
+        self, db_session, monkeypatch
+    ):
+        """2026-10-19 根因修复：东财挂 → 腾讯全链路 → 快照可扫描且标注 source"""
+        spot = {
+            "510300": {
+                "name": "沪深300ETF", "price": 4.24, "pct": 0.09,
+                "turnover_rate": 4.15, "volume_ratio": 0.75,
+                "main_inflow_pct": 29.75, "amount": 5.1371e9,
+                "iopv": None, "premium_discount": None,
+                "source": _frs.TX_ALL_SOURCE,
+            },
+        }
+
+        async def _tx_full(self):
+            return spot
+        monkeypatch.setattr(
+            _frs.FundRealtimeService, "_get_etf_spot_tencent_full", _tx_full,
+        )
+
+        d = (await etf_scan(db_session)).data
+        assert d["source"] == _frs.TX_ALL_SOURCE
+        assert d["scanned"] == 1, "腾讯行含量价字段，必须参与扫描"
+
+    async def test_no_snapshot_error_mentions_tencent_fallback(
+        self, db_session, monkeypatch
+    ):
+        """双链路都失败时的空态：文案必须承认腾讯链路存在（2026-10-19 已接入）"""
         async def _none(self, codes=None):
             return None
         monkeypatch.setattr(_frs.FundRealtimeService, "_get_etf_spot", _none)
 
         d = (await etf_scan(db_session)).data
-        assert "上游拒绝连接" in d["error"]
+        assert "腾讯全链路" in d["error"] or "自动切换" in d["error"], (
+            "空态文案仍在宣称『腾讯降级链路不含量价字段，不做替代』"
+            "——已过时，会误导用户认为功能无救"
+        )
 
 
 class TestDegradedSnapshotState:
@@ -108,3 +141,61 @@ class TestScanCounters:
     def test_empty_map_counters(self):
         r = scan_potential({}, set())
         assert (r["scanned"], r["snapshot_rows"], r["skipped_no_fields"]) == (0, 0, 0)
+
+
+class TestTencentEtfParser:
+    """腾讯全链路解析器（2026-10-19 替代源，字段语义实测校准）"""
+
+    # 真实抓包 payload（2026-10-19 q=sh510300），88 字段全量；
+    # 关键下标（实测）: [6]外盘12105648 [7]内盘6554321 [32]涨跌0.09
+    # [37]成交额万513710 [38]换手4.24 [49]量比0.75
+    RAW = (
+        'v_sh510300="1~沪深300ETF华泰柏瑞~510300~4.240~4.236~4.224~'
+        '12105648~6554321~5551327~4.240~15993~4.239~2564~4.238~2333~'
+        '4.237~2217~4.236~6292~4.241~1315~4.242~5248~4.243~369~4.244~5235~'
+        '4.245~5900~~20261019161439~0.004~0.09~4.267~4.220~'
+        '4.240/12105648/5137102820~12105648~513710~4.24~~~4.267~4.220~1.11~'
+        '1210.65~1210.65~0.00~4.660~3.812~0.75~11332~4.244~~~~~~'
+        '513710.2820~308.8840~7285~   A~ETF~-8.42~-2.75~~~~5.095~4.187~'
+        '-4.01~-7.40~-7.61~28552987700~28552987700~23.87~-10.77~'
+        '28552987700~-0.16~4.2469~-5.80~-0.14~4.2473~CNY~0~___D__F__N~'
+        '4.235~7027~";'
+        'v_pv_none_match="1";'
+    )
+    # 关键下标（实测 2026-10-19）: [6]外盘12105648 [7]内盘6554321
+    # [32]涨跌0.09 [37]成交额万513710 [38]换手4.24 [49]量比0.75
+
+    def test_batch_parse_fields(self):
+        out = parse_tencent_etf_batch(self.RAW)
+        assert "510300" in out and "518880" not in out, (
+            "v_pv_none_match 必须被跳过"
+        )
+        row = out["510300"]
+        assert row["price"] == 4.24
+        assert row["pct"] == 0.09
+        # f49 才是与东财同口径的量比（f43 是盘口动态量比，勿用）
+        assert row["volume_ratio"] == 0.75
+        assert row["turnover_rate"] == 4.24
+        assert row["amount"] == 513710 * 1e4
+        # 主买占比 = (外盘−内盘)/(外盘+内盘)
+        expect = (12105648 - 6554321) / (12105648 + 6554321) * 100
+        assert abs(row["main_inflow_pct"] - expect) < 1e-6
+        assert row["name"] == "沪深300ETF华泰柏瑞"
+        assert row["time"] == "20261019161439"
+
+    def test_code_mapping(self):
+        assert to_tencent_etf_code("510300") == "sh510300"   # 沪 ETF 51x
+        assert to_tencent_etf_code("588000") == "sh588000"   # 沪 58x 科创
+        assert to_tencent_etf_code("159915") == "sz159915"   # 深 15x
+        assert to_tencent_etf_code("511010") == "sh511010"   # 债券 ETF
+
+    def test_scan_potential_accepts_tencent_row(self):
+        """腾讯行(主买口径)必须能进入原有扫描规则（量价齐升榜）"""
+        out = parse_tencent_etf_batch(self.RAW)
+        row = out["510300"]
+        row["pct"] = 3.0
+        row["volume_ratio"] = 2.0   # 人为抬到 movers 阈值以上验证规则路径
+        r = scan_potential({"510300": {**row, "source": "tencent_etf_full"}}, set())
+        assert r["scanned"] == 1
+        assert len(r["movers"]) == 1, "pct>2 + 量比>1.5 + 主买占比>0 应进量价齐升榜"
+        assert r["movers"][0]["code"] == "510300"

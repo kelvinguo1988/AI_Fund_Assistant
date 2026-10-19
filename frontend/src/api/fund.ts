@@ -135,6 +135,8 @@ export interface ETFScanResult {
   snapshot_rows?: number;
   /** 快照里缺场内量价字段、未参与扫描的行数 */
   skipped_no_fields?: number;
+  /** 本次快照的源: eastmoney(默认,主力口径) / tencent_etf_full(辅,主买口径) */
+  source?: string;
   movers: ETFScanItem[];
   inflow: ETFScanItem[];
   unusual: ETFScanItem[];

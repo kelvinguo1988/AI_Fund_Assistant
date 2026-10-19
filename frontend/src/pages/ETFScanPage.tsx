@@ -111,6 +111,10 @@ const ETFScanPage: React.FC = () => {
               <>
                 扫描全市场 {result.scanned} 只 ETF（量价特征排名，仅供参考不构成投资建议）；
                 标注「已持有」的在你的基金池中，可一键加入池内。
+                {result.source === 'tencent_etf_full' && (
+                  <> 数据口径：东财行情被限连，本次自动走腾讯全链路 ——
+                  换手/量比与东财同口径，净占比为主买口径（外盘−内盘/总量）。</>
+                )}
               </>
             ) : error ? (
               <>快照不可用，见上方提示。</>
@@ -124,7 +128,7 @@ const ETFScanPage: React.FC = () => {
           </Alert>
           <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
             <Tab label={`📈 量价齐升 (${result.movers.length})`} />
-            <Tab label={`💰 资金流入 (${result.inflow.length})`} />
+            <Tab label={`💰 主买占优 (${result.inflow.length})`} />
             <Tab label={`🔥 异动 (${result.unusual.length})`} />
           </Tabs>
           <TableContainer component={Paper} variant="outlined">
@@ -137,7 +141,7 @@ const ETFScanPage: React.FC = () => {
                   <TableCell align="right">涨跌幅</TableCell>
                   <TableCell align="right">换手率</TableCell>
                   <TableCell align="right">量比</TableCell>
-                  <TableCell align="right">主力净流入占比</TableCell>
+                  <TableCell align="right">主力/主买净占比</TableCell>
                   <TableCell align="right">成交额</TableCell>
                   <TableCell align="center">操作</TableCell>
                 </TableRow>
