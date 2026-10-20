@@ -190,6 +190,10 @@ class ZenFreeProvider(BaseLLMProvider):
                         yield None, None, usage
                     for ch in (chunk.get("choices") or []):
                         delta = ch.get("delta") or {}
+                        # 思考模式：推理内容要随轮次保存并回传上游，标记为 "reasoning"
+                        rc = delta.get("reasoning_content")
+                        if rc:
+                            yield None, {"__reasoning__": rc}, None
                         if delta.get("content"):
                             yield delta["content"], None, None
                         for tc in (delta.get("tool_calls") or []):
@@ -222,6 +226,7 @@ class ZenFreeProvider(BaseLLMProvider):
     ):
         """与基类同签名、同事件格式（delta / tool_call / final）"""
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_acc: dict[int, dict] = {}
         prompt_tokens = completion_tokens = 0
         async for text, tc, usage in self._stream_chat(
@@ -230,6 +235,9 @@ class ZenFreeProvider(BaseLLMProvider):
             if usage:
                 prompt_tokens = usage.get("prompt_tokens") or prompt_tokens
                 completion_tokens = usage.get("completion_tokens") or completion_tokens
+            if tc and "__reasoning__" in tc:
+                reasoning_parts.append(tc["__reasoning__"])
+                continue
             if text:
                 content_parts.append(text)
                 yield {"type": "delta", "text": text}
@@ -268,6 +276,7 @@ class ZenFreeProvider(BaseLLMProvider):
             "response": LLMResponse(
                 content="".join(content_parts),
                 tool_calls=tool_calls,
+                reasoning="".join(reasoning_parts),
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             ),

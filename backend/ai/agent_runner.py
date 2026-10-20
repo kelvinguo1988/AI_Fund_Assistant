@@ -89,8 +89,8 @@ def _agent_error_message(e: Exception) -> str:
     return msg
 
 
-def _assistant_toolcall_msg(content: str, tool_calls) -> dict:
-    return {
+def _assistant_toolcall_msg(content: str, tool_calls, reasoning: str = "") -> dict:
+    msg = {
         "role": "assistant",
         "content": content or None,
         "tool_calls": [
@@ -102,6 +102,12 @@ def _assistant_toolcall_msg(content: str, tool_calls) -> dict:
             for i, tc in enumerate(tool_calls)
         ],
     }
+    # 思考模式必须把上一轮的推理内容原样带回去，否则上游报
+    # "The `reasoning_content` in the thinking mode must be passed back to the API"
+    # （2026-10-20 zen-free/DeepSeek 推理模型多轮工具调用实测）
+    if reasoning:
+        msg["reasoning_content"] = reasoning
+    return msg
 
 
 def _tool_msg(tc_id: str, payload: str) -> dict:
@@ -273,7 +279,9 @@ class AgentRunner:
                 break
             # 工具轮：该轮流出的零星文本作废
             yield {"type": "delta_reset"}
-            messages.append(_assistant_toolcall_msg(resp.content, resp.tool_calls))
+            messages.append(_assistant_toolcall_msg(
+                resp.content, resp.tool_calls, reasoning=getattr(resp, "reasoning", "") or ""
+            ))
             for tc in resp.tool_calls:
                 t0 = time.monotonic()
                 payload = await execute_tool(self.db, tc.name, tc.arguments,

@@ -32,6 +32,11 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # 思考模式（DeepSeek-R1 系 / GLM 等）的推理内容。
+    # 多轮工具调用时必须原样回传给上游，否则报
+    # "The `reasoning_content` in the thinking mode must be passed back to the API"。
+    # 非推理模型恒为空串。
+    reasoning: str = ""
 
     @property
     def has_tool_calls(self) -> bool:
@@ -181,6 +186,7 @@ class BaseLLMProvider(ABC):
                 raise
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_acc: dict[int, dict] = {}  # index -> {id, name, arguments 拼接}
         prompt_tokens = completion_tokens = 0
         async for chunk in stream:
@@ -192,6 +198,10 @@ class BaseLLMProvider(ABC):
             delta = chunk.choices[0].delta
             if delta is None:
                 continue
+            # 思考模式的推理内容单收：最后一轮工具调用前必须回传给上游
+            rc = getattr(delta, "reasoning_content", None)
+            if rc:
+                reasoning_parts.append(rc)
             if delta.content:
                 content_parts.append(delta.content)
                 yield {"type": "delta", "text": delta.content}
@@ -227,6 +237,7 @@ class BaseLLMProvider(ABC):
             "response": LLMResponse(
                 content="".join(content_parts),
                 tool_calls=tool_calls,
+                reasoning="".join(reasoning_parts),
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             ),
