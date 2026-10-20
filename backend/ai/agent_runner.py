@@ -204,6 +204,8 @@ class AgentRunner:
         errored = False
         # 本轮是否已向客户端产出过内容（决定能否安全地换链路重跑）
         emitted_any = False
+        # 正文为空的重试计数（推理模型只吐思考内容时给的第二次机会）
+        empty_retries = 0
 
         for round_no in range(1, self.max_rounds + 1):
             yield {"type": "round", "round": round_no}
@@ -276,6 +278,19 @@ class AgentRunner:
             token_spent += round_tokens
             if not resp.has_tool_calls:
                 final_text = resp.content
+                # 推理模型可能只吐思考内容、正文为空（实测 deepseek 系偶尔如此）。
+                # 此时再要一次正文，避免直接报"未产出回答"；重试次数有限。
+                if not final_text and round_no < self.max_rounds:
+                    empty_retries += 1
+                    if empty_retries <= 2:
+                        logger.warning(
+                            f"第 {round_no} 轮正文为空（推理模型只输出思考），重试要正文"
+                        )
+                        messages.append({
+                            "role": "user",
+                            "content": "请直接输出最终回答正文（不要再调用工具，不要只思考）。",
+                        })
+                        continue
                 break
             # 工具轮：该轮流出的零星文本作废
             yield {"type": "delta_reset"}
@@ -317,19 +332,26 @@ class AgentRunner:
 
         if not final_text and (forced_summary or events_trace):
             # 收尾轮：不带工具，把文本流给用户
+            # 注意：delta 已经实时推给前端了，这里必须同步累积一份——
+            # 若该轮 final 缺失或 content 为空（推理模型只吐思考内容时会发生），
+            # 只有 delta 累加才能避免"前端明明显示出来了，后端却说未产出回答"
+            streamed: list[str] = []
             try:
                 agen = provider.astream_with_tools(messages, None, temperature=0.3)
                 async for ev in self._iter_round(agen):
                     if ev["type"] == "final":
                         resp2 = ev["response"]
-                        final_text = resp2.content or final_text
+                        final_text = resp2.content or "".join(streamed)
                         token_spent += (resp2.prompt_tokens + resp2.completion_tokens) or 1
                     elif ev["type"] == "delta":
+                        text = ev.get("text") or ""
+                        if text:
+                            streamed.append(text)
                         yield ev
-                        if not final_text:
-                            pass  # 文本经 delta 实时透传，final 事件带完整 content
             except Exception as e:
                 logger.warning(f"Agent 收尾轮失败: {e}")
+            if not final_text and streamed:
+                final_text = "".join(streamed)
 
         if not final_text:
             yield {"type": "error", "message": "Agent 未产出最终回答"}
