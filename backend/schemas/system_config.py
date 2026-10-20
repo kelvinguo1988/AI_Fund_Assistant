@@ -13,6 +13,15 @@ class AIConfigUpdate(BaseModel):
     ai_base_url: Optional[str] = Field(None, description="AI 模型 API Base URL")
     ai_model_id: Optional[str] = Field(None, description="具体模型 ID 覆盖（如 glm-4-plus/qwen-max，空=用预设默认）")
 
+    # ── 备用链路（LLM 兜底，2026-10-20）────────────────────────────────
+    # 主力 Key 失效/额度耗尽时自动改写一次；不填即不启用，行为与原来一致。
+    # 典型用法：备用指向 magpie 本地网关的免费模型（base_url=http://<mac>:3425/v1）
+    ai_fallback_enabled: Optional[bool] = Field(None, description="启用备用 AI 链路")
+    ai_fallback_model: Optional[str] = Field(None, description="备用预设：openai/deepseek/glm/tongyi")
+    ai_fallback_api_key: Optional[str] = Field(None, description="备用 API Key（如 magpie gateway key）")
+    ai_fallback_base_url: Optional[str] = Field(None, description="备用 Base URL（空=沿用主 Base URL）")
+    ai_fallback_model_id: Optional[str] = Field(None, description="备用模型 ID（如 opencode-zen-free/deepseek-v4.1-flash-free）")
+
 
 class AIModelPreset(BaseModel):
     """预设模型配置"""

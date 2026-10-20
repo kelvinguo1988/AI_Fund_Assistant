@@ -116,7 +116,25 @@ class AIService:
         except Exception as e:
             # 原始异常只进日志：detail 会经路由透给前端，防泄漏 API key/URL 等内部信息
             logger.error(f"LLM 调用失败: {type(e).__name__}: {e}", exc_info=True)
-            raise ValueError("AI 服务调用失败")
+            # 主力不可用 → 试备用 Provider（2026-10-20；可配成 magpie 免费模型链路）
+            from backend.llm.fallback import (
+                create_fallback_provider, describe_fallback, load_fallback_config,
+            )
+            fb_cfg = load_fallback_config(config_map)
+            fb = create_fallback_provider(fb_cfg) if fb_cfg else None
+            if fb is None:
+                raise ValueError("AI 服务调用失败")
+            logger.warning(f"改用备用 LLM 链路: {describe_fallback(fb_cfg)}")
+            try:
+                ai_response = await fb.chat(
+                    system_prompt=system_prompt,
+                    messages=messages,
+                )
+            except Exception as e2:
+                logger.error(
+                    f"备用 LLM 调用也失败: {type(e2).__name__}: {e2}", exc_info=True
+                )
+                raise ValueError("AI 服务调用失败")
 
         # 存储用户消息
         user_conv = AIConversation(

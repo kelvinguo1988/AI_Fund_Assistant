@@ -57,7 +57,36 @@ async def _load_ai_config(db: AsyncSession) -> dict:
         "ai_base_url": cm.get("ai_base_url", "https://api.deepseek.com/v1"),
         "ai_model_id": (cm.get("ai_model_id") or "").strip() or None,
         "agent_enabled": (cm.get("ai_agent_enabled") or "true").lower() == "true",
+        # 原始配置映射：备用链路（LLM 兜底）从里面读 ai_fallback_* 几项
+        "raw": cm,
     }
+
+
+def _build_fallback_provider(cfg: dict):
+    """按配置构造备用 Provider；未启用或构造失败返回 None（不阻断主链路）"""
+    from backend.llm.fallback import (
+        create_fallback_provider, load_fallback_config,
+    )
+    fb_cfg = load_fallback_config(cfg.get("raw") or {})
+    if not fb_cfg:
+        return None
+    return create_fallback_provider(fb_cfg)
+
+
+def _agent_error_message(e: Exception) -> str:
+    """把 LLM 异常转成可操作的中文错误串（两条失败路径共用）"""
+    raw = str(e)
+    # 150 字会正好切掉端点报错里最有用的部分（可用模型名清单在句尾）
+    msg = f"{type(e).__name__}: {raw[:300]}"
+    low = raw.lower()
+    if "tool" in msg.lower():
+        msg += "（当前模型可能不支持函数调用，请换用支持 tools 的模型）"
+    if "model names are" in low or "but you passed" in low:
+        msg += (
+            "（模型名要与端点一致：在系统设置改「模型 ID 覆盖」。"
+            "注意官网宣传名不是 API 参数名，如 DeepSeek-V4.1-Flash 对应 deepseek-flash）"
+        )
+    return msg
 
 
 def _assistant_toolcall_msg(content: str, tool_calls) -> dict:
@@ -166,10 +195,13 @@ class AgentRunner:
         final_text = ""
         forced_summary = False
         errored = False
+        # 本轮是否已向客户端产出过内容（决定能否安全地换链路重跑）
+        emitted_any = False
 
         for round_no in range(1, self.max_rounds + 1):
             yield {"type": "round", "round": round_no}
             resp = None
+            emitted_any = False
             try:
                 agen = provider.astream_with_tools(messages, specs, temperature=0.3)
                 async for ev in self._iter_round(agen):
@@ -177,29 +209,50 @@ class AgentRunner:
                         resp = ev["response"]
                     elif ev["type"] == "delta":
                         # 工具轮的零星文本由随后的 delta_reset 作废
+                        emitted_any = True
                         yield ev
                     elif ev["type"] == "tool_call":
+                        emitted_any = True
                         yield ev
             except asyncio.TimeoutError:
                 errored = True
                 yield {"type": "error", "message": f"LLM 响应超时（第 {round_no} 轮）"}
                 break
             except Exception as e:
-                raw = str(e)
-                # 150 字会正好切掉端点报错里最有用的部分（可用模型名清单在句尾）
-                msg = f"{type(e).__name__}: {raw[:300]}"
-                low = raw.lower()
-                if "tool" in msg.lower():
-                    msg += "（当前模型可能不支持函数调用，请换用支持 tools 的模型）"
-                if "model names are" in low or "but you passed" in low:
-                    msg += (
-                        "（模型名要与端点一致：在系统设置改「模型 ID 覆盖」。"
-                        "注意官网宣传名不是 API 参数名，如 DeepSeek-V4.1-Flash 对应 deepseek-flash）"
-                    )
-                logger.error(f"Agent LLM 调用失败 round={round_no}: {msg}")
-                errored = True
-                yield {"type": "error", "message": msg}
-                break
+                # 第 1 轮且尚未产出任何事件 = 还没发生工具调用，可整体换备用链路
+                # 重跑本轮（2026-10-20：主力 Key 失效时不让任务直接死掉）
+                if round_no == 1 and not emitted_any:
+                    fb = _build_fallback_provider(cfg)
+                    if fb is not None:
+                        logger.warning(
+                            f"Agent 主力链路失败，改用备用链路: {fb.model_name}"
+                        )
+                        provider = fb
+                        yield {"type": "start", "conversation_id": conversation_id,
+                               "model": provider.model_name, "tools": len(specs),
+                               "fallback": True}
+                        yield {"type": "round", "round": round_no}
+                        try:
+                            async for ev in self._iter_round(
+                                provider.astream_with_tools(
+                                    messages, specs, temperature=0.3
+                                )
+                            ):
+                                if ev["type"] == "final":
+                                    resp = ev["response"]
+                                elif ev["type"] in ("delta", "tool_call"):
+                                    emitted_any = True
+                                    yield ev
+                        except Exception as e2:
+                            logger.error(
+                                f"Agent 备用链路也失败: {type(e2).__name__}: {e2}"
+                            )
+                if resp is None:
+                    msg = _agent_error_message(e)
+                    logger.error(f"Agent LLM 调用失败 round={round_no}: {msg}")
+                    errored = True
+                    yield {"type": "error", "message": msg}
+                    break
 
             if resp is None:
                 errored = True

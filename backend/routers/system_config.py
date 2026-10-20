@@ -88,6 +88,18 @@ async def update_system_config(
     if body.ai_model_id is not None:
         update_map["ai_model_id"] = body.ai_model_id.strip()
 
+    # 备用链路（LLM 兜底，2026-10-20）：全空也允许写入，用于关闭该功能
+    if body.ai_fallback_enabled is not None:
+        update_map["ai_fallback_enabled"] = str(body.ai_fallback_enabled).lower()
+    if body.ai_fallback_model is not None:
+        update_map["ai_fallback_model"] = body.ai_fallback_model.strip()
+    if body.ai_fallback_api_key is not None:
+        update_map["ai_fallback_api_key"] = body.ai_fallback_api_key
+    if body.ai_fallback_base_url is not None:
+        update_map["ai_fallback_base_url"] = body.ai_fallback_base_url.strip()
+    if body.ai_fallback_model_id is not None:
+        update_map["ai_fallback_model_id"] = body.ai_fallback_model_id.strip()
+
     for key, value in update_map.items():
         result = await db.execute(select(SystemConfig).where(SystemConfig.config_key == key))
         config = result.scalars().first()
