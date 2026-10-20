@@ -293,10 +293,18 @@ const SystemPage: React.FC = () => {
     setSelectedPreset(key);
     const preset = aiConfig?.presets?.find((p) => p.key === key);
     if (preset) {
-      setAiModel(preset.model_name);
+      // ai_model 存的是**预设 key**（后端据此选 Provider），不是模型 ID；
+      // 模型 ID 走 ai_model_id。旧代码把 model_name 写进 ai_model，
+      // 会让后端按 Provider 名找不到实现。
+      setAiModel(preset.key);
       setAiBaseUrl(preset.base_url);
+      setAiModelId(preset.model_name);
     }
   };
+
+  // 当前预设可选的模型清单（空 = 自由输入）
+  const currentModelChoices =
+    aiConfig?.presets?.find((p) => p.key === selectedPreset)?.model_choices ?? [];
 
   // 保存 AI 配置
   const handleSaveAI = async () => {
@@ -396,21 +404,50 @@ const SystemPage: React.FC = () => {
                 type="password"
                 value={aiApiKey}
                 onChange={(e) => setAiApiKey(e.target.value)}
-                placeholder="留空表示不修改"
+                placeholder={
+                  selectedPreset === 'zen-free'
+                    ? '无需填写（使用公开凭证）'
+                    : selectedPreset.startsWith('workbuddy')
+                      ? '填 WorkBuddy 的 refresh token'
+                      : '留空表示不修改'
+                }
                 fullWidth
                 size="small"
+                helperText={
+                  selectedPreset === 'zen-free'
+                    ? 'OpenCode 免费模型用公开凭证，不需要 Key'
+                    : selectedPreset.startsWith('workbuddy')
+                      ? 'access token 由后端自动换取与续期，只需 refresh token'
+                      : undefined
+                }
               />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
+              {/* 预设带可选模型清单时给下拉（如 zen-free / workbuddy），
+                  否则保持自由输入——避免手敲模型 ID 敲错导致 400 */}
               <TextField
+                select={currentModelChoices.length > 0}
                 label="模型 ID 覆盖（可选）"
                 value={aiModelId}
                 onChange={(e) => setAiModelId(e.target.value)}
                 placeholder="如 deepseek-v4-pro / glm-4-plus，空=用预设默认"
                 fullWidth
                 size="small"
-                helperText="留空用供应商默认；须填端点接受的 API 名（DeepSeek 当前为 deepseek-flash / deepseek-v4-pro，官网宣传名会报 400）"
-              />
+                helperText={
+                  currentModelChoices.length > 0
+                    ? `该供应商可选 ${currentModelChoices.length} 个模型`
+                    : '留空用供应商默认；须填端点接受的 API 名（DeepSeek 当前为 deepseek-flash / deepseek-v4-pro，官网宣传名会报 400）'
+                }
+              >
+                {currentModelChoices.length > 0 && (
+                  <MenuItem value="">供应商默认</MenuItem>
+                )}
+                {currentModelChoices.map((m) => (
+                  <MenuItem key={m} value={m}>
+                    {m}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <TextField

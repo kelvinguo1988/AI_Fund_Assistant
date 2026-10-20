@@ -310,6 +310,8 @@ export interface AIModelPreset {
   label: string;
   base_url: string;
   model_name: string;
+  /** 该预设可选的模型 ID 清单（空 = 只有默认那一个，自由输入） */
+  model_choices?: string[];
 }
 
 export interface AIConfigOut {

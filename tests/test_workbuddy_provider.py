@@ -98,3 +98,91 @@ class TestFactory:
 
         p = LLMFactory.create("workbuddy-ai", "rt", "", model_id="glm-5.3-flash")
         assert p.model_name == "glm-5.3-flash"
+
+
+class TestModelFallback:
+    """模型繁忙（14003/429）时自动换模型（2026-10-20）
+
+    实测 deepseek-v4.1-flash 经常返回 14003「模型繁忙」，
+    换 glm-5.3-flash 就正常；这类错误不该让整个请求失败。
+    """
+
+    def test_busy_detection(self):
+        from backend.llm.workbuddy_provider import _is_model_busy
+
+        assert _is_model_busy(429, "") is True
+        assert _is_model_busy(400, '{"code":14003,"msg":"too many requests"}') is True
+        assert _is_model_busy(400, '{"code": 14003}') is True
+
+    def test_non_busy_is_not_retried(self):
+        """模型不存在等错误不能当繁忙处理，否则会掩盖真实问题"""
+        from backend.llm.workbuddy_provider import _is_model_busy
+
+        assert _is_model_busy(400, '{"code":11102,"msg":"service info not found"}') is False
+        assert _is_model_busy(401, '{"code":12153}') is False
+
+    def test_candidates_include_primary_first(self):
+        p = WorkBuddyProvider(api_key="rt", model_id="x") if False else WorkBuddyProvider(api_key="rt")
+        p.model_name = "hy3"
+        cands = p._model_candidates()
+        assert cands[0] == "hy3", "首选必须排第一"
+        assert "glm-5.3-flash" in cands, "繁忙时要能换到实测稳定的模型"
+        assert len(cands) == len(set(cands)), "候选不能重复"
+
+    @pytest.mark.asyncio
+    async def test_busy_falls_back_to_next_model(self, monkeypatch):
+        """14003 → 换下一个模型并成功"""
+        p = WorkBuddyProvider(api_key="rt")
+        p.model_name = "busy-model"
+        p._access_token = "at"
+        p._access_expires = 10**12
+        tried: list[str] = []
+
+        async def fake_once(model, messages, tools, max_tokens, temperature):
+            tried.append(model)
+            if model == "busy-model":
+                from backend.llm.workbuddy_provider import _WorkBuddyHTTPError
+                raise _WorkBuddyHTTPError(400, '{"code":14003,"msg":"too many requests"}')
+            yield "OK", None, None
+
+        monkeypatch.setattr(p, "_stream_once", fake_once)
+        out = [x async for x in p._stream_chat([{"role": "user", "content": "hi"}], None, 10, 0.3)]
+        assert out[0][0] == "OK"
+        assert tried[0] == "busy-model" and len(tried) == 2, "应先试首选再降级"
+
+    @pytest.mark.asyncio
+    async def test_all_busy_raises_clearly(self, monkeypatch):
+        p = WorkBuddyProvider(api_key="rt")
+        p._access_token = "at"
+        p._access_expires = 10**12
+
+        async def fake_once(model, messages, tools, max_tokens, temperature):
+            from backend.llm.workbuddy_provider import _WorkBuddyHTTPError
+            raise _WorkBuddyHTTPError(429, "too many requests")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(p, "_stream_once", fake_once)
+        with pytest.raises(RuntimeError, match="所有候选模型都繁忙"):
+            [x async for x in p._stream_chat([{"role": "user", "content": "hi"}], None, 10, 0.3)]
+
+    @pytest.mark.asyncio
+    async def test_no_retry_after_content_emitted(self, monkeypatch):
+        """已经流出去的内容收不回来——不要再换模型重发"""
+        p = WorkBuddyProvider(api_key="rt")
+        p._access_token = "at"
+        p._access_expires = 10**12
+        calls = []
+
+        async def fake_once(model, messages, tools, max_tokens, temperature):
+            from backend.llm.workbuddy_provider import _WorkBuddyHTTPError
+            calls.append(model)
+            yield "部分", None, None
+            raise _WorkBuddyHTTPError(429, "too many requests")
+
+        monkeypatch.setattr(p, "_stream_once", fake_once)
+        got = []
+        with pytest.raises(RuntimeError):
+            async for item in p._stream_chat([{"role": "user", "content": "hi"}], None, 10, 0.3):
+                got.append(item)
+        assert got and got[0][0] == "部分"
+        assert len(calls) == 1, "已产出内容后不得重试"

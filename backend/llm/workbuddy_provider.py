@@ -54,6 +54,31 @@ def _hex_id() -> str:
     return secrets.token_hex(16)
 
 
+class _WorkBuddyHTTPError(Exception):
+    """上游返回 4xx/5xx（保留状态码与原始体，供降级判断）"""
+
+    def __init__(self, status: int, raw: str) -> None:
+        super().__init__(f"HTTP {status}: {raw}")
+        self.status = status
+        self.raw = raw
+
+
+# 「模型繁忙」类错误：换模型就能解决，不该整条请求失败
+#   14003 = Model busy（实测 deepseek-v4.1-flash 常见）
+#   429   = too many requests
+_BUSY_CODES = ("14003", "429")
+
+# 单次请求内依次尝试的模型（首选放模型 ID 之外，避免死循环）
+_FALLBACK_MODELS = ("glm-5.3-flash", "hy3", "deepseek-v4.1-flash")
+
+
+def _is_model_busy(status: int, raw: str) -> bool:
+    """判断是否属于"换个模型就能好"的错误"""
+    if status == 429:
+        return True
+    return any(f'"code":{c}' in raw or f'"code": {c}' in raw for c in _BUSY_CODES)
+
+
 class WorkBuddyProvider(BaseLLMProvider):
     """WorkBuddy 的 OpenAI 兼容通道（自己管 refresh/access token）"""
 
@@ -150,15 +175,25 @@ class WorkBuddyProvider(BaseLLMProvider):
         return headers
 
     # ── 底层流式 ───────────────────────────────────────────────────
-    async def _stream_chat(
+    def _model_candidates(self) -> list[str]:
+        """本轮要依次尝试的模型：首选 + 降级候选（去重保序）"""
+        out = [self.model_name]
+        for m in _FALLBACK_MODELS:
+            if m not in out:
+                out.append(m)
+        return out
+
+    async def _stream_once(
         self,
+        model: str,
         messages: list[dict],
         tools: Optional[list[dict]],
         max_tokens: int,
         temperature: float,
     ):
+        """发一次请求；HTTP 错误在**开流前**就抛，方便上层换模型重试"""
         payload = {
-            "model": self.model_name,
+            "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -177,7 +212,7 @@ class WorkBuddyProvider(BaseLLMProvider):
             ) as resp:
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")[:300]
-                    raise RuntimeError(f"WorkBuddy HTTP {resp.status_code}: {raw}")
+                    raise _WorkBuddyHTTPError(resp.status_code, raw)
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data:"):
                         continue
@@ -196,6 +231,43 @@ class WorkBuddyProvider(BaseLLMProvider):
                             yield delta["content"], None, None
                         for tc in (delta.get("tool_calls") or []):
                             yield None, tc, None
+
+    async def _stream_chat(
+        self,
+        messages: list[dict],
+        tools: Optional[list[dict]],
+        max_tokens: int,
+        temperature: float,
+    ):
+        """带模型降级的流式：遇 14003/429 自动换下一个模型
+
+        只在**尚未吐出任何内容**时重试——已经流给用户的内容收不回来。
+        """
+        last_err: Optional[Exception] = None
+        for candidate in self._model_candidates():
+            emitted = False
+            try:
+                async for item in self._stream_once(
+                    candidate, messages, tools, max_tokens, temperature
+                ):
+                    emitted = True
+                    yield item
+                if candidate != self.model_name and emitted:
+                    logger.info(f"WorkBuddy 已降级到模型: {candidate}")
+                return
+            except _WorkBuddyHTTPError as e:
+                if emitted or not _is_model_busy(e.status, e.raw):
+                    raise RuntimeError(
+                        f"WorkBuddy HTTP {e.status}: {e.raw}"
+                    ) from None
+                last_err = e
+                logger.warning(
+                    f"WorkBuddy 模型 {candidate} 繁忙（{e.status}），换下一个"
+                )
+                continue
+        raise RuntimeError(
+            f"WorkBuddy 所有候选模型都繁忙: {last_err.raw if last_err else ''}"
+        )
 
     # ── 非流式对话 ─────────────────────────────────────────────────
     async def chat(

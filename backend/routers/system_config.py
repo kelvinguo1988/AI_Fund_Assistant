@@ -45,7 +45,57 @@ _AI_MODEL_PRESETS: list[AIModelPreset] = [
     AIModelPreset(key="glm", label="智谱 GLM", base_url="https://open.bigmodel.cn/api/paas/v4/", model_name="glm-4-flash"),
     AIModelPreset(key="tongyi", label="通义千问", base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", model_name="qwen-plus"),
     AIModelPreset(key="openai", label="OpenAI", base_url="https://api.openai.com/v1", model_name="gpt-4o-mini"),
+    # ── 免填 Key / 走自建通道的预设（2026-10-20）──────────────────────
+    # zen-free: 公开凭证 public，无需 Key
+    AIModelPreset(
+        key="zen-free", label="OpenCode 免费模型（无需 Key）",
+        base_url="https://opencode.ai/inference/v1",
+        model_name="deepseek-v4.1-flash-free",
+    ),
+    # workbuddy：API Key 位置填 refresh token，access 由后端自动换取
+    AIModelPreset(
+        key="workbuddy-ai", label="WorkBuddy AI（国际版）",
+        base_url="https://www.workbuddy.ai/v2",
+        model_name="deepseek-v4.1-flash",
+    ),
+    AIModelPreset(
+        key="workbuddy", label="WorkBuddy（国内版）",
+        base_url="https://copilot.tencent.com/v2",
+        model_name="deepseek-v4.1-flash",
+    ),
 ]
+
+# 每个预设可选的模型 ID（前端下拉用；空 = 只有预设默认那一个）
+_AI_MODEL_CHOICES: dict[str, list[str]] = {
+    "zen-free": [
+        "deepseek-v4.1-flash-free",
+        "glm-5.3-flash-free",
+        "mimo-v2.6-flash-free",
+        "minimax-m3.1-flash-free",
+    ],
+    # WorkBuddy 实测里 deepseek-v4.1-flash 常返回 14003「模型繁忙」，
+    # 把稳的几个排在前面；完整清单由 /v3/config 提供，这里只放常用项
+    "workbuddy-ai": [
+        "glm-5.3-flash",
+        "deepseek-v4.1-flash",
+        "hy3",
+        "gpt-5.5",
+        "gemini-3.8-flash",
+    ],
+    "workbuddy": [
+        "glm-5.3-flash",
+        "deepseek-v4.1-flash",
+        "hy3",
+    ],
+}
+
+
+def _presets_with_choices() -> list[AIModelPreset]:
+    """预设 + 各自的可选模型清单（前端下拉用）"""
+    return [
+        p.model_copy(update={"model_choices": _AI_MODEL_CHOICES.get(p.key, [])})
+        for p in _AI_MODEL_PRESETS
+    ]
 
 
 async def _get_config_map(db: AsyncSession) -> dict[str, str]:
@@ -65,7 +115,7 @@ async def get_system_config(db: AsyncSession = Depends(get_db)):
         ai_model=config_map.get("ai_model", "deepseek"),
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
         ai_model_id=config_map.get("ai_model_id") or None,
-        presets=_AI_MODEL_PRESETS,
+        presets=_presets_with_choices(),
     ))
 
 
@@ -117,7 +167,7 @@ async def update_system_config(
         ai_model=config_map.get("ai_model", "deepseek"),
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
         ai_model_id=config_map.get("ai_model_id") or None,
-        presets=_AI_MODEL_PRESETS,
+        presets=_presets_with_choices(),
     ))
 
 

@@ -33,6 +33,8 @@ class AIModelPreset(BaseModel):
     label: str = Field(..., description="显示名称")
     base_url: str = Field(..., description="默认 Base URL")
     model_name: str = Field(..., description="默认模型名")
+    # 该预设可选的模型 ID 清单（前端下拉用；空 = 只有默认那一个）
+    model_choices: list[str] = Field(default_factory=list, description="可选模型 ID")
 
 
 class AIConfigOut(BaseModel):
