@@ -15,6 +15,8 @@ class LLMFactory:
         "tongyi": "qwen-plus",
         "glm": "glm-4-flash",
         "zen-free": "deepseek-v4.1-flash-free",
+        "workbuddy": "deepseek-v4.1-flash",
+        "workbuddy-ai": "deepseek-v4.1-flash",
     }
 
     @staticmethod
@@ -43,6 +45,14 @@ class LLMFactory:
             # 端点/UA/核心工具/流式特征，不需要本地任何软件
             from backend.llm.zen_free_provider import ZenFreeProvider
             return ZenFreeProvider(model_name=resolved, api_key=api_key, base_url=base_url)
+        elif model_name in ("workbuddy", "workbuddy-ai"):
+            # WorkBuddy（2026-10-20）：用用户自己账号的 OAuth token，
+            # api_key 位置填 refresh token，access 由 Provider 自动换取
+            from backend.llm.workbuddy_provider import WorkBuddyProvider
+            return WorkBuddyProvider(
+                model_name=resolved, api_key=api_key, base_url=base_url,
+                site_id=model_name,
+            )
         elif model_name == "tongyi":
             from backend.llm.tongyi_provider import TongyiProvider
             return TongyiProvider(model_name=resolved, api_key=api_key, base_url=base_url)

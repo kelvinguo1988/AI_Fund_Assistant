@@ -84,7 +84,8 @@ class AIService:
         ai_api_key = config_map.get("ai_api_key", "")
         ai_base_url = config_map.get("ai_base_url", "https://api.deepseek.com/v1")
 
-        # zen-free（OpenCode Zen 免费模型）用公开凭证 public，不需要用户填 Key
+        # zen-free（OpenCode Zen 免费模型）用公开凭证 public，不需要用户填 Key；
+        # workbuddy / workbuddy-ai 的"Key"是 refresh token，也必须先有才能换 access
         if not ai_api_key and ai_model != "zen-free":
             raise ValueError("AI API Key 未配置")
 
