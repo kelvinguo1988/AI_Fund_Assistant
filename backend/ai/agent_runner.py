@@ -145,7 +145,8 @@ class AgentRunner:
         if not cfg["ai_enabled"] or not cfg["agent_enabled"]:
             yield {"type": "error", "message": "AI 或 Agent 功能未启用（系统设置中开启）"}
             return
-        if not cfg["ai_api_key"]:
+        # zen-free（OpenCode Zen 免费模型）用公开凭证 public，不需要用户填 Key
+        if not cfg["ai_api_key"] and cfg["ai_model"] != "zen-free":
             yield {"type": "error", "message": "AI API Key 未配置"}
             return
 

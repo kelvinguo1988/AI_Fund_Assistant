@@ -14,6 +14,7 @@ class LLMFactory:
         "openai": "gpt-4o-mini",
         "tongyi": "qwen-plus",
         "glm": "glm-4-flash",
+        "zen-free": "deepseek-v4.1-flash-free",
     }
 
     @staticmethod
@@ -37,6 +38,11 @@ class LLMFactory:
         if model_name == "glm":
             from backend.llm.glm_provider import GLMProvider
             return GLMProvider(model_name=resolved, api_key=api_key, base_url=base_url)
+        elif model_name == "zen-free":
+            # OpenCode Zen 免费模型（2026-10-20）：自动补齐免费层要求的
+            # 端点/UA/核心工具/流式特征，不需要本地任何软件
+            from backend.llm.zen_free_provider import ZenFreeProvider
+            return ZenFreeProvider(model_name=resolved, api_key=api_key, base_url=base_url)
         elif model_name == "tongyi":
             from backend.llm.tongyi_provider import TongyiProvider
             return TongyiProvider(model_name=resolved, api_key=api_key, base_url=base_url)
