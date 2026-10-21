@@ -54,10 +54,18 @@ SPOT_CACHE_TTL = 60.0          # 全市场快照缓存（秒）
 # TTL，缓存失效会让推送重新强刷行情源，正好撞上东财 600s 熔断窗口 →
 # 估值整块消失。放宽到 180s：既覆盖一次调度周期，盘中数据也不至于过旧。
 ESTIMATE_CACHE_TTL = 180.0
-FUNDGZ_FAIL_COOLDOWN = 86400.0  # fundgz 失败冷却（2026-08-28 实测接口已下线，
-                                # 返回 HTML 错误页；冷却升至 24h，每日探活一次，
-                                # 若官方恢复可自动生效，平时不再逐请求撞死链）
+FUNDGZ_FAIL_COOLDOWN = 600.0    # fundgz 盘中失败冷却（10 分钟）
+                                # 历史：2026-08-28 曾因返回 HTML 错误页把冷却提到
+                                # 24h「每日探活一次」。2026-10-21 复核发现该判断过粗：
+                                # 收盘后 fundgz 对全部基金返回"页面未找到"是**正常行为**，
+                                # 24h 冷却会连带把次日盘中整段估值挡掉（线上实测 42 只
+                                # 全 unavailable）。现在只有**盘中**失败才冷却，长度回到
+                                # 10 分钟；非盘中的无估值页直接跳过、不冷却。
 FUNDGZ_TIMEOUT = 8.0
+
+# 持仓数据陈旧阈值（天）：超过则在前端标注「估算可能有偏差」。
+# 季报持仓是季度快照，长时间不跑「刷新详情」时估算失真会明显放大。
+HOLDINGS_STALE_DAYS = 3
 
 # 数据源熔断冷却（防封禁）：请求失败后 N 秒内不再尝试该源。
 # 没有熔断时，每次页面刷新都会重新撞已被限连的接口（东财 2 次重试 +
@@ -1140,7 +1148,9 @@ class FundRealtimeService:
         只在冷却期外逐基金请求；全池 OTC 基金由调用方在冷却时整批跳过。
         """
         now = time.time()
-        if now < FundRealtimeService._fundgz_fail_until:
+        # 冷却只在盘中生效：收盘后 fundgz 本就不给估值，没必要拦，也不该让
+        # 上一交易时段残留的冷却挡住次日开盘（2026-10-21）
+        if _in_trading_hours() and now < FundRealtimeService._fundgz_fail_until:
             return None
         try:
             url = FUNDGZ_URL.format(code=code)
@@ -1165,7 +1175,16 @@ class FundRealtimeService:
                 # 一只特殊基金会把全池官方估值关停一整天
                 logger.info(f"fundgz 无估值数据(code={code})，跳过该基金")
                 return None
-            # 反爬页（无 jsonpgz 标记）→ 冷却；check-and-set 保证并发 10 路里
+            # 反爬页 / 收盘后 404 页（都无 jsonpgz 标记）→ 需要区分：
+            #   收盘后（非盘中）fundgz 对全部基金返回"页面未找到"，这是正常行为，
+            #   绝不能当成反爬封禁去冷却整池——2026-10-21 线上就是因此每天收盘后
+            #   到次日开盘，42 只基金估值全部 unavailable，且冷却被不断续期。
+            if not _in_trading_hours():
+                logger.info(
+                    f"fundgz 非盘中返回无估值页(code={code})——按收盘常态跳过，不冷却"
+                )
+                return None
+            # 盘中无 jsonpgz 标记 → 判为反爬，进入冷却；check-and-set 保证并发 10 路里
             # 只有首个触发者进入冷却并埋点（消息不含 code，命中 store 节流），
             # 一次触发不再刷 10 条重复日志
             if now >= FundRealtimeService._fundgz_fail_until:
@@ -1183,7 +1202,9 @@ class FundRealtimeService:
                     pass
             return None
         except Exception as e:
-            if now >= FundRealtimeService._fundgz_fail_until:
+            # 非盘中（收盘/周末/节假日）的失败不续期冷却：fundgz 此时本就没有估值，
+            # 反复续期会让次日开盘后仍被冷却挡住（2026-10-21 线上问题）
+            if _in_trading_hours() and now >= FundRealtimeService._fundgz_fail_until:
                 FundRealtimeService._fundgz_fail_until = now + FUNDGZ_FAIL_COOLDOWN
             logger.warning(f"fundgz 请求失败(code={code}): {e}")
             return None
@@ -1216,13 +1237,21 @@ class FundRealtimeService:
         if not latest_q:
             # 2026-09-12 复查：新导入基金（未跑 refresh-details）原静默缺失，
             # 用户无法区分"估算不可用"与"漏算"——返回占位标注原因
+            # 2026-10-21：区分「没有持仓」与「非盘中本就没有估值」两种情况，
+            # 收盘后提示用户去刷新详情是误导（刷新也刷不出盘中估值）
+            reason = (
+                "暂无持仓数据——请先在基金池页执行「刷新详情」"
+                if _in_trading_hours()
+                else "非盘中时段：无实时估值（收盘后 fundgz 不提供估值，"
+                     "且本地无季度持仓可用于自算）"
+            )
             for f in funds:
                 results[f.code] = {
                     "code": f.code, "name": f.name or "",
                     "source": "unavailable", "nav_date": "", "nav": None,
                     "estimated_nav": None, "growth_pct": None,
                     "quote_time": "", "coverage": None, "est_model": None,
-                    "error": "暂无持仓数据——请先在基金池页执行「刷新详情」",
+                    "error": reason,
                 }
             logger.info(f"持仓自算: {len(funds)} 只基金无持仓数据，返回占位")
             return
@@ -1233,9 +1262,14 @@ class FundRealtimeService:
         holdings_rows = (await self.db.execute(hold_stmt)).scalars().all()
 
         by_fund: dict[int, list[tuple[str, Optional[float]]]] = {}
+        # 每只基金最新季度的持仓抓取时间（判定陈旧用）
+        holdings_created: dict[int, object] = {}
         for h in holdings_rows:
             if latest_q.get(h.fund_id) == h.quarter_label:
                 by_fund.setdefault(h.fund_id, []).append((h.stock_code, h.ratio))
+                prev = holdings_created.get(h.fund_id)
+                if prev is None or (h.created_at and h.created_at > prev):
+                    holdings_created[h.fund_id] = h.created_at
 
         if not by_fund:
             return
@@ -1279,7 +1313,7 @@ class FundRealtimeService:
             )
             if growth is None:
                 continue
-            results[f.code] = {
+            row = {
                 "code": f.code,
                 "name": f.name or "",
                 "source": "holdings_est",
@@ -1291,6 +1325,16 @@ class FundRealtimeService:
                 "coverage": round(coverage, 3),
                 "est_model": model,
             }
+            # 持仓数据陈旧要显式告知：季报持仓本身是季度快照，若抓取时间已过去
+            # 多日（长时间没跑「刷新详情」），估算失真会明显放大（2026-10-21）
+            stale_days = _holdings_stale_days(latest_q.get(f.id), holdings_created)
+            if stale_days is not None and stale_days > HOLDINGS_STALE_DAYS:
+                row["stale_days"] = stale_days
+                row["error"] = (
+                    f"持仓数据已 {stale_days} 天未更新，估算可能有偏差——"
+                    f"建议在基金池页执行「刷新详情」"
+                )
+            results[f.code] = row
             self._cache_estimate(f.code, results[f.code])
         # 行情时点兜底填充（腾讯路径已在快照成功时记录可信时间）
         FundRealtimeService._update_quote_time()
@@ -1437,6 +1481,25 @@ def _to_float(v) -> Optional[float]:
         f = float(v)
         return f if f == f else None  # NaN 检查
     except (ValueError, TypeError):
+        return None
+
+
+def _holdings_stale_days(quarter_label, created_at) -> Optional[int]:
+    """持仓抓取时间距今天数（取不到返回 None，不误报）"""
+    if created_at is None:
+        return None
+    try:
+        from backend.utils.timezone import now_beijing
+        ts = created_at
+        ref = now_beijing()
+        # 库里 created_at 是 naive 北京时间；若带时区则统一去掉再比，
+        # 避免 naive/aware 相减直接抛 TypeError（2026-10-21）
+        if ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        if ref.tzinfo is not None:
+            ref = ref.replace(tzinfo=None)
+        return max(0, (ref - ts).days)
+    except Exception:
         return None
 
 

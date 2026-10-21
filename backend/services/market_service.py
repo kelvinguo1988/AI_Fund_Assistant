@@ -309,7 +309,11 @@ class MarketService:
             klines = data.get("data", {}).get("klines", [])
             if not klines:
                 raise ValueError("push2his klines 为空")
-            return klines[0]
+            # klines 是**老→新**排列，必须取最后一条（最新交易日）。
+            # 2026-10-21 修复：原实现在 lmt>1 时取 [0]，拿到区间里最旧的一天，
+            # 表现为仪表盘指数/资金流恒落后一天（线上实测显示 10-20 数据）。
+            # 只请求 lmt=1 时 [0]==[-1] 才没暴露。
+            return klines[-1]
 
         try:
             kline_str = await run_with_timeout(
@@ -349,7 +353,9 @@ class MarketService:
                 "https://push2.eastmoney.com/api/qt/ulist.np/get",
                 params={
                     "secids": "1.000001,0.399001",
-                    "fields": "f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
+                    # fltt=2：价格/涨跌幅按真实小数返回（否则是 ×100 的整数倍）
+                    "fltt": 2,
+                    "fields": "f2,f3,f12,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87",
                 },
                 headers={
                     "User-Agent": random_ua(),
@@ -392,12 +398,25 @@ class MarketService:
             if item_count > 0:
                 main_ratio = round(main_ratio / item_count, 2)
 
+            # 指数点位/涨跌幅一并取回：原实现只有资金流、指数留 None，
+            # 前端就只能显示上一个源（常是昨日）的指数，与今日资金流混搭。
+            sh_index = sh_change = sz_index = sz_change = None
+            for item in items:
+                code = str(item.get("f12") or "")
+                if code == "000001":
+                    sh_index = _parse_pct_value(item.get("f2"))
+                    sh_change = _parse_pct_value(item.get("f3"))
+                elif code == "399001":
+                    sz_index = _parse_pct_value(item.get("f2"))
+                    sz_change = _parse_pct_value(item.get("f3"))
+
             return MarketCapitalFlow(
+                # 用实时口径的今日日期（本接口就是当日快照）
                 date=beijing_today().isoformat(),
-                sh_index=None,
-                sh_change=None,
-                sz_index=None,
-                sz_change=None,
+                sh_index=sh_index,
+                sh_change=sh_change,
+                sz_index=sz_index,
+                sz_change=sz_change,
                 main_flow=CapitalFlow(
                     net_amount=round(main_net / YI, 2),
                     net_ratio=main_ratio,
