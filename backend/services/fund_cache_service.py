@@ -46,32 +46,45 @@ def market_cache_has_data(cache) -> bool:
     return bool(cache) and any(cache.get(k) for k in _MARKET_SECTIONS)
 
 
-def market_cache_is_fresh(cache, max_age_days: int = 1) -> bool:
-    """缓存行情是否足够新（按 market_flow.date 判定，2026-10-21）
+def market_cache_is_fresh(cache) -> bool:
+    """缓存行情是否来自「最近一个交易日」（2026-10-21）
 
-    历史缺陷：读取路径只判断"缓存帧里有没有数据"，从不看数据日期。
-    结果上游（push2his / akshare / datacenter-web）连续挂掉时，仪表盘会
-    一直展示上一个交易日的指数与资金流，且 updated_at 仍是"刚刚"，
-    界面看不出这是旧数据（线上实测：今日 10-21 显示 10-20 的 3735.37，
-    而真实为 3713.03）。
+    历史缺陷：读取路径只判断"缓存帧里有没有数据"，从不看数据日期。上游
+    （push2his / akshare / datacenter-web）连续挂掉时，仪表盘会一直展示上一个
+    交易日行情，而 updated_at 仍是"刚刚"，界面看不出是旧数据。
+    线上实测：今日 10-21 显示 10-20 的 3735.37（+0.12%），真实 3713.03（-0.60%）。
 
-    判定：缓存里没有日期信息时按"新鲜"处理（老格式兼容）；有日期时，
-    超过 max_age_days 天视为陈旧，由调用方回退到实时取数。
+    为什么不用"N 天容差"：10-21 与 10-20 恰好差 1 天，任何 >=1 天的容差都会把
+    "昨天"当"今天"放过（第一版正是这么漏的）。正确判据是**交易日历**：
+    缓存日期须等于最近一个交易日——周末/节假日自然回落到上周五，不算陈旧；
+    交易日当天的旧数据必须被拒。
+
+    缓存无 date 字段时按新鲜处理（老格式兼容，不因噎废食）。
     """
     if not cache:
         return False
     mf = cache.get("market_flow") or {}
     cached_date = (mf.get("date") or "").strip()[:10]
     if not cached_date:
-        return True  # 老缓存无日期字段，保持原行为
+        return True
     try:
-        from datetime import date as _date
+        from datetime import date as _date, timedelta as _td
+        from backend.data_sources.trading_calendar import is_trading_day
         from backend.utils.timezone import beijing_today
-        d = _date.fromisoformat(cached_date)
-        return (beijing_today() - d).days <= max_age_days
-    except Exception:
-        return True  # 解析失败不因噎废食
 
+        d = _date.fromisoformat(cached_date)
+        today = beijing_today()
+        # 回溯最近一个交易日（含今天）：最多找 10 天，覆盖长假
+        last_trading = today
+        for _ in range(10):
+            if is_trading_day(last_trading):
+                break
+            last_trading -= _td(days=1)
+        else:
+            return True  # 日历异常时不判陈旧
+        return d >= last_trading
+    except Exception:
+        return True
 
 
 async def store_market_summary(db: AsyncSession, cache_data: dict) -> Optional[str]:

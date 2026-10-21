@@ -111,31 +111,37 @@ class TestMarketCacheFreshness:
     """数据库缓存行情必须校验日期（2026-10-21 线上：今日仍显示昨日指数）
 
     历史缺陷：读取路径只判「缓存帧里有没有数据」，不看数据日期。上游连续
-    失败时仪表盘会一直展示上一交易日行情，updated_at 却是「刚刚」，用户
-    完全看不出是旧数据。
+    失败时仪表盘会一直展示上一交易日行情，updated_at 却是「刚刚」。
+
+    第一版修复用「N 天容差」，实测被 1 天容差放过（10-21 与 10-20 恰好差
+    一天）。改为按**交易日历**判定：缓存日期须是最近一个交易日。
     """
 
-    def test_stale_cache_rejected(self):
+    def test_previous_trading_day_rejected(self):
+        """交易日当天，上一交易日的数据必须判陈旧"""
         from backend.services.fund_cache_service import market_cache_is_fresh
+        from backend.utils.timezone import beijing_today
+        from datetime import timedelta
+        import pytest as _pytest
+        from backend.data_sources.trading_calendar import is_trading_day
 
-        cache = {"market_flow": {"date": "2026-10-19"}, "turnover": {"total_amount": 1}}
-        assert market_cache_is_fresh(cache, max_age_days=1) is False
+        today = beijing_today()
+        if not is_trading_day(today):
+            _pytest.skip("今天不是交易日")
+        yesterday = (today - timedelta(days=1)).isoformat()
+        assert market_cache_is_fresh({"market_flow": {"date": yesterday}}) is False
 
     def test_today_cache_accepted(self):
         from backend.services.fund_cache_service import market_cache_is_fresh
         from backend.utils.timezone import beijing_today
 
-        cache = {"market_flow": {"date": beijing_today().isoformat()}}
-        assert market_cache_is_fresh(cache) is True
+        today = beijing_today().isoformat()
+        assert market_cache_is_fresh({"market_flow": {"date": today}}) is True
 
-    def test_yesterday_tolerated_when_allowed(self):
-        """周末/节假日场景：允许 1 天容差"""
+    def test_far_past_rejected(self):
         from backend.services.fund_cache_service import market_cache_is_fresh
-        from backend.utils.timezone import beijing_today
-        from datetime import timedelta
 
-        cache = {"market_flow": {"date": (beijing_today() - timedelta(days=1)).isoformat()}}
-        assert market_cache_is_fresh(cache, max_age_days=1) is True
+        assert market_cache_is_fresh({"market_flow": {"date": "2026-10-19"}}) is False
 
     def test_missing_date_is_backward_compatible(self):
         """老缓存没有 date 字段 → 维持原行为，不能一刀切当过期"""
