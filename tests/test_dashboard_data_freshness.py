@@ -105,3 +105,56 @@ class TestPush2RealtimeHasIndex:
         for f in ("f2", "f3", "f12"):
             assert f in src, f"请求字段缺 {f}"
         assert "fltt" in src, "缺 fltt=2 时价格是 ×100 的整数"
+
+
+class TestMarketCacheFreshness:
+    """数据库缓存行情必须校验日期（2026-10-21 线上：今日仍显示昨日指数）
+
+    历史缺陷：读取路径只判「缓存帧里有没有数据」，不看数据日期。上游连续
+    失败时仪表盘会一直展示上一交易日行情，updated_at 却是「刚刚」，用户
+    完全看不出是旧数据。
+    """
+
+    def test_stale_cache_rejected(self):
+        from backend.services.fund_cache_service import market_cache_is_fresh
+
+        cache = {"market_flow": {"date": "2026-10-19"}, "turnover": {"total_amount": 1}}
+        assert market_cache_is_fresh(cache, max_age_days=1) is False
+
+    def test_today_cache_accepted(self):
+        from backend.services.fund_cache_service import market_cache_is_fresh
+        from backend.utils.timezone import beijing_today
+
+        cache = {"market_flow": {"date": beijing_today().isoformat()}}
+        assert market_cache_is_fresh(cache) is True
+
+    def test_yesterday_tolerated_when_allowed(self):
+        """周末/节假日场景：允许 1 天容差"""
+        from backend.services.fund_cache_service import market_cache_is_fresh
+        from backend.utils.timezone import beijing_today
+        from datetime import timedelta
+
+        cache = {"market_flow": {"date": (beijing_today() - timedelta(days=1)).isoformat()}}
+        assert market_cache_is_fresh(cache, max_age_days=1) is True
+
+    def test_missing_date_is_backward_compatible(self):
+        """老缓存没有 date 字段 → 维持原行为，不能一刀切当过期"""
+        from backend.services.fund_cache_service import market_cache_is_fresh
+
+        assert market_cache_is_fresh({"market_flow": {"sh_index": 3713.0}}) is True
+
+    def test_empty_cache_not_fresh(self):
+        from backend.services.fund_cache_service import market_cache_is_fresh
+
+        assert market_cache_is_fresh(None) is False
+        assert market_cache_is_fresh({}) is False
+
+    def test_read_path_uses_freshness(self):
+        """读取路径必须调用新鲜度判定，不能只看有无数据"""
+        import inspect
+        from backend.routers import analysis
+
+        src = inspect.getsource(analysis)
+        assert "market_cache_is_fresh(" in src, (
+            "summary 读取缓存时必须校验日期，否则旧行情会被当成今日数据"
+        )

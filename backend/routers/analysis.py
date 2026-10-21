@@ -219,11 +219,14 @@ async def get_market_summary(db: AsyncSession = Depends(get_db)):
     # 3. 尝试返回缓存的行情数据
     from backend.services.fund_cache_service import (
         build_market_summary_payload, get_cached_json, market_cache_has_data,
-        store_market_summary,
+        market_cache_is_fresh, store_market_summary,
     )
     market_cache, updated_at = await get_cached_json(db, CACHE_KEY_MARKET)
 
-    if market_cache_has_data(market_cache) and updated_at:
+    # 缓存必须"有数据且日期足够新"才直接用；否则落到下面的实时取数。
+    # 只判有数据会把上一个交易日的行情当成今日展示（2026-10-21 线上问题：
+    # 今日 10-21 仍显示 10-20 的指数，真实为 3713.03 而显示 3735.37）
+    if market_cache_has_data(market_cache) and updated_at and market_cache_is_fresh(market_cache):
         summary = MarketSummaryOut(
             date=summary_date,
             signals=signal_summary,

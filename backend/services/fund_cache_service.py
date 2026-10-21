@@ -46,6 +46,34 @@ def market_cache_has_data(cache) -> bool:
     return bool(cache) and any(cache.get(k) for k in _MARKET_SECTIONS)
 
 
+def market_cache_is_fresh(cache, max_age_days: int = 1) -> bool:
+    """缓存行情是否足够新（按 market_flow.date 判定，2026-10-21）
+
+    历史缺陷：读取路径只判断"缓存帧里有没有数据"，从不看数据日期。
+    结果上游（push2his / akshare / datacenter-web）连续挂掉时，仪表盘会
+    一直展示上一个交易日的指数与资金流，且 updated_at 仍是"刚刚"，
+    界面看不出这是旧数据（线上实测：今日 10-21 显示 10-20 的 3735.37，
+    而真实为 3713.03）。
+
+    判定：缓存里没有日期信息时按"新鲜"处理（老格式兼容）；有日期时，
+    超过 max_age_days 天视为陈旧，由调用方回退到实时取数。
+    """
+    if not cache:
+        return False
+    mf = cache.get("market_flow") or {}
+    cached_date = (mf.get("date") or "").strip()[:10]
+    if not cached_date:
+        return True  # 老缓存无日期字段，保持原行为
+    try:
+        from datetime import date as _date
+        from backend.utils.timezone import beijing_today
+        d = _date.fromisoformat(cached_date)
+        return (beijing_today() - d).days <= max_age_days
+    except Exception:
+        return True  # 解析失败不因噎废食
+
+
+
 async def store_market_summary(db: AsyncSession, cache_data: dict) -> Optional[str]:
     """行情板块落库；整帧全空时保留旧缓存与旧时间戳
 
