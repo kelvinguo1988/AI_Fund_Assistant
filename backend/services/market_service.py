@@ -254,11 +254,20 @@ class MarketService:
             turnover_wan = _turnover_proxy_wan(sh_data) + _turnover_proxy_wan(sz_data)
             main_ratio = round((sh_main + sz_main) / turnover_wan * 100, 2) if turnover_wan > 0 else 0.0
 
+            # datacenter 报表不含指数点位，只给涨跌幅 → 仪表盘会出现
+            # 「上证 None (-0.60%)」这种残缺展示（2026-10-21 线上）。
+            # 用腾讯行情补点位：该源在本项目里稳定、无需鉴权。
+            # 只在缓存日期就是今天时补——补的是「今日」点位，若报表日期是
+            # 上一交易日，拿实时点位配昨日涨跌幅会自相矛盾，宁可留空。
+            sh_index = sz_index = None
+            if trade_date == beijing_today().isoformat():
+                sh_index, sz_index = await _fetch_index_levels_tencent()
+
             result = MarketCapitalFlow(
                 date=trade_date,
-                sh_index=None,  # datacenter API 不返回指数点位
+                sh_index=sh_index,
                 sh_change=round(sh_data.get("CHANGERATE") or 0, 2),
-                sz_index=None,
+                sz_index=sz_index,
                 sz_change=round(sz_data.get("CHANGERATE") or 0, 2) if sz_data else None,
                 main_flow=CapitalFlow(
                     net_amount=main_net,
@@ -651,3 +660,43 @@ class MarketService:
             logger.warning(f"两市成交额获取失败: {e}")
             self._mark_failed("market_turnover", e)
             return None
+
+async def _fetch_index_levels_tencent() -> tuple[Optional[float], Optional[float]]:
+    """腾讯行情取上证/深证点位 → (sh_index, sz_index)；取不到给 (None, None)
+
+    datacenter-web 资金流报表只有涨跌幅没有点位，缺了它仪表盘会显示
+    「上证 None (-0.60%)」。腾讯 qt.gtimg.cn 在本项目里已长期稳定使用
+    （ETF/个股快照同源），这里复用它补点位，失败不影响资金流本身。
+    """
+    import requests as _req
+
+    def _do() -> tuple[Optional[float], Optional[float]]:
+        r = _req.get(
+            "http://qt.gtimg.cn/q=sh000001,sz399001",
+            headers={"User-Agent": random_ua()},
+            timeout=8,
+        )
+        r.encoding = "gbk"
+        sh = sz = None
+        for line in (r.text or "").split(";"):
+            if "=" not in line:
+                continue
+            var, payload = line.split("=", 1)
+            fields = payload.strip().strip('"').split("~")
+            if len(fields) < 4:
+                continue
+            try:
+                price = float(fields[3])
+            except (TypeError, ValueError):
+                continue
+            if "sh000001" in var:
+                sh = price
+            elif "sz399001" in var:
+                sz = price
+        return sh, sz
+
+    try:
+        return await run_with_timeout(_do, timeout=12.0)
+    except Exception as e:
+        logger.info(f"指数点位补充(腾讯)失败: {type(e).__name__}: {e}")
+        return None, None

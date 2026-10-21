@@ -164,3 +164,53 @@ class TestMarketCacheFreshness:
         assert "market_cache_is_fresh(" in src, (
             "summary 读取缓存时必须校验日期，否则旧行情会被当成今日数据"
         )
+
+
+class TestIndexLevelSupplement:
+    """datacenter-web 资金流报表没有指数点位，需用腾讯补齐（2026-10-21）
+
+    线上现象：修复日期后仪表盘显示「上证 None (-0.60%)」——涨跌幅正确但点位
+    缺失。datacenter 报表本身不含点位（代码注释已写明），改用腾讯行情补。
+    """
+
+    @pytest.mark.asyncio
+    async def test_parses_tencent_index_levels(self, monkeypatch):
+        import backend.services.market_service as ms
+
+        body = (
+            'v_sh000001="1~上证指数~000001~3713.03~3715.00~"'
+            ';v_sz399001="1~深证成指~399001~11704.35~11780.00~";'
+        )
+
+        class FakeResp:
+            text = body
+            encoding = ""
+
+        import requests
+        monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp())
+        sh, sz = await ms._fetch_index_levels_tencent()
+        assert sh == 3713.03
+        assert sz == 11704.35
+
+    @pytest.mark.asyncio
+    async def test_failure_returns_none_pair(self, monkeypatch):
+        """取不到点位时不能抛异常，资金流本身要继续可用"""
+        import backend.services.market_service as ms
+        import requests
+
+        def boom(*a, **k):
+            raise RuntimeError("network down")
+
+        monkeypatch.setattr(requests, "get", boom)
+        sh, sz = await ms._fetch_index_levels_tencent()
+        assert sh is None and sz is None
+
+    def test_only_supplement_for_today(self):
+        """只在报表日期是今天时补点位：拿实时点位配昨日涨跌幅会自相矛盾"""
+        import inspect
+        from backend.services import market_service
+
+        src = inspect.getsource(market_service.MarketService.get_market_capital_flow)
+        assert "beijing_today().isoformat()" in src, (
+            "补点位前必须校验报表日期是否为今天"
+        )
