@@ -78,6 +78,19 @@ class AnalysisResult(Base):
     factor_coverage: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True, comment="有效权重和/总权重 0.0-1.0（Q4），NULL=总权重为 0"
     )
+    # ── AI 点评（2026-10-22）：定时批量生成后落库，前端直接读 ──
+    # 为什么不实时生成：分析页每次打开都调模型会既慢又费额度；点评是对
+    # 当日信号的固定解读，一天生成一次足够。model 用于标注来源，便于
+    # 换模型后对比，也便于区分「未生成」与「生成失败」。
+    ai_comment: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment="AI 一句话点评（定时生成，NULL=未生成）"
+    )
+    ai_comment_model: Mapped[Optional[str]] = mapped_column(
+        String(80), nullable=True, comment="生成点评所用模型标识"
+    )
+    ai_comment_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True, comment="点评生成时间"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=now_beijing
     )

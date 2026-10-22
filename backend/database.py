@@ -287,6 +287,10 @@ async def init_db() -> None:
             "ALTER TABLE analysis_results ADD COLUMN quality_warnings TEXT",
             # Q9：净值 as-of 日期（诊断用；旧行 NULL = 口径改造前）
             "ALTER TABLE analysis_results ADD COLUMN nav_as_of_date VARCHAR(10)",
+            # AI 点评（2026-10-22）：定时生成存库，旧行 NULL = 尚未生成
+            "ALTER TABLE analysis_results ADD COLUMN ai_comment TEXT",
+            "ALTER TABLE analysis_results ADD COLUMN ai_comment_model VARCHAR(80)",
+            "ALTER TABLE analysis_results ADD COLUMN ai_comment_at DATETIME",
         ]:
             try:
                 await conn.execute(text(col_sql))

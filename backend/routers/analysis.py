@@ -332,6 +332,46 @@ async def refresh_market_summary(db: AsyncSession = Depends(get_db)):
     return ApiResponse(data={"updated_at": updated_at})
 
 
+async def _run_ai_comments_bg() -> None:
+    """后台生成当日 AI 点评（失败只记日志，绝不影响分析结果返回）"""
+    try:
+        from sqlalchemy import select as _select
+
+        from backend.database import async_session_factory
+        from backend.llm.factory import LLMFactory
+        from backend.models.system_config import SystemConfig
+        from backend.services.ai_comment_service import generate_comments
+
+        async with async_session_factory() as session:
+            rows = (await session.execute(_select(SystemConfig))).scalars().all()
+            cm = {c.config_key: c.config_value for c in rows}
+            ai_model = cm.get("ai_model", "deepseek")
+            api_key = cm.get("ai_api_key", "")
+            # zen-free 用公开凭证，不需要 Key
+            if not api_key and ai_model != "zen-free":
+                logger.info("AI 点评跳过：未配置 API Key")
+                return
+            provider = LLMFactory.create(
+                ai_model, api_key,
+                cm.get("ai_base_url", "https://api.deepseek.com/v1"),
+                model_id=(cm.get("ai_model_id") or "").strip() or None,
+            )
+            result = await generate_comments(session, provider)
+            logger.info(f"AI 点评结果: {result}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"AI 点评后台任务失败: {type(e).__name__}: {e}")
+
+
+def _spawn_ai_comments() -> None:
+    """把点评生成丢到后台：独立 session，不阻塞分析结果的 SSE 返回"""
+    import asyncio as _asyncio
+
+    try:
+        _asyncio.create_task(_run_ai_comments_bg())
+    except RuntimeError:
+        logger.debug("AI 点评跳过：无事件循环")
+
+
 @router.post("/trigger", response_model=ApiResponse[list[AnalysisResultOut]])
 async def trigger_analysis(
     body: Optional[dict] = None,
@@ -385,6 +425,10 @@ async def trigger_analysis_stream(
                 yield event
                 if await request.is_disconnected():
                     break
+            # 分析跑完 → 后台补 AI 点评（2026-10-22）
+            # 不 await：点评要调模型，可能几秒到十几秒，让前端先拿到分析结果。
+            # 用独立 session（原 session 在 finally 里会关闭）。
+            _spawn_ai_comments()
         finally:
             # 客户端断开时确保 DB session 归还连接池
             await db.close()

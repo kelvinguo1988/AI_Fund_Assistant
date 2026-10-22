@@ -202,6 +202,8 @@ const PositionsPage: React.FC = () => {
   const [rb, setRb] = useState<RebalanceData | null>(null);
   const [rbMd, setRbMd] = useState('');
   const [aiReading, setAiReading] = useState(false);
+  // AI 诊断结果在页面内展示（原实现只把请求发给对话窗口，用户看不到结果）
+  const [aiDiagnosis, setAiDiagnosis] = useState<string>('');
 
   // 建议自进化闭环（命中率双口径 + 校准口径开关）
   const [adv, setAdv] = useState<AdviceStats | null>(null);
@@ -344,11 +346,17 @@ const PositionsPage: React.FC = () => {
     if (!rbMd) return;
     setAiReading(true);
     try {
-      await aiApi.chat({
-        content: `请解读以下调仓工单（卖出/买入/换仓/观望与组合约束），给出执行顺序、换仓代价（费率/赎回到账）与风险提示：\n\n${rbMd}`,
+      const res: any = await aiApi.chat({
+        content: `请解读以下调仓工单（卖出/买入/换仓/观望与组合约束），给出执行顺序、换仓代价（费率/赎回到账）与风险提示。用 Markdown 小标题分点，控制在 400 字内：\n\n${rbMd}`,
         context_type: 'pool',
       });
-      notify('AI 解读已生成，请到 AI 对话窗口查看', 'success');
+      const text = res?.data?.content || res?.content || '';
+      if (text) {
+        setAiDiagnosis(text);
+        notify('AI 解读已生成', 'success');
+      } else {
+        notify('AI 未返回内容', 'info');
+      }
     } catch (e: any) {
       notify(e?.message || 'AI 解读失败', 'error');
     } finally {
@@ -442,6 +450,19 @@ const PositionsPage: React.FC = () => {
 
       {tab === 1 && (
         <>
+          {aiDiagnosis && (
+            <Card sx={{ mb: 2, borderLeft: '3px solid', borderColor: 'primary.main' }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+                  <Typography variant="subtitle2">🤖 AI 诊断</Typography>
+                  <Button size="small" onClick={() => setAiDiagnosis('')}>收起</Button>
+                </Box>
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
+                  {aiDiagnosis}
+                </Typography>
+              </CardContent>
+            </Card>
+          )}
           <Card sx={{ mb: 2 }}>
             <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
               <Typography variant="body2" color="text.secondary">

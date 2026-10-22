@@ -46,6 +46,10 @@ class AnalysisResultOut(BaseModel):
     # Q5：本轮参与截面标准化的基金数 —— weighted_score 是**池内相对分**，
     # 同一个 2.5 分在 50 只池和 8 只池不是一回事；旧行与未跑过分析的为 NULL
     pool_size: Optional[int] = None
+    # ── AI 点评（2026-10-22）：定时批量生成后落库，NULL=尚未生成 ──
+    ai_comment: Optional[str] = None
+    ai_comment_model: Optional[str] = None
+    ai_comment_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

@@ -1144,6 +1144,20 @@ const Dashboard: React.FC = () => {
                 <Typography variant="body2" sx={{ mt: 1 }}>
                   {selectedFund.operation_advice}
                 </Typography>
+
+                {/* AI 点评：分析跑完后台生成，一天一次；未生成时给明确说明而不是留空 */}
+                <Box sx={{ mt: 1.5, p: 1.25, borderRadius: 1, bgcolor: 'action.hover' }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    🤖 AI 点评
+                    {selectedFund.ai_comment_model && (
+                      <span style={{ opacity: 0.6 }}>· {selectedFund.ai_comment_model}</span>
+                    )}
+                  </Typography>
+                  <Typography variant="body2" sx={{ mt: 0.5 }}>
+                    {selectedFund.ai_comment
+                      || '暂无点评（只在非「持有」信号或带风险警告时生成，跑完分析后自动补上）'}
+                  </Typography>
+                </Box>
               </CardContent>
             </Card>
           ) : (

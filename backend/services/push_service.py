@@ -315,6 +315,24 @@ class PushService:
             except Exception as top_err:
                 logger.warning(f"基金实时涨跌 TOP10 生成失败: {top_err}")
 
+        # AI 结论（2026-10-22）：只推有方向的信号，hold 的点评对推送价值低。
+        # 点评由分析跑完后后台生成，若尚未生成则跳过（不阻塞推送）。
+        try:
+            ai_lines = [
+                f"- {r.fund_name}({r.fund_code}) [{r.signal_direction}] {r.ai_comment}"
+                for r in results
+                if getattr(r, "ai_comment", None) and r.signal_direction in ("buy", "sell")
+            ]
+            if ai_lines:
+                ai_md = "**🤖 AI 点评**\n\n" + "\n".join(ai_lines[:8])
+                if market_summary_md:
+                    market_summary_md = f"{market_summary_md}\n\n{ai_md}"
+                else:
+                    market_summary_md = ai_md
+                logger.info(f"AI 点评已加入推送（{len(ai_lines)} 条）")
+        except Exception as ai_err:  # noqa: BLE001 - 推送不能因点评失败而中断
+            logger.warning(f"AI 点评加入推送失败: {ai_err}")
+
         for channel in channels:
             try:
                 if channel.channel_type == "feishu":

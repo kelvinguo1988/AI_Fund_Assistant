@@ -156,3 +156,61 @@ class TestTokenBudget:
 
         out = compact_rows([{"a": 1, "b": None}, {"a": 2, "b": None}])
         assert out["cols"] == ["a"], "全空列必须丢掉"
+
+
+class TestPortfolioTools:
+    """组合分析与集中度（2026-10-22 Phase 2）"""
+
+    EXPECTED = ["get_portfolio_correlation", "get_portfolio_concentration"]
+
+    def test_registered(self):
+        from backend.ai_tools.registry import _REGISTRY
+        import backend.ai_tools  # noqa: F401
+
+        for n in self.EXPECTED:
+            assert n in _REGISTRY
+
+    def test_corr_math(self):
+        """皮尔逊相关系数：完全同向=1，完全反向=-1"""
+        from backend.ai_tools.data_tools import _corr
+
+        days = [f"2026-01-{i:02d}" for i in range(1, 26)]
+        up = {d: 0.01 for d in days}
+        down = {d: -0.01 for d in days}
+        # 加扰动避免零方差
+        up2 = {d: 0.01 + (0.001 if i % 2 else 0) for i, d in enumerate(days)}
+        down2 = {d: -0.01 - (0.001 if i % 2 else 0) for i, d in enumerate(days)}
+        assert _corr(up2, up2) == pytest.approx(1.0, abs=1e-6)
+        assert _corr(up2, down2) == pytest.approx(-1.0, abs=1e-6)
+
+    def test_corr_needs_enough_samples(self):
+        from backend.ai_tools.data_tools import _corr
+
+        few = {f"2026-01-0{i}": 0.01 for i in range(1, 5)}
+        assert _corr(few, few) is None, "样本 <20 天不可靠，应返回 None"
+
+    def test_daily_returns(self):
+        from backend.ai_tools.data_tools import _daily_returns
+
+        series = {"2026-01-01": 1.0, "2026-01-02": 1.1, "2026-01-03": 1.21}
+        r = _daily_returns(series)
+        assert r["2026-01-02"] == pytest.approx(0.1, abs=1e-6)
+        assert r["2026-01-03"] == pytest.approx(0.1, abs=1e-6)
+
+    def test_daily_returns_skips_zero_base(self):
+        from backend.ai_tools.data_tools import _daily_returns
+
+        r = _daily_returns({"2026-01-01": 0.0, "2026-01-02": 1.0})
+        assert r == {}, "除零必须跳过而不是崩"
+
+    @pytest.mark.asyncio
+    async def test_concentration_reports_unavailable_honestly(self, db_session):
+        """赛道标签全空时不能假装「较分散」（0% 会被误读成低风险）"""
+        from backend.ai_tools.data_tools import t_get_portfolio_concentration
+        from tests.test_ai_agent import _seed
+
+        await _seed(db_session)
+        out = await t_get_portfolio_concentration(db_session)
+        if not out.get("by_exposure"):
+            assert out["concentration_level"] == "无法评估"
+            assert "exposure_tags" in out.get("note", "")

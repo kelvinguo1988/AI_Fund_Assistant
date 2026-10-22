@@ -277,6 +277,10 @@ export interface AnalysisResultOut {
   quality_warnings?: string[] | null;
   /** Q9：本次评分依据的最新净值日期（与 analysis_date 的差 = 披露缺口；旧数据 null） */
   nav_as_of_date?: string | null;
+  /** AI 一句话点评（定时生成落库；null=尚未生成） */
+  ai_comment?: string | null;
+  ai_comment_model?: string | null;
+  ai_comment_at?: string | null;
   /** Q5：本轮参与截面标准化的基金数 —— weighted_score 是池内相对分，旧数据 null */
   pool_size?: number | null;
 }

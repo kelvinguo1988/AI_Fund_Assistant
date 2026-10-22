@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 from dataclasses import asdict
+from typing import Optional
 from datetime import date, timedelta
 
 from sqlalchemy import func, select
@@ -874,6 +875,255 @@ async def t_get_us_market_context(db) -> dict:
             "ret_60d_pct": _ret(60),
         }
     return {"indices": out, "note": "美股夜间走势领先 A 股一个交易日，可辅助判断跨境 ETF 次日方向。"}
+
+
+def _fetch_nav_series(codes: list[str], days: int = 120) -> dict[str, dict[str, float]]:
+    """并发拉取多只基金的日净值 → {code: {date: nav}}（2026-10-22）
+
+    相关性/波动都需要对齐日期；实测并发 6 只约 0.3s，单只失败不影响其它只。
+    """
+    import akshare as ak
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _one(code: str) -> tuple[str, dict[str, float]]:
+        try:
+            df = ak.fund_open_fund_info_em(symbol=str(code), indicator="单位净值走势")
+            if df is None or df.empty:
+                return code, {}
+            out = {}
+            for _, r in df.tail(days).iterrows():
+                try:
+                    out[str(r.get("净值日期"))[:10]] = float(r.get("单位净值"))
+                except (TypeError, ValueError):
+                    continue
+            return code, out
+        except Exception:  # noqa: BLE001 - 单只失败不拖累整体
+            return code, {}
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        return dict(ex.map(_one, codes))
+
+
+def _daily_returns(series: dict[str, float]) -> dict[str, float]:
+    dates = sorted(series)
+    return {
+        dates[i]: series[dates[i]] / series[dates[i - 1]] - 1
+        for i in range(1, len(dates))
+        if series[dates[i - 1]]
+    }
+
+
+def _corr(a: dict[str, float], b: dict[str, float]) -> Optional[float]:
+    """共同日期的皮尔逊相关系数；样本不足返回 None"""
+    common = sorted(set(a) & set(b))
+    if len(common) < 20:
+        return None
+    xs = [a[d] for d in common]
+    ys = [b[d] for d in common]
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / n
+    sx = (sum((x - mx) ** 2 for x in xs) / n) ** 0.5
+    sy = (sum((y - my) ** 2 for y in ys) / n) ** 0.5
+    if sx == 0 or sy == 0:
+        return None
+    return round(cov / (sx * sy), 3)
+
+
+@tool(
+    "get_portfolio_correlation",
+    "组合内基金的两两相关性（基于日净值收益率）。用于识别「看似分散实则同涨同跌」："
+    "相关性 >0.8 的两只同时持有，分散效果基本为零。"
+    "未录入持仓时自动分析基金池（取评分最高的一批）。",
+    _props(max_funds={"type": "integer", "description": "分析只数，默认 8，上限 20"}),
+)
+async def t_get_portfolio_correlation(db, max_funds: int = 8) -> dict:
+    """持仓/基金池相关性矩阵（2026-10-22 新增）
+
+    用真实净值日收益率算，而非信号评分——评分是池内相对分，不能反映
+    两只基金是否同涨同跌。
+    """
+    from backend.models.user_position import UserPosition
+
+    n = max(2, min(int(max_funds), 20))
+    pos = (await db.execute(select(UserPosition))).scalars().all()
+    scope = "position" if pos else "pool"
+
+    if pos:
+        ids = [p.fund_id for p in pos]
+        funds = (await db.execute(select(Fund).where(Fund.id.in_(ids)))).scalars().all()
+        # 权重：份额 × 成本价（缺成本价则等权）
+        weights = {}
+        for p in pos:
+            key = p.cost_nav or 1.0
+            weights[p.fund_id] = (p.shares or 0) * key
+        funds = sorted(funds, key=lambda f: -weights.get(f.id, 0))[:n]
+        picked = [(f, round(weights.get(f.id, 0), 2)) for f in funds]
+    else:
+        latest = (await db.execute(select(func.max(AnalysisResult.analysis_date)))).scalar()
+        rows = (await db.execute(
+            select(AnalysisResult, Fund)
+            .join(Fund, AnalysisResult.fund_id == Fund.id)
+            .where(AnalysisResult.analysis_date == latest)
+            .order_by(AnalysisResult.weighted_score.desc())
+            .limit(n)
+        )).all()
+        picked = [(f, None) for _, f in rows]
+
+    codes = [f.code for f, _ in picked]
+    if len(codes) < 2:
+        return {"scope": scope, "error": "可用基金不足 2 只，无法计算相关性"}
+
+    series = await asyncio.to_thread(_fetch_nav_series, codes, 120)
+    rets = {c: _daily_returns(s) for c, s in series.items() if len(s) > 20}
+    if len(rets) < 2:
+        return {"scope": scope, "error": "净值样本不足（多数基金取不到净值）"}
+
+    name_map = {f.code: f.name for f, _ in picked}
+    used = [c for c in codes if c in rets]
+
+    pairs = []
+    for i in range(len(used)):
+        for j in range(i + 1, len(used)):
+            c = _corr(rets[used[i]], rets[used[j]])
+            if c is not None:
+                pairs.append({
+                    "a": used[i], "b": used[j],
+                    "a_name": name_map.get(used[i], ""),
+                    "b_name": name_map.get(used[j], ""),
+                    "corr": c,
+                })
+    pairs.sort(key=lambda x: -x["corr"])
+
+    note_extra = ""
+    if len(used) < 3:
+        note_extra = (
+            f" 注意：参与分析的只有 {len(used)} 只，样本太少，"
+            "相关性只能说明这一对的关系，不代表整体组合。"
+        )
+    return {
+        "scope": scope,
+        "scope_note": (
+            ("已按你的真实持仓分析" if scope == "position"
+             else "未录入持仓，改按基金池评分最高的基金分析（可在持仓页录入后重跑）")
+            + note_extra
+        ),
+        "funds": [{"code": c, "name": name_map.get(c, "")} for c in used],
+        "high_corr_pairs": [p for p in pairs if p["corr"] >= 0.8][:10],
+        "matrix_top_pairs": pairs[:15],
+        "avg_corr": round(sum(p["corr"] for p in pairs) / len(pairs), 3) if pairs else None,
+        "note": (
+            "corr>=0.8 视为高度同步：同时持有多只等于加杠杆而非分散。"
+            "窗口为最近 120 个交易日。"
+        ),
+    }
+
+
+@tool(
+    "get_portfolio_concentration",
+    "组合集中度分析：按分类标签/赛道暴露聚合权重，给出前三大占比与集中度评级。"
+    "用于判断「是否过度押注单一赛道」。未录入持仓时分析基金池。",
+    _props(),
+)
+async def t_get_portfolio_concentration(db) -> dict:
+    """集中度（2026-10-22 新增）
+
+    按 tags（分类）与 exposure_tags（赛道）两个维度聚合，权重来自
+    真实持仓份额×成本价；无持仓时等权看待基金池。
+    """
+    from backend.models.user_position import UserPosition
+
+    pos = (await db.execute(select(UserPosition))).scalars().all()
+    scope = "position" if pos else "pool"
+
+    if pos:
+        ids = [p.fund_id for p in pos]
+        funds = (await db.execute(select(Fund).where(Fund.id.in_(ids)))).scalars().all()
+        weight = {}
+        for p in pos:
+            weight[p.fund_id] = (p.shares or 0) * (p.cost_nav or 1.0)
+        total = sum(weight.values()) or 1.0
+        holdings = [(f, weight.get(f.id, 0) / total * 100) for f in funds]
+    else:
+        latest = (await db.execute(select(func.max(AnalysisResult.analysis_date)))).scalar()
+        rows = (await db.execute(
+            select(AnalysisResult, Fund)
+            .join(Fund, AnalysisResult.fund_id == Fund.id)
+            .where(AnalysisResult.analysis_date == latest)
+            .order_by(AnalysisResult.weighted_score.desc())
+            .limit(20)
+        )).all()
+        funds = [f for _, f in rows]
+        holdings = [(f, 100.0 / len(funds)) for f in funds] if funds else []
+
+    if not holdings:
+        return {"scope": scope, "error": "无可分析的基金"}
+
+    def _agg(key_fn):
+        agg: dict[str, float] = {}
+        for f, w in holdings:
+            for key in key_fn(f):
+                key = str(key).strip()
+                if key:
+                    agg[key] = agg.get(key, 0.0) + w
+        return sorted(agg.items(), key=lambda x: -x[1])
+
+    def _tags(f):
+        raw = (f.tags or "").replace("，", ",").split(",")
+        return [t for t in (x.strip() for x in raw) if t]
+
+    def _exposure(f):
+        # 形如 "光模块/CPO×4 27.3%, AI服务器×2 14.8% (覆盖91%)"
+        out = []
+        for part in str(f.exposure_tags or "").replace("，", ",").split(","):
+            seg = part.strip()
+            if not seg or "×" not in seg:
+                continue
+            name = seg.split("×")[0].strip()
+            if name:
+                out.append(name)
+        return out
+
+    by_tag = _agg(_tags)
+    by_expo = _agg(_exposure)
+    top3 = sum(w for _, w in by_expo[:3])
+    if not by_expo:
+        # 赛道标签缺失（新导入基金尚未刷持仓暴露）时不能假装"分散"：
+        # 0% 会被误读成风险很低，实际是没数据
+        return {
+            "scope": scope,
+            "scope_note": (
+                "已按真实持仓分析" if scope == "position"
+                else "未录入持仓，按基金池评分前 20 只等权分析"
+            ),
+            "fund_count": len(holdings),
+            "by_category": [{"tag": k, "weight_pct": round(v, 2)} for k, v in by_tag[:10]],
+            "by_exposure": [],
+            "concentration_level": "无法评估",
+            "note": "参与分析的基金均缺赛道暴露标签（exposure_tags 为空），"
+                    "按分类标签看风险集中度；补齐暴露需在基金池页刷新详情。",
+        }
+
+    if top3 >= 70:
+        level = "高度集中"
+    elif top3 >= 45:
+        level = "中等集中"
+    else:
+        level = "较分散"
+
+    return {
+        "scope": scope,
+        "scope_note": (
+            "已按真实持仓分析" if scope == "position"
+            else "未录入持仓，按基金池评分前 20 只等权分析"
+        ),
+        "fund_count": len(holdings),
+        "by_category": [{"tag": k, "weight_pct": round(v, 2)} for k, v in by_tag[:10]],
+        "by_exposure": [{"sector": k, "weight_pct": round(v, 2)} for k, v in by_expo[:12]],
+        "top3_exposure_pct": round(top3, 2),
+        "concentration_level": level,
+        "note": "赛道权重按 exposure_tags 归属累加，同一基金可能计入多个赛道。",
+    }
 
 
 def registered_names() -> list[str]:
