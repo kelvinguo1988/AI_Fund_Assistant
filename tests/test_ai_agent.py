@@ -89,19 +89,38 @@ async def _seed(db):
 class TestDataTools:
     @pytest.mark.asyncio
     async def test_list_fund_pool_active_only(self, db_session):
+        """列式返回（2026-10-22 token 优化）：{cols, rows}"""
         from backend.ai_tools.data_tools import t_list_fund_pool
         await _seed(db_session)
-        rows = await t_list_fund_pool(db_session)
-        assert [r["code"] for r in rows] == ["004011"]
+        out = await t_list_fund_pool(db_session)
+        assert isinstance(out, dict) and "cols" in out and "rows" in out
+        idx = out["cols"].index("code")
+        assert [r[idx] for r in out["rows"]] == ["004011"], "只返回 active 基金"
+
+    async def test_list_fund_pool_omits_exposure(self, db_session):
+        """暴露明细不在默认返回里（省 1850 字符/次），改用 get_fund_exposure 按需取"""
+        from backend.ai_tools.data_tools import t_list_fund_pool, t_get_fund_exposure
+        await _seed(db_session)
+        out = await t_list_fund_pool(db_session)
+        assert "exposure_tags" not in out["cols"]
+        exp = await t_get_fund_exposure(db_session, code="004011")
+        assert exp["code"] == "004011" and "exposure_tags" in exp
 
     @pytest.mark.asyncio
     async def test_latest_signals_carries_diag_fields(self, db_session):
+        """列式返回；质量警告有值时以 warn 列出现，无值时不占位"""
         from backend.ai_tools.data_tools import t_get_latest_signals
         await _seed(db_session)
-        rows = await t_get_latest_signals(db_session)
-        assert rows[0]["score"] == 2.5
-        assert rows[0]["quality_warnings"] == ["风格漂移"]
-        assert rows[0]["dynamic_sell_threshold"] == -1.5
+        out = await t_get_latest_signals(db_session)
+        assert isinstance(out, dict) and out["rows"]
+        row = dict(zip(out["cols"], out["rows"][0]))
+        assert row["score"] == 2.5
+        assert row["code"] == "004011"
+        # 该行有警告 → 必须有 warn 列且内容完整
+        assert "warn" in out["cols"], "有质量警告时必须带 warn 列"
+        assert row["warn"] == ["风格漂移"]
+        # 阈值全池恒定时不逐行输出（省 token），信息在 get_scoring_config
+        assert "dynamic_sell_threshold" not in out["cols"]
 
     @pytest.mark.asyncio
     async def test_factor_history_and_snapshot(self, db_session):

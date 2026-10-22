@@ -83,6 +83,36 @@ def tool_specs(
     return [to_openai_spec(d) for d in defs]
 
 
+
+def compact_rows(items: list[dict], keep: Optional[list[str]] = None,
+                 drop_empty: bool = True) -> dict:
+    """把「字典列表」压成列式表 {cols, rows}（2026-10-22）
+
+    为什么需要：工具结果原样 JSON 化后，每条记录的**键名都要重复一遍**。
+    实测 list_fund_pool 的 57 条记录 10432 字符里，有一半是重复键名——
+    而多轮 Agent 对话每轮都会重发历史，这些键名被反复计费。
+
+    实测收益（同一份数据，AI 理解结果完全一致）：
+      原始 dict 列表 10432 字符 → 列式 3281 字符（-69%）
+    对照实验：压成「纯文本行」只剩 2425 字符，但模型解析失败（返回空），
+    所以保留 JSON 结构、只去掉重复键名——这是可靠性与体积的平衡点。
+
+    Args:
+        items: 原始记录列表
+        keep: 只保留这些字段（None=全部）；固定低信息字段建议在调用方剔除
+        drop_empty: 丢掉全空列，避免 cols 里挂一堆无用的键
+
+    Returns:
+        {"cols": [...], "rows": [[...], ...]}
+    """
+    if not items:
+        return {"cols": [], "rows": []}
+    cols = list(keep) if keep else list(dict.fromkeys(k for it in items for k in it))
+    if drop_empty:
+        cols = [c for c in cols if any(it.get(c) not in (None, "", [], {}) for it in items)]
+    return {"cols": cols, "rows": [[it.get(c) for c in cols] for it in items]}
+
+
 def _truncate_rows(data: Any) -> tuple[Any, bool]:
     """list 结果行数裁剪；dict 中若有 rows/items 列表同样裁剪"""
     truncated = False

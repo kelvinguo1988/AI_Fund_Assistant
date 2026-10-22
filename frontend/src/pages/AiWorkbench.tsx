@@ -260,6 +260,27 @@ const AiWorkbench: React.FC = () => {
           <div ref={bottomRef} />
         </Paper>
 
+        {/* 预置任务：工作台原来只有一个空输入框，用户不知道该问什么 */}
+        {!running && messages.length === 0 && (
+          <Box sx={{ mt: 1.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5, display: 'block' }}>
+              常用分析（点击直接运行）
+            </Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              {QUICK_TASKS.map((t) => (
+                <Chip
+                  key={t.label}
+                  label={t.label}
+                  onClick={() => { setInput(t.prompt); run({ prompt: t.prompt }); setInput(''); }}
+                  variant="outlined"
+                  size="small"
+                  sx={{ cursor: 'pointer' }}
+                />
+              ))}
+            </Box>
+          </Box>
+        )}
+
         {/* 输入行 */}
         <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
           <TextField
@@ -282,3 +303,31 @@ const AiWorkbench: React.FC = () => {
 };
 
 export default AiWorkbench;
+
+/** 预置任务：对应真实工具能力，避免用户面对空输入框不知从何问起 */
+const QUICK_TASKS = [
+  {
+    label: '💊 我的持仓健康吗',
+    prompt: '帮我诊断当前持仓：集中度是否过高、各基金是否同涨同跌、有无再平衡建议。',
+  },
+  {
+    label: '💰 这只能买吗（含成本）',
+    prompt: '我想买基金 004011，请查它的申购状态、费率（含赎回费阶梯），并算出持有 7 天和 30 天各自要涨多少才不亏。',
+  },
+  {
+    label: '🌏 跨境ETF有溢价吗',
+    prompt: '现在跨境/海外 ETF 有高溢价风险的吗？哪些折价明显？结合美股近期走势说明。',
+  },
+  {
+    label: '📉 这只基金表现如何',
+    prompt: '查基金 004011 近 90 天的净值表现：区间收益、最大回撤、波动率，并给出评级与基金经理信息。',
+  },
+  {
+    label: '📊 今天该注意什么',
+    prompt: '结合最新信号和市场环境，告诉我今天最该关注的 3 件事。',
+  },
+  {
+    label: '🔁 帮我复盘本月',
+    prompt: '帮我复盘本月组合表现：与沪深300对比、最好最差标的、信号同向率说明什么。',
+  },
+];
