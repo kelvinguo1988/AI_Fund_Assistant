@@ -121,6 +121,11 @@ def _result_to_out(r: AnalysisResult, fund: Fund | None = None) -> AnalysisResul
         quality_warnings=_parse_warnings_json(getattr(r, "quality_warnings", None)),
         nav_as_of_date=getattr(r, "nav_as_of_date", None),
         pool_size=getattr(r, "pool_size", None),
+        # AI 点评（2026-10-22）：_result_to_out 是**显式字段映射**，
+        # 漏加就会 ORM 有值但接口返回 null（线上实测踩到）
+        ai_comment=getattr(r, "ai_comment", None),
+        ai_comment_model=getattr(r, "ai_comment_model", None),
+        ai_comment_at=getattr(r, "ai_comment_at", None),
     )
 
 

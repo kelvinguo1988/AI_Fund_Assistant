@@ -134,3 +134,42 @@ class TestAllAnalysisPathsWired:
         idx_push = src.find("推送段")
         assert idx_ai != -1 and idx_push != -1
         assert idx_ai < idx_push, "点评必须在推送之前生成"
+
+
+class TestDtoConversion:
+    """_result_to_out 是显式字段映射，漏加字段会让接口永远返回 null（线上踩过）"""
+
+    def test_conversion_carries_comment(self):
+        from datetime import date, datetime
+
+        from backend.models.analysis_result import AnalysisResult
+        from backend.models.fund import Fund
+        from backend.routers.analysis import _result_to_out
+
+        r = AnalysisResult(
+            id=1, fund_id=1, analysis_date=date(2026, 10, 23),
+            weighted_score=1.0, signal_direction="buy", signal_strength="moderate_buy",
+            operation_advice="x", equity_ratio=0.5, factor_scores="{}",
+            created_at=datetime(2026, 10, 23, 10, 0, 0),
+            ai_comment="测试点评", ai_comment_model="m1",
+            ai_comment_at=datetime(2026, 10, 23, 10, 0, 0),
+        )
+        f = Fund(id=1, code="004011", name="测试基金", fund_type="otc", status="active")
+        out = _result_to_out(r, f)
+        assert out.ai_comment == "测试点评", "DTO 必须带出 ai_comment"
+        assert out.ai_comment_model == "m1"
+        assert out.ai_comment_at is not None
+
+    def test_none_comment_passes_through(self):
+        from datetime import date, datetime
+
+        from backend.models.analysis_result import AnalysisResult
+        from backend.routers.analysis import _result_to_out
+
+        r = AnalysisResult(
+            id=2, fund_id=2, analysis_date=date(2026, 10, 23),
+            weighted_score=1.0, signal_direction="hold", signal_strength="hold",
+            operation_advice="x", equity_ratio=0.5, factor_scores="{}",
+            created_at=datetime(2026, 10, 23, 10, 0, 0),
+        )
+        assert _result_to_out(r).ai_comment is None, "未生成时必须是 None 而不是报错"
