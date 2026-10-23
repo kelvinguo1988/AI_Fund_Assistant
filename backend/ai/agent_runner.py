@@ -176,7 +176,21 @@ class AgentRunner:
             logger.warning(f"Skill 工具加载失败（不影响内置工具）: {e}")
             skill_defs = []
         skill_map = {d.name: d for d in skill_defs}
-        specs = tool_specs(self.allowed_tools, extra=skill_defs)
+
+        # 工具分组（2026-10-23）：按问题类型只暴露相关工具，省 prompt。
+        # 置信不足自动回退全量——选错组会让模型找不到工具、多绕一轮，
+        # 代价高于省下的 token。allowed_tools 显式指定时不分组（调用方已知要用什么）。
+        allowed = self.allowed_tools
+        if allowed is None:
+            from backend.ai_tools.registry import group_tools, pick_group
+            picked = pick_group(user_prompt)
+            allowed = group_tools(picked)
+            if allowed:
+                logger.info(
+                    f"工具分组: {picked}（{len(allowed)} 个工具，全量 "
+                    f"{len(tool_specs(None))} 个）"
+                )
+        specs = tool_specs(allowed, extra=skill_defs)
 
         history_rows = (await self.db.execute(
             select(AIConversation)
