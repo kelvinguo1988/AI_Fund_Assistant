@@ -391,6 +391,10 @@ async def trigger_analysis(
         )
         fund_ids = body.get("fund_ids") if body else None
         results = await svc.run_analysis(fund_ids=fund_ids)
+        # 分析完成 → 后台补 AI 点评（2026-10-22）
+        # 注意：/trigger 与 /trigger-stream 是两条独立路径，两处都要挂，
+        # 否则手动点「开始分析」出来的结果没有点评（线上实测踩到）。
+        _spawn_ai_comments()
         return ApiResponse(data=results)
     except Exception as e:
         logger.error(f"触发分析失败: {e}")

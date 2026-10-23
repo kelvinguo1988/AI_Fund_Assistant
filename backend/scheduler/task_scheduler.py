@@ -388,6 +388,51 @@ class TaskScheduler:
                             f"{type(rt_err).__name__}: {rt_err}",
                             exc_info=True,
                         )
+
+                    # AI 点评（2026-10-22）：必须在【推送之前】生成，
+                    # 否则推送里的「AI 点评」段落永远为空——推送读的是
+                    # 刚跑完的 results，点评落库后才有内容。
+                    # 同步 await：调度任务没有用户在等，慢一点没关系；
+                    # 失败只记日志，不影响推送。
+                    try:
+                        from backend.llm.factory import LLMFactory
+                        from backend.models.system_config import SystemConfig as _SC
+                        from backend.services.ai_comment_service import generate_comments
+
+                        cm_rows = (await session.execute(select(_SC))).scalars().all()
+                        cm = {c.config_key: c.config_value for c in cm_rows}
+                        ai_model = cm.get("ai_model", "deepseek")
+                        api_key = cm.get("ai_api_key", "")
+                        if api_key or ai_model == "zen-free":
+                            provider = LLMFactory.create(
+                                ai_model, api_key,
+                                cm.get("ai_base_url", "https://api.deepseek.com/v1"),
+                                model_id=(cm.get("ai_model_id") or "").strip() or None,
+                            )
+                            ai_res = await generate_comments(session, provider)
+                            logger.info(f"调度内 AI 点评: {ai_res}")
+                            # 点评落库后把内容回填进 results（推送读的是 DTO）
+                            comment_map = {}
+                            from backend.models.analysis_result import (
+                                AnalysisResult as _AR,
+                            )
+                            from backend.models.fund import Fund as _F2
+                            rows2 = (await session.execute(
+                                select(_AR, _F2)
+                                .join(_F2, _AR.fund_id == _F2.id)
+                                .where(_AR.ai_comment.isnot(None))
+                            )).all()
+                            for ar, f in rows2:
+                                comment_map[f.code] = ar.ai_comment
+                            for r in results:
+                                c = comment_map.get(getattr(r, "fund_code", ""))
+                                if c:
+                                    r.ai_comment = c
+                    except Exception as ai_err:  # noqa: BLE001
+                        logger.warning(
+                            f"调度内 AI 点评失败（不影响推送）: "
+                            f"{type(ai_err).__name__}: {ai_err}"
+                        )
             finally:
                 # 会话随块结束关闭；结果已是 DTO，脱离会话可安全读取
                 self._release_run_lock(lock)

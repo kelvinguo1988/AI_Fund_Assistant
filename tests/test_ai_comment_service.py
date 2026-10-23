@@ -98,3 +98,39 @@ class TestSilentFailure:
 
         out = await generate_comments(db_session, BoomProvider())
         assert out.get("error"), "应返回 error 而不是抛异常"
+
+
+class TestAllAnalysisPathsWired:
+    """分析有三条独立路径，漏挂任何一条都会让点评静默缺失（线上踩过）
+
+    1. POST /analysis/trigger         手动点「开始分析」
+    2. POST /analysis/trigger-stream  前端 SSE 触发的分析
+    3. 定时调度 task_scheduler        每日自动分析（推送前必须生成，否则推送无点评）
+    """
+
+    def test_manual_trigger_wired(self):
+        import inspect
+        from backend.routers import analysis
+
+        src = inspect.getsource(analysis.trigger_analysis)
+        assert "_spawn_ai_comments()" in src, "手动触发路径漏挂点评"
+
+    def test_stream_trigger_wired(self):
+        import inspect
+        from backend.routers import analysis
+
+        src = inspect.getsource(analysis.trigger_analysis_stream)
+        assert "_spawn_ai_comments()" in src, "SSE 触发路径漏挂点评"
+
+    def test_scheduler_wired_before_push(self):
+        """调度路径必须在推送前同步生成，否则推送的 AI 段永远为空"""
+        import inspect
+        from backend.scheduler import task_scheduler
+
+        src = inspect.getsource(task_scheduler)
+        assert "generate_comments" in src, "定时任务未接入点评"
+        # 位置校验：点评代码要出现在推送段之前
+        idx_ai = src.find("调度内 AI 点评")
+        idx_push = src.find("推送段")
+        assert idx_ai != -1 and idx_push != -1
+        assert idx_ai < idx_push, "点评必须在推送之前生成"
