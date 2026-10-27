@@ -22,6 +22,12 @@ TARGETS: list[dict[str, str]] = [
     # 东财补丁白名单导致扫描恒 0，连通性诊断里却没有这一路 → 补上避免再靠猜
     {"name": "push2delay.eastmoney.com", "url": "https://push2delay.eastmoney.com"},
     {"name": "datacenter-web.eastmoney.com", "url": "https://datacenter-web.eastmoney.com"},
+    # 乐咕乐股：中证800 温度计、指数估值分位都走它（akshare stock_index_pe_lg/pb_lg）。
+    # 2026-10-27 首页温度计整块消失，排查时连通性诊断里没有这一路，只能靠猜 → 补上。
+    # 注意：该站要求动态 token + CSRF cookie，裸 GET 返回 403 属正常（reachable=True
+    # 说明网络可达，不代表接口可用）；接口可用性看 /system/market-temperature。
+    {"name": "legulegu.com", "url": "https://legulegu.com"},
+    {"name": "qt.gtimg.cn", "url": "https://qt.gtimg.cn"},
 ]
 
 _PRIVATE_NETS = [

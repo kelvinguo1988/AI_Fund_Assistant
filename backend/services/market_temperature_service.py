@@ -190,14 +190,41 @@ class MarketTemperatureService:
         try:
             pe_df, pb_df = await run_with_timeout(_fetch, timeout=90.0)
         except Exception as e:
-            logger.warning(f"市场温度计取数失败: {e}")
+            # 静默失败曾让首页温度计整块消失却无任何线索（2026-10-27 排查花了很久：
+            # 接口 0.01s 返回 null，日志/错误页都查不到原因）。这里落一条错误日志，
+            # 把异常类型与消息带到 /system/error-logs，便于定位是依赖缺失还是网络。
             cls._fail_until = now + cls._FAIL_COOLDOWN
+            detail = f"{type(e).__name__}: {str(e)[:160]}"
+            logger.warning(f"市场温度计取数失败: {detail}")
+            try:
+                from backend.services.error_log_service import log_source_failure
+                log_source_failure(
+                    module="temperature.leigu",
+                    message="中证800 温度计取数失败（乐咕 PE/PB）",
+                    category="dependency" if "racer" in detail.lower() or "import" in detail.lower()
+                    else "network",
+                    severity="warning",
+                    detail=detail,
+                )
+            except Exception:
+                pass
             return cls._cache
 
         series = _align_series(pe_df, pb_df)
         if series is None:
             # 接口通了但对不齐/全空：与失败同等对待，需要冷却而不是下个请求再打一遍
             cls._fail_until = now + cls._FAIL_COOLDOWN
+            try:
+                from backend.services.error_log_service import log_source_failure
+                log_source_failure(
+                    module="temperature.leigu",
+                    message="中证800 温度计数据对不齐（PE/PB 月点无交集或样本不足）",
+                    category="data_quality", severity="warning",
+                    detail=f"pe_rows={len(pe_df) if pe_df is not None else 0}, "
+                           f"pb_rows={len(pb_df) if pb_df is not None else 0}",
+                )
+            except Exception:
+                pass
             return cls._cache
 
         payload = _build_payload(series, now)

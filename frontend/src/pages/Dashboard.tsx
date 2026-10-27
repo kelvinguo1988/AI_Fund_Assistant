@@ -450,6 +450,20 @@ const Dashboard: React.FC = () => {
       )}
 
       {/* ── 市场温度计（中证800，仅市场层行动参考，不参与单只基金判定）── */}
+      {/* 取数失败时不再整块消失：用户会以为"功能没了"，实际是乐咕数据源异常。
+          2026-10-27 线上就是整块不显示，排查时无从下手。 */}
+      {!temperature && (
+        <Card variant="outlined" sx={{ mb: 3, borderStyle: 'dashed' }}>
+          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <Typography variant="subtitle2" color="text.secondary">
+              市场温度计（中证800）
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              暂时取不到数据（乐咕 PE/PB 源异常），已记录到错误日志；推送里的温度计同样依赖该源。
+            </Typography>
+          </CardContent>
+        </Card>
+      )}
       {temperature && (
         <Card variant="outlined" sx={{ mb: 3 }}>
           <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
