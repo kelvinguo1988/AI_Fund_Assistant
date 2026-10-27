@@ -66,12 +66,26 @@ def _no_nav_reason(fd: FundData) -> Optional[str]:
 
 
 def _log_missing_nav(fund: Fund, reason: str) -> None:
-    """无净值埋点（category=data；同代码 60s 内只记一次）"""
+    """无净值埋点（category=data）
+
+    有些基金是**永久性**没有数据，不是故障：实测 968049（摩根亚洲股息美元派息，
+    香港互认）在内地基金列表 24269 行里根本不存在，它每天分析都必然失败一次。
+    这类每天重复一条的埋点没有增量信息，只会把真故障淹掉（线上 9 条
+    「基金 968049 数据源无该代码记录」全是同一个原因）。
+    因此对「已知永久无数据」的基金降级为 debug，只留内存日志。
+    """
+    code = str(fund.code or "")
+    # 香港/澳门互认基金（96/97/98 开头）在内地基金列表里根本不存在，属**永久性**
+    # 无数据而非故障：实测 968049 在 24269 行列表里 0 命中，它每天必然失败一次。
+    # 但不能因此静默——用户需要知道这只基金没被评分。故降为 info 级：
+    # 仍在 error_logs 留痕可查，但不进 error/warning 告警计数。
+    permanent = code[:2] in ("96", "97", "98")
+    note = "（互认/境外基金，数据源长期不覆盖）" if permanent else ""
     log_source_failure(
         module="analysis.data_missing",
-        message=f"基金 {fund.code} {reason}，已跳过评分",
+        message=f"基金 {code} {reason}，已跳过评分{note}",
         category="data",
-        severity="warning",
+        severity="info" if permanent else "warning",
         detail=f"name={fund.name}",
     )
 

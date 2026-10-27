@@ -77,6 +77,8 @@ class ErrorLogStore:
     def _init(self):
         self._write_lock = threading.Lock()
         self._throttle: dict[tuple, float] = {}
+        # 跨模块去重用的「消息指纹 → 上次记录时间」
+        self._msg_seen: dict[str, float] = {}
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         # busy_timeout 与 async engine 的 connect_args={"timeout": 30} 对齐：
         # 直连取更短的 15s 时，分析/刷新写库期间错误日志写入总是先一步放弃
@@ -105,10 +107,23 @@ class ErrorLogStore:
             last = self._throttle.get(fp, 0.0)
             if now - last < THROTTLE_WINDOW:
                 return False
+            # 跨模块去重（2026-10-27）：同一次上游故障常被两层各记一条——
+            # 例如 akshare 适配器记「akshare.fund_etf_spot_em」、行情服务再记
+            # 「realtime.eastmoney」，两者消息相同、模块不同，原指纹去不掉。
+            # 线上 300 条日志里有 14 组同秒成对记录，等于把 1 次故障报成 2~3 次。
+            # 按「消息指纹」判重：窗口内已有同一 message 则只留先到的那条。
+            msg_fp = message[:80]
+            if now - self._msg_seen.get(msg_fp, 0.0) < THROTTLE_WINDOW:
+                return False
+            self._msg_seen[msg_fp] = now
             # 先清掉已过窗口的指纹再判上限：只在满表时 prune，正常量级零开销
             if len(self._throttle) >= THROTTLE_MAX_KEYS:
                 self._throttle = {
                     k: v for k, v in self._throttle.items() if now - v < THROTTLE_WINDOW
+                }
+                self._msg_seen = {
+                    k: v for k, v in self._msg_seen.items()
+                    if now - v < THROTTLE_WINDOW
                 }
             self._throttle[fp] = now
             try:

@@ -87,7 +87,24 @@ class MarketService:
 
     # 简单 TTL 缓存: {cache_key: (timestamp, result)}
     _cache: dict[str, tuple[float, object]] = {}
-    _CACHE_TTL = 300  # 5 分钟
+    _CACHE_TTL = 300  # 5 分钟（盘中：行情会变，需要勤刷）
+
+    @staticmethod
+    def _ttl() -> float:
+        """按时段给缓存寿命（2026-10-27）
+
+        盘中 5 分钟合理；但收盘后数据**当天就不再变化**，仍按 5 分钟过期
+        只会逼着系统反复去撞已限流的行情源，而且用户打开仪表盘看到的
+        是空字段（线上实测：21:39 时 11 个缓存全部 stale）。
+
+        收盘后/周末放宽到 12 小时：既保证当天收盘数据一直可读，
+        也不会把昨天的数据当成今天的（跨日时 TTL 自然过期）。
+        """
+        try:
+            from backend.services.fund_realtime_service import _in_trading_hours
+            return MarketService._CACHE_TTL if _in_trading_hours() else 43200.0
+        except Exception:
+            return MarketService._CACHE_TTL
 
     @staticmethod
     def clear_cache(include_failures: bool = False) -> None:
@@ -108,7 +125,7 @@ class MarketService:
         if entry is None:
             return None
         ts, val = entry
-        if time.time() - ts > MarketService._CACHE_TTL:
+        if time.time() - ts > MarketService._ttl():
             del MarketService._cache[key]
             return None
         return val

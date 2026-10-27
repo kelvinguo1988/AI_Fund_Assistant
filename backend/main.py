@@ -68,21 +68,45 @@ from backend.database import init_db
 
 
 async def _prewarm_market_cache():
-    """后台预热市场数据缓存，避免用户首次请求等待"""
+    """后台预热市场数据缓存，避免用户首次请求等待
+
+    2026-10-27 两处调整：
+    1. **按时段选源**：盘中预热全部 5 个行情源 + 市场环境快照；收盘后只预热
+       日频/收盘口径的几项。原实现无条件全打——线上 21:00~23:00 那一批
+       「数据源熔断 600s / ConnectionError」几乎都来自部署重启后的预热，
+       非交易时段行情源本就限流，打了拿不到新数据，只会把冷却带进次日开盘、
+       并把 error_logs 刷满噪声。
+    2. 配套把 MarketService 缓存 TTL 改成按时段自适应（收盘后 12h），
+       否则收盘后不预热 = 仪表盘整屏空白。
+    """
+    from backend.services.fund_realtime_service import _in_trading_hours
+
+    trading = _in_trading_hours()
     try:
         from backend.services.market_service import MarketService
         svc = MarketService()
         import asyncio
-        # 并行预热所有数据源
-        await asyncio.gather(
-            svc.get_market_capital_flow(),
-            svc.get_sector_flow_rankings(),
-            svc.get_hsgt_flow(),
-            svc.get_market_adv_decline(),
-            svc.get_market_turnover(),
-            return_exceptions=True,
-        )
-        logger.info("市场数据缓存预热完成")
+
+        if trading:
+            await asyncio.gather(
+                svc.get_market_capital_flow(),
+                svc.get_sector_flow_rankings(),
+                svc.get_hsgt_flow(),
+                svc.get_market_adv_decline(),
+                svc.get_market_turnover(),
+                return_exceptions=True,
+            )
+            logger.info("市场数据缓存预热完成（盘中全量）")
+        else:
+            # 收盘口径：资金流/北向/成交额当日已定，仍值得预热度一次让仪表盘可读；
+            # 板块排行与涨跌家数需要实时源，收盘后不碰。
+            await asyncio.gather(
+                svc.get_market_capital_flow(),
+                svc.get_hsgt_flow(),
+                svc.get_market_turnover(),
+                return_exceptions=True,
+            )
+            logger.info("市场数据缓存预热完成（收盘口径）")
 
         # 市场环境快照预热（估值分位 xls ~2MB + 两融接口，避免首次分析串行等待）
         try:

@@ -316,6 +316,10 @@ class FundRealtimeService:
                 module=f"realtime.{name}",
                 message=f"数据源熔断 {SOURCE_FAIL_COOLDOWN:.0f}s" + (f": {reason}" if reason else ""),
                 category="rate_limit",
+                # 熔断是**防护机制按设计生效**，不是故障：标 warning 而非 error。
+                # 原实现沿用默认 severity=error，线上 41 条 error 里绝大多数是这类
+                # 「熔断 600s」，真正的故障反而被淹（2026-10-27 告警疲劳）。
+                severity="warning",
             )
         except Exception:
             pass

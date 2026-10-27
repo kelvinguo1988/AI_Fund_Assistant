@@ -158,8 +158,11 @@ class TestBatchPath:
         rows = [r for r in _read_error_logs(tmp_path) if r[0] == "analysis.data_missing"]
         assert len(rows) == 1
         assert rows[0][1] == "data"
-        assert rows[0][2] == "warning"
+        # 968049 是香港互认基金，在内地基金列表里永久不存在 → 降为 info
+        # （仍留痕可查，但不进 warning 告警计数，避免每天刷噪声）
+        assert rows[0][2] == "info"
         assert "968049" in rows[0][3]
+        assert "互认" in rows[0][3] or "境外" in rows[0][3]
 
 
 class TestStreamingPath:
