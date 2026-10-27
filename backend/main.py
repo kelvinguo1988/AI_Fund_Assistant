@@ -10,6 +10,17 @@ from pathlib import Path
 from backend.config import settings
 
 
+def _bj_converter(*_args):
+    """logging 的 converter：返回北京时间 struct_time
+
+    标准库默认用 time.localtime（容器里是 UTC）。这里换成固定 +8，
+    让所有日志时间戳与业务口径一致，且不依赖容器 TZ 环境变量是否设置。
+    """
+    import time as _t
+
+    return _t.gmtime(_t.time() + 8 * 3600)
+
+
 def _setup_logging() -> None:
     """统一日志配置：控制台 + 文件（TimedRotatingFileHandler，保留 7 天）
 
@@ -18,9 +29,14 @@ def _setup_logging() -> None:
     - 文件不可写（如只读容器）时降级为仅控制台，不阻塞启动。
     """
     level = logging.DEBUG if settings.DEBUG else logging.INFO
+    # 日志时间戳统一北京时（2026-10-27）：容器默认 UTC，原格式输出的
+    # "06:45" 实际是北京 14:45。排查调度/推送时极易误判——本次分析就一度
+    # 误以为「14:38 的尾盘任务没跑」。改为固定 Asia/Shanghai 后，
+    # 日志时间与业务时间（调度 time_point、error_logs.ts）口径一致。
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s:%(lineno)d %(message)s"
     )
+    fmt.converter = _bj_converter
 
     root = logging.getLogger()
     root.setLevel(level)
