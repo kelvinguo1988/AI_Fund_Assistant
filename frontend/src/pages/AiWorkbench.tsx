@@ -182,7 +182,7 @@ const AiWorkbench: React.FC = () => {
   };
 
   return (
-    <Box sx={{ p: 3, display: 'flex', gap: 2, height: 'calc(100vh - 64px)' }}>
+    <Box sx={{ p: 2, display: 'flex', gap: 1.5, height: 'calc(100vh - 64px)' }}>
       {/* ── 左栏：会话列表 ── */}
       <Paper variant="outlined" sx={{ width: 240, flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
         <Box sx={{ p: 1, display: 'flex', alignItems: 'center', gap: 1 }}>

@@ -306,10 +306,10 @@ const Dashboard: React.FC = () => {
   const sectorRankings = summary?.sector_flow || [];
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+    <Box sx={{ p: 2 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Typography variant="h5">仪表盘</Typography>
+          <Typography variant="h6">仪表盘</Typography>
           <Chip size="small" label={`数据更新: ${formatRefreshTime(refreshTime)}`}
             variant="outlined" sx={{ fontSize: '0.75rem' }} />
           {refreshing && (
@@ -321,6 +321,7 @@ const Dashboard: React.FC = () => {
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
+            size="small"
             variant="outlined"
             startIcon={<RefreshIcon />}
             onClick={refreshInBackground}
@@ -329,6 +330,7 @@ const Dashboard: React.FC = () => {
             {refreshing ? '刷新中...' : '刷新'}
           </Button>
           <Button
+            size="small"
             variant="contained"
             startIcon={<PlayArrowIcon />}
             onClick={openSelectDialog}
@@ -341,7 +343,7 @@ const Dashboard: React.FC = () => {
 
       {/* ── 流式分析进度条 ── */}
       {streaming?.active && (
-        <Box sx={{ mb: 3, display: 'flex', alignItems: 'center', gap: 2 }}>
+        <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
           <Box sx={{ flex: 1 }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
               <Typography variant="body2" color="text.secondary">
@@ -378,41 +380,41 @@ const Dashboard: React.FC = () => {
       )}
 
       {/* ── 信号概览卡片 ── */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid item xs={4}>
           <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Typography variant="h6" sx={{ color: 'var(--signal-buy)' }}>买入信号</Typography>
-              <Typography variant="h3" sx={{ color: 'var(--signal-buy)' }}>{buyCount}</Typography>
+            <CardContent sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 1, py: 1, px: 1.5, '&:last-child': { pb: 1 } }}>
+              <Typography variant="body2" sx={{ color: 'var(--signal-buy)', fontWeight: 600 }}>买入信号</Typography>
+              <Typography variant="h5" sx={{ color: 'var(--signal-buy)', fontWeight: 700, lineHeight: 1.1 }}>{buyCount}</Typography>
             </CardContent>
           </Card>
         </Grid>
         <Grid item xs={4}>
           <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Typography variant="h6" sx={{ color: 'var(--signal-hold)' }}>观望持有</Typography>
-              <Typography variant="h3" sx={{ color: 'var(--signal-hold)' }}>{holdCount}</Typography>
+            <CardContent sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 1, py: 1, px: 1.5, '&:last-child': { pb: 1 } }}>
+              <Typography variant="body2" sx={{ color: 'var(--signal-hold)', fontWeight: 600 }}>观望持有</Typography>
+              <Typography variant="h5" sx={{ color: 'var(--signal-hold)', fontWeight: 700, lineHeight: 1.1 }}>{holdCount}</Typography>
             </CardContent>
           </Card>
         </Grid>
         <Grid item xs={4}>
           <Card>
-            <CardContent sx={{ textAlign: 'center' }}>
-              <Typography variant="h6" sx={{ color: 'var(--signal-sell)' }}>卖出信号</Typography>
-              <Typography variant="h3" sx={{ color: 'var(--signal-sell)' }}>{sellCount}</Typography>
+            <CardContent sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 1, py: 1, px: 1.5, '&:last-child': { pb: 1 } }}>
+              <Typography variant="body2" sx={{ color: 'var(--signal-sell)', fontWeight: 600 }}>卖出信号</Typography>
+              <Typography variant="h5" sx={{ color: 'var(--signal-sell)', fontWeight: 700, lineHeight: 1.1 }}>{sellCount}</Typography>
             </CardContent>
           </Card>
         </Grid>
       </Grid>
 
       {/* ── 市场层参考分 A 股 / 美股两块：都只作市场层参考，不参与单只基金买卖判定 ── */}
-      <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>A 股市场</Typography>
+      <Typography variant="subtitle1" gutterBottom sx={{ mt: 0.5, fontWeight: 700 }}>A 股市场</Typography>
 
       {/* ── 指数高低估（乐咕 2007 起月频全序列 PE 分位）── */}
       {indexValuations.length > 0 && (
-        <Card variant="outlined" sx={{ mb: 3 }}>
-          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'center' }}>
+        <Card variant="outlined" sx={{ mb: 2 }}>
+          <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
               <Typography variant="subtitle2" sx={{ minWidth: 90 }}>
                 指数高低估
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
@@ -453,8 +455,8 @@ const Dashboard: React.FC = () => {
       {/* 取数失败时不再整块消失：用户会以为"功能没了"，实际是乐咕数据源异常。
           2026-10-27 线上就是整块不显示，排查时无从下手。 */}
       {!temperature && (
-        <Card variant="outlined" sx={{ mb: 3, borderStyle: 'dashed' }}>
-          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+        <Card variant="outlined" sx={{ mb: 2, borderStyle: 'dashed' }}>
+          <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
             <Typography variant="subtitle2" color="text.secondary">
               市场温度计（中证800）
             </Typography>
@@ -465,9 +467,9 @@ const Dashboard: React.FC = () => {
         </Card>
       )}
       {temperature && (
-        <Card variant="outlined" sx={{ mb: 3 }}>
-          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <Card variant="outlined" sx={{ mb: 2 }}>
+          <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <Box sx={{ minWidth: 150 }}>
                 <Typography variant="subtitle2">
                   市场温度计
@@ -558,10 +560,10 @@ const Dashboard: React.FC = () => {
       )}
 
       {/* ── 涨跌分布 + 两市成交额 ── */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid item xs={4}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" gutterBottom>涨跌分布</Typography>
               {summary?.adv_decline ? (
                 <Box>
@@ -593,7 +595,7 @@ const Dashboard: React.FC = () => {
         </Grid>
         <Grid item xs={4}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" gutterBottom>两市成交额</Typography>
               {summary?.turnover ? (
                 <Box>
@@ -615,16 +617,16 @@ const Dashboard: React.FC = () => {
       </Grid>
 
       {/* ── 市场环境 — 估值分位 / 情绪 / 资金面 ── */}
-      <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>市场环境</Typography>
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Typography variant="subtitle1" gutterBottom sx={{ mt: 0.5, fontWeight: 700 }}>市场环境</Typography>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         {/* 大盘估值分位 */}
         <Grid item xs={4}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>大盘估值分位（沪深300 PE 近10年）</Typography>
               {regime?.valuation_percentile != null ? (
                 <Box>
-                  <Typography variant="h4" sx={{ color: regimeColor(regime.valuation_percentile) }}>
+                  <Typography variant="h5" sx={{ color: regimeColor(regime.valuation_percentile), fontWeight: 700 }}>
                     {(regime.valuation_percentile * 100).toFixed(0)}%
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -649,11 +651,11 @@ const Dashboard: React.FC = () => {
         {/* 市场情绪 */}
         <Grid item xs={4}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>市场情绪（涨跌家数比）</Typography>
               {regime?.adv_decline_ratio != null ? (
                 <Box>
-                  <Typography variant="h4" sx={{ color: growthColorOrFlat(regime.adv_decline_ratio) }}>
+                  <Typography variant="h5" sx={{ color: growthColorOrFlat(regime.adv_decline_ratio), fontWeight: 700 }}>
                     {regime.adv_decline_ratio >= 0 ? '+' : ''}{regime.adv_decline_ratio.toFixed(2)}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -670,11 +672,11 @@ const Dashboard: React.FC = () => {
         {/* 资金面 */}
         <Grid item xs={4}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>资金面（两融余额 7 日变化）</Typography>
               {regime?.margin_change_pct_7d != null ? (
                 <Box>
-                  <Typography variant="h4" sx={{ color: growthColorOrFlat(regime.margin_change_pct_7d) }}>
+                  <Typography variant="h5" sx={{ color: growthColorOrFlat(regime.margin_change_pct_7d), fontWeight: 700 }}>
                     {regime.margin_change_pct_7d >= 0 ? '+' : ''}{(regime.margin_change_pct_7d * 100).toFixed(2)}%
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
@@ -692,12 +694,12 @@ const Dashboard: React.FC = () => {
       </Grid>
 
       {/* ── 市场概况 — TOP10 + 资金流 + 板块 ── */}
-      <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>市场概况</Typography>
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Typography variant="subtitle1" gutterBottom sx={{ mt: 0.5, fontWeight: 700 }}>市场概况</Typography>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         {/* TOP10 买入 */}
         <Grid item xs={6}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" sx={{ color: GROWTH_UP, mb: 1 }}>
                 <Tooltip title={scoreCaliber}><span>TOP10 买入信号</span></Tooltip>
               </Typography>
@@ -732,7 +734,7 @@ const Dashboard: React.FC = () => {
         {/* TOP10 卖出 */}
         <Grid item xs={6}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" sx={{ color: GROWTH_DOWN, mb: 1 }}>
                 <Tooltip title={scoreCaliber}><span>TOP10 卖出信号</span></Tooltip>
               </Typography>
@@ -766,10 +768,10 @@ const Dashboard: React.FC = () => {
       </Grid>
 
       {/* 大盘资金流 + 沪深港通 */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
+      <Grid container spacing={1.5} sx={{ mb: 2 }}>
         <Grid item xs={6}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" gutterBottom>大盘资金流</Typography>
               {summary?.market_flow ? (
                 <Box>
@@ -807,7 +809,7 @@ const Dashboard: React.FC = () => {
 
         <Grid item xs={6}>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Typography variant="subtitle2" gutterBottom>沪深港通</Typography>
               {summary?.hsgt_flow ? (
                 <Box>
@@ -832,10 +834,10 @@ const Dashboard: React.FC = () => {
 
       {/* 行业板块资金流排行 */}
       {sectorRankings.length > 0 && (
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ mb: 2 }}>
           <Typography variant="subtitle2" gutterBottom>行业板块资金流排行</Typography>
           <Card variant="outlined">
-            <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+            <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
               <Tabs value={sectorTab} onChange={(_, v) => setSectorTab(v)} sx={{ minHeight: 36, mb: 1 }}>
                 {sectorRankings.map((sr) => (
                   <Tab key={sr.timeframe} label={sr.timeframe} sx={{ minHeight: 36, fontSize: '0.8rem' }} />
@@ -866,10 +868,10 @@ const Dashboard: React.FC = () => {
           P0 回放判据未过（docs/US_TIMING_REPLAY_2026-10.md），所以动作只能是**月频节奏规则**
           （新增资金进不进、存量动不动、什么条件恢复），不写权益比例；
           代价必须与状态同屏，否则就是在推销择时 ── */}
-      <Typography variant="h6" gutterBottom sx={{ mt: 1 }}>美股市场</Typography>
+      <Typography variant="subtitle1" gutterBottom sx={{ mt: 0.5, fontWeight: 700 }}>美股市场</Typography>
       {usTiming && (
-        <Card variant="outlined" sx={{ mb: 3 }}>
-          <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+        <Card variant="outlined" sx={{ mb: 2 }}>
+          <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
             {/* 本月动作横幅：这张卡的主语是"这个月怎么做"，下面的四栏是依据 */}
             <Box
               sx={{
@@ -906,7 +908,7 @@ const Dashboard: React.FC = () => {
                 </Typography>
               )}
             </Box>
-            <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <Box sx={{ minWidth: 175 }}>
                 <Typography variant="subtitle2">
                   趋势状态

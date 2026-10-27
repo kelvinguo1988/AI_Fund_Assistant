@@ -373,7 +373,7 @@ const PositionsPage: React.FC = () => {
   );
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: 2 }}>
       <Typography variant="h5" gutterBottom>我的持仓与调仓</Typography>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label={`持仓管理${items.length ? `（${items.length}）` : ''}`} />

@@ -79,6 +79,55 @@ const theme = createTheme({
       '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto',
       '"Helvetica Neue"', 'Arial', 'sans-serif',
     ].join(','),
+    // 全局字号收紧（2026-10-27 前端紧凑化）
+    // MUI 默认 h5=1.5rem/h4=2.125rem 在仪表盘这种信息密集页显得过大，
+    // 一屏装不下多少内容；整体下调一档并保留层级差。
+    h4: { fontSize: '1.5rem', fontWeight: 600 },
+    h5: { fontSize: '1.25rem', fontWeight: 600 },
+    h6: { fontSize: '1.05rem', fontWeight: 600 },
+    subtitle1: { fontSize: '0.95rem' },
+    subtitle2: { fontSize: '0.85rem' },
+    body1: { fontSize: '0.875rem' },
+    body2: { fontSize: '0.8125rem' },
+    caption: { fontSize: '0.72rem' },
+    button: { fontSize: '0.8125rem', textTransform: 'none' },
+  },
+  components: {
+    // 卡片：默认 CardContent 上下 16px 留白偏大，收紧到 12px
+    MuiCard: {
+      styleOverrides: {
+        root: { borderRadius: 8 },
+      },
+    },
+    MuiCardContent: {
+      styleOverrides: {
+        root: {
+          padding: '12px',
+          '&:last-child': { paddingBottom: '12px' },
+        },
+      },
+    },
+    // 表格/列表更紧凑，一屏多看几行
+    MuiTableCell: {
+      styleOverrides: {
+        root: { padding: '6px 10px', fontSize: '0.8125rem' },
+        head: { fontWeight: 600 },
+      },
+    },
+    MuiListItem: {
+      styleOverrides: { root: { minHeight: 36 } },
+    },
+    MuiChip: {
+      styleOverrides: { root: { height: 22, fontSize: '0.72rem' }, sizeSmall: { height: 20 } },
+    },
+    MuiTextField: {
+      defaultProps: { size: 'small' },
+    },
+    MuiButton: {
+      styleOverrides: { root: { borderRadius: 6 } },
+    },
+    MuiPaper: { styleOverrides: { rounded: { borderRadius: 8 } } },
+    MuiToolbar: { styleOverrides: { root: { minHeight: 56 } } },
   },
 });
 

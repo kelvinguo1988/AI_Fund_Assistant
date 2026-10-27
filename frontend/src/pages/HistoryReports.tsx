@@ -86,7 +86,7 @@ const HistoryReports: React.FC = () => {
   };
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: 2 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5">历史报告</Typography>
         <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
