@@ -17,6 +17,11 @@ class LLMFactory:
         "zen-free": "deepseek-v4.1-flash-free",
         "workbuddy": "deepseek-v4.1-flash",
         "workbuddy-ai": "deepseek-v4.1-flash",
+        "magpie": "trae-cn/deepseek-v4.1-flash-max",
+        "trae-cn": "deepseek-v4.1-flash",
+        "trae-global": "deepseek-v4.1-flash",
+        "qoder-cn": "dfmodel",
+        "qoder": "dfmodel",
     }
 
     @staticmethod
@@ -45,6 +50,20 @@ class LLMFactory:
             # 端点/UA/核心工具/流式特征，不需要本地任何软件
             from backend.llm.zen_free_provider import ZenFreeProvider
             return ZenFreeProvider(model_name=resolved, api_key=api_key, base_url=base_url)
+        elif model_name in ("trae-cn", "trae-global"):
+            # Trae（2026-10-31）：原生协议，api_key 位置填 magpie 的凭证 JSON
+            from backend.llm.trae_provider import TraeProvider
+            return TraeProvider(
+                model_name=resolved, api_key=api_key, base_url=base_url,
+                realm=model_name,
+            )
+        elif model_name in ("qoder", "qoder-cn"):
+            # Qoder（2026-10-31）：COSY 信封协议，api_key 位置填凭证 JSON
+            from backend.llm.qoder_provider import QoderProvider
+            return QoderProvider(
+                model_name=resolved, api_key=api_key, base_url=base_url,
+                realm=model_name,
+            )
         elif model_name in ("workbuddy", "workbuddy-ai"):
             # WorkBuddy（2026-10-20）：用用户自己账号的 OAuth token，
             # api_key 位置填 refresh token，access 由 Provider 自动换取
@@ -56,7 +75,11 @@ class LLMFactory:
         elif model_name == "tongyi":
             from backend.llm.tongyi_provider import TongyiProvider
             return TongyiProvider(model_name=resolved, api_key=api_key, base_url=base_url)
-        elif model_name == "openai":
+        elif model_name in ("openai", "magpie"):
+            # magpie 网关（2026-10-31）：标准 OpenAI 兼容端点，模型 id 形如
+            # <provider>/<model>（如 trae-cn/deepseek-v4.1-flash-max）。
+            # Qoder 的 COSY 信封、Trae 的 JWT 交换都由 magpie 侧完成，
+            # 项目这边不需要感知。
             from backend.llm.openai_provider import OpenAIProvider
             return OpenAIProvider(model_name=resolved, api_key=api_key, base_url=base_url)
         else:

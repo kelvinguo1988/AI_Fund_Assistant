@@ -63,6 +63,37 @@ _AI_MODEL_PRESETS: list[AIModelPreset] = [
         base_url="https://copilot.tencent.com/v2",
         model_name="deepseek-v4.1-flash",
     ),
+    # ── Magpie 本地网关（2026-10-31）────────────────────────────────
+    # Qoder CN / Trae CN / Trae Global 都**不是**标准 OpenAI 接口：
+    #   Qoder 需 COSY 信封（RSA 包裹 AES 密钥 + MD5 签名 + 自定义 body 编码）
+    #   Trae  需 JWT（ExchangeToken 走 P-256 签名）后再调 /v1/chat/completions
+    # 二者还都要账号 OAuth 登录，不是填个 API Key 就能用。
+    # magpie 已把这些协议实现并持续维护，所以项目侧只当它是「OpenAI 兼容网关」，
+    # 协议细节交给 magpie —— 避免在项目里复刻两套易变的私有协议。
+    # API Key 位置填 magpie 的 gateway key；Base URL 指向网关。
+    AIModelPreset(
+        key="magpie", label="Magpie 网关（Qoder/Trae 等）",
+        base_url="http://10.0.3.1:3425/v1",
+        model_name="trae-cn/deepseek-v4.1-flash-max",
+    ),
+    # ── 原生接入（2026-10-31）：凭证取自 magpie 已登录账号，运行时不依赖 magpie ──
+    # 两者协议都不是标准 OpenAI 接口，详见 backend/llm/{trae,qoder}_provider.py
+    # API Key 位置填**整段凭证 JSON**（magpie plugin-auth.json 里对应条目）
+    AIModelPreset(
+        key="trae-global", label="Trae Global（原生）",
+        base_url="https://coresg-normal.trae.ai",
+        model_name="deepseek-v4.1-flash",
+    ),
+    AIModelPreset(
+        key="trae-cn", label="Trae CN（原生）",
+        base_url="https://trae-api-cn.mchost.guru",
+        model_name="deepseek-v4.1-flash",
+    ),
+    AIModelPreset(
+        key="qoder-cn", label="Qoder CN（原生，DeepSeek 免费）",
+        base_url="https://gateway.qoder.com.cn",
+        model_name="dfmodel",
+    ),
 ]
 
 # 每个预设可选的模型 ID（前端下拉用；空 = 只有预设默认那一个）
@@ -86,6 +117,19 @@ _AI_MODEL_CHOICES: dict[str, list[str]] = {
         "glm-5.3-flash",
         "deepseek-v4.1-flash",
         "hy3",
+    ],
+    # magpie 网关的模型 id 形如 <provider>/<model>，由 magpie 自己的
+    # /v1/models 决定；这里只列常用的几个，其余可直接手填
+    "trae-global": ["deepseek-v4.1-flash", "deepseek-v3.2"],
+    "trae-cn": ["deepseek-v4.1-flash", "glm-5.2", "kimi-k2.6", "qwen-3.7-plus"],
+    "qoder-cn": ["dfmodel", "dmodel", "gfmodel", "gmodel", "qfmodel"],
+    "magpie": [
+        "trae-cn/deepseek-v4.1-flash-max",
+        "trae-global/deepseek-v4.1-flash-max",
+        "qoder-cn/dfmodel",
+        "qoder/dfmodel",
+        "workbuddy-ai/deepseek-v4.1-flash",
+        "zcode/GLM-5.3-Flash",
     ],
 }
 

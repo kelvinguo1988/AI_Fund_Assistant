@@ -22,3 +22,7 @@ requests>=2.32.4,<3.0
 numpy~=2.0.1
 pytest~=8.4
 pytest-asyncio~=1.2
+
+# Qoder 原生接入（2026-10-31）：COSY 信封需要 AES-128-CBC 与 RSA-1024 公钥加密。
+# 不显式声明时只能靠传递依赖，镜像里可能没有 → 温度计式的静默失败，故明确列出。
+cryptography>=42.0,<46.0
