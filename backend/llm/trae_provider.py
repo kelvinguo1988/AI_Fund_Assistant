@@ -37,6 +37,11 @@ from backend.llm.base import BaseLLMProvider, LLMResponse, ToolCall, estimate_to
 
 logger = logging.getLogger(__name__)
 
+
+class _AuthExpired(Exception):
+    """令牌被拒：由 _stream 捕获后重取一次"""
+
+
 # 两个 realm 的站点表（实测自 magpie 插件）
 SITES = {
     "trae-cn": {
@@ -117,9 +122,33 @@ class TraeProvider(BaseLLMProvider):
             )
         return None
 
+    def _stored_access(self) -> tuple[str, float]:
+        """凭证自带的 access 及其到期时间（epoch 秒）
+
+        **优先复用未过期的 access**，不要每次启动都换 token。换 token 会轮换
+        refresh：既白烧一次额度，更要命的是——上一次运行若已把 refresh 花掉，
+        再换就是 "refresh token is invalid" 直接认证失败，而本地存着的 access
+        其实还好好有效（2026-10-31 实测踩到，NAS 上就是这么挂的）。
+        """
+        tok = self._cred.get("access") or ""
+        exp = self._cred.get("expires")
+        if not tok:
+            return "", 0.0
+        if isinstance(exp, (int, float)) and exp > 1e12:
+            return tok, float(exp) / 1000.0
+        if isinstance(exp, (int, float)) and exp > 0:
+            return tok, float(exp)
+        return tok, time.time() + 300   # 无到期信息：当短期可用，401 时再刷新
+
     async def _ensure_token(self) -> str:
         if self._token and time.time() < self._token_exp - 60:
             return self._token
+        stored, stored_exp = self._stored_access()
+        if stored and time.time() < stored_exp - 60:
+            self._token = stored
+            self._token_exp = stored_exp
+            logger.info(f"{self.site['name']} 复用凭证中的 access（未过期）")
+            return stored
         err = self._missing()
         if err:
             raise RuntimeError(err)
@@ -143,23 +172,25 @@ class TraeProvider(BaseLLMProvider):
         if not token:
             raise RuntimeError(f"{self.site['name']} 未返回 token: {str(data)[:160]}")
         self._token = token
-        # Trae 每次换 token 都会轮换 refresh，旧的花掉即失效。
-        # 这里只在内存里更新；如需长期可用，请把新的 refresh 写回系统设置
-        # （轮换后旧值失效，重启会认证失败）。
-        new_refresh = res.get("RefreshToken") or res.get("refreshToken")
-        if new_refresh and new_refresh != self._cred.get("refresh"):
-            self._cred["refresh"] = new_refresh
-            # 回写 system_config，让轮换后的凭证跨重启存活（2026-10-31）。
-            # 旧值在服务端已作废，不回写的话下次启动必然认证失败。
-            from backend.llm.credential_store import persist_credential
-            await persist_credential(self.realm, {"refresh": new_refresh})
         exp = res.get("TokenExpireAt") or res.get("tokenExpireAt")
         if isinstance(exp, (int, float)) and exp > 1e12:
-            self._token_exp = exp / 1000.0
+            self._token_exp = float(exp) / 1000.0
         elif isinstance(exp, (int, float)) and exp > 0:
             self._token_exp = float(exp)
         else:
             self._token_exp = time.time() + 1800
+
+        # 回写 system_config：新 access（下次启动可直接复用，不必再换）+
+        # 新 refresh（旧值在服务端已作废，不回写则重启必失败）——2026-10-31
+        from backend.llm.credential_store import persist_credential
+        new_refresh = res.get("RefreshToken") or res.get("refreshToken")
+        changes = {"access": token}
+        if new_refresh and new_refresh != self._cred.get("refresh"):
+            self._cred["refresh"] = new_refresh
+            changes["refresh"] = new_refresh
+        if isinstance(exp, (int, float)) and exp > 0:
+            changes["expires"] = int(exp)
+        await persist_credential(self.realm, changes)
         return token
 
     def _headers(self, token: str, stream: bool) -> dict:
@@ -291,7 +322,36 @@ class TraeProvider(BaseLLMProvider):
         self, messages: list[dict], tools: Optional[list[dict]],
         max_tokens: int, temperature: float,
     ):
-        """yield (text, reasoning, tool_call_dict, usage)"""
+        """带一次令牌重取的流式（401 → 丢掉缓存 token → 重试一次）
+
+        凭证里的 access 可能被服务端提前作废（refresh 轮换会让旧会话失效，
+        即使 expires 还没到），此时只能重换一次再试。
+        """
+        try:
+            async for item in self._stream_once(messages, tools, max_tokens, temperature):
+                yield item
+            return
+        except _AuthExpired:
+            pass
+        # 丢掉缓存的 access，强制走一次 ExchangeToken
+        self._token = ""
+        self._token_exp = 0.0
+        try:
+            async for item in self._stream_once(messages, tools, max_tokens, temperature):
+                yield item
+        except _AuthExpired:
+            # 重取后仍被拒 = 凭证真的失效了，给出可操作的提示
+            raise RuntimeError(
+                f"{self.site['name']} 认证失败（重取令牌后仍被拒）。"
+                "凭证可能已失效：请在 magpie 重新登录，再把新的凭证 JSON "
+                "整段粘到系统设置的 API Key"
+            )
+
+    async def _stream_once(
+        self, messages: list[dict], tools: Optional[list[dict]],
+        max_tokens: int, temperature: float,
+    ):
+        """单次尝试，yield (text, reasoning, tool_call_dict, usage)"""
         token = await self._ensure_token()
         body = self._body(messages, tools, max_tokens, temperature)
         async with httpx.AsyncClient(timeout=120.0) as client:
@@ -301,6 +361,8 @@ class TraeProvider(BaseLLMProvider):
                 json=body,
                 headers=self._headers(token, stream=True),
             ) as resp:
+                if resp.status_code in (401, 403):
+                    raise _AuthExpired()
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")[:300]
                     raise RuntimeError(f"{self.site['name']} HTTP {resp.status_code}: {raw}")
