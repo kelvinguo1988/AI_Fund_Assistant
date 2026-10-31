@@ -149,10 +149,10 @@ class TraeProvider(BaseLLMProvider):
         new_refresh = res.get("RefreshToken") or res.get("refreshToken")
         if new_refresh and new_refresh != self._cred.get("refresh"):
             self._cred["refresh"] = new_refresh
-            logger.warning(
-                f"{self.site['name']} refresh token 已轮换（新值前 8 位 "
-                f"{new_refresh[:8]}…）。请把它写回系统设置，否则本进程重启后失效。"
-            )
+            # 回写 system_config，让轮换后的凭证跨重启存活（2026-10-31）。
+            # 旧值在服务端已作废，不回写的话下次启动必然认证失败。
+            from backend.llm.credential_store import persist_credential
+            await persist_credential(self.realm, {"refresh": new_refresh})
         exp = res.get("TokenExpireAt") or res.get("tokenExpireAt")
         if isinstance(exp, (int, float)) and exp > 1e12:
             self._token_exp = exp / 1000.0

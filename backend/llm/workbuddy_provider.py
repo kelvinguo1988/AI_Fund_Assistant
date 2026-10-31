@@ -142,8 +142,11 @@ class WorkBuddyProvider(BaseLLMProvider):
             self._domain = body["domain"]
         # 上游可能同时轮换 refresh token，留着下次用
         new_refresh = body.get("refreshToken") or body.get("refresh")
-        if new_refresh:
+        if new_refresh and new_refresh != self._refresh_token:
             self._refresh_token = new_refresh
+            # 回写让轮换后的凭证跨重启存活（2026-10-31）
+            from backend.llm.credential_store import persist_credential
+            await persist_credential(self.site_id, {"refresh": new_refresh})
         return access
 
     async def _headers(self) -> dict:

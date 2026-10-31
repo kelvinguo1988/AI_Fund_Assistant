@@ -35,6 +35,11 @@ from backend.llm.base import BaseLLMProvider, LLMResponse, ToolCall, estimate_to
 
 logger = logging.getLogger(__name__)
 
+
+class _AuthExpired(Exception):
+    """令牌过期/被拒：由 _stream 捕获后刷新重试一次"""
+
+
 SITES = {
     "qoder": {
         "name": "Qoder",
@@ -217,6 +222,46 @@ class QoderProvider(BaseLLMProvider):
             })
         return h
 
+    async def _refresh_access(self) -> bool:
+        """设备令牌刷新（qoder-cn 走 deviceChat）
+
+        实测: POST {openapi}/api/v1/deviceToken/refresh {"refresh_token": ...}
+              → {device_token, refresh_token, expires_at}
+        **refresh_token 会轮换**，所以必须回写，否则下次启动用旧值必失败。
+        """
+        rt = (self._cred.get("refresh") or "").strip()
+        if not rt:
+            return False
+        url = self.site["openapi"] + "/api/v1/deviceToken/refresh"
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as c:
+                r = await c.post(url, json={"refresh_token": rt})
+            if r.status_code >= 400:
+                logger.warning(
+                    f"{self.site['name']} 刷新设备令牌失败: HTTP {r.status_code} {r.text[:120]}"
+                )
+                return False
+            data = r.json()
+        except Exception as e:  # noqa: BLE001 - 刷新失败不该抛出，由调用方报错
+            logger.warning(f"{self.site['name']} 刷新设备令牌异常: {type(e).__name__}: {e}")
+            return False
+
+        token = data.get("device_token") or data.get("token") or ""
+        if not token:
+            logger.warning(f"{self.site['name']} 刷新未返回 device_token")
+            return False
+        self._cred["access"] = token
+        new_rt = data.get("refresh_token") or data.get("refreshToken")
+        changes = {"access": token}
+        if new_rt and new_rt != rt:
+            self._cred["refresh"] = new_rt
+            changes["refresh"] = new_rt
+        # 回写让轮换后的凭证跨重启存活
+        from backend.llm.credential_store import persist_credential
+        await persist_credential(self.realm, changes)
+        logger.info(f"{self.site['name']} 设备令牌已刷新")
+        return True
+
     def _missing(self) -> Optional[str]:
         lack = [k for k in ("access", "uid", "machineId") if not self._cred.get(k)]
         if lack:
@@ -337,7 +382,25 @@ class QoderProvider(BaseLLMProvider):
     # ── 流式 ───────────────────────────────────────────────────────
     async def _stream(self, messages: list[dict], tools: Optional[list[dict]],
                       max_tokens: int, temperature: float):
-        """yield (text, reasoning, tool_call, usage)"""
+        """带一次令牌刷新的流式（401/403 → 刷新 → 重试一次）
+
+        令牌过期是常态（设备令牌有有效期），刷新后原样重放；
+        只重试一次，避免凭证真的失效时反复打转。
+        """
+        try:
+            async for item in self._stream_once(messages, tools, max_tokens, temperature):
+                yield item
+            return
+        except _AuthExpired:
+            pass
+        if not await self._refresh_access():
+            raise RuntimeError(f"{self.site['name']} 令牌已过期且刷新失败，请重新配置凭证")
+        async for item in self._stream_once(messages, tools, max_tokens, temperature):
+            yield item
+
+    async def _stream_once(self, messages: list[dict], tools: Optional[list[dict]],
+                           max_tokens: int, temperature: float):
+        """单次尝试，yield (text, reasoning, tool_call, usage)"""
         entry = await self._ensure_model_entry()
         body = self._chat_body(messages, tools, max_tokens, temperature, entry)
         wire = encode_body(_compact(body))
@@ -349,6 +412,9 @@ class QoderProvider(BaseLLMProvider):
         )
         async with httpx.AsyncClient(timeout=180.0) as client:
             async with client.stream("POST", url, content=wire.encode(), headers=headers) as resp:
+                if resp.status_code in (401, 403):
+                    # 交由 _stream 统一处理：刷新令牌后重放一次
+                    raise _AuthExpired()
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")[:300]
                     raise RuntimeError(f"{self.site['name']} HTTP {resp.status_code}: {raw}")
