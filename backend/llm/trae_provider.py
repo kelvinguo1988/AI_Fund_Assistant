@@ -51,9 +51,6 @@ SITES = {
         "app_id": "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8",
         "client_version": "0.1.69",
         "client_version_code": "20260917",
-        "default_model": "deepseek-v4.1-flash",
-        # 客户端把 deepseek-v4.1-flash 只发给 solo_agent 这个 chat function
-        "functions": ["chat_v3", "solo_work_lite", "solo_agent", "solo_agent_lite", "solo_coder"],
         "default_fn": "solo_agent",
     },
     "trae-global": {
@@ -63,8 +60,6 @@ SITES = {
         "app_id": "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8",
         "client_version": "0.1.69",
         "client_version_code": "20260917",
-        "default_model": "deepseek-v4.1-flash",
-        "functions": ["chat_v3", "solo_work_lite", "solo_agent", "solo_agent_lite", "solo_coder"],
         "default_fn": "solo_agent",
     },
 }
@@ -170,7 +165,10 @@ class TraeProvider(BaseLLMProvider):
         res = data.get("Result") or data.get("result") or {}
         token = res.get("Token") or res.get("token") or ""
         if not token:
-            raise RuntimeError(f"{self.site['name']} 未返回 token: {str(data)[:160]}")
+            # 不要把整个响应打进异常（2026-11-07 审查发现）：ExchangeToken 的
+            # 响应含 Token/RefreshToken，会经日志和 _agent_error_message 外泄。
+            keys = sorted(data) if isinstance(data, dict) else type(data).__name__
+            raise RuntimeError(f"{self.site['name']} 未返回 token（响应字段: {keys}）")
         self._token = token
         exp = res.get("TokenExpireAt") or res.get("tokenExpireAt")
         if isinstance(exp, (int, float)) and exp > 1e12:
@@ -333,9 +331,16 @@ class TraeProvider(BaseLLMProvider):
             return
         except _AuthExpired:
             pass
-        # 丢掉缓存的 access，强制走一次 ExchangeToken
+        # 丢掉缓存的 access，强制走一次 ExchangeToken。
+        # **必须连凭证里的 access 一起清掉**（2026-11-07 审查发现）：
+        # `_ensure_token` 会先查 `_stored_access()`，那里读的正是
+        # `self._cred["access"]`——只清 `self._token` 的话，重试会原样
+        # 再发一遍刚被拒的旧 token，永远走不到 ExchangeToken，
+        # 于是「refresh 明明还有效」却报「凭证已失效」。
         self._token = ""
         self._token_exp = 0.0
+        self._cred.pop("access", None)
+        self._cred.pop("expires", None)
         try:
             async for item in self._stream_once(messages, tools, max_tokens, temperature):
                 yield item
@@ -438,7 +443,11 @@ class TraeProvider(BaseLLMProvider):
             if tc:
                 idx = tc.get("index")
                 if not isinstance(idx, int):
-                    idx = len(tool_acc)
+                    # 缺 index 时归到 0 号槽（2026-11-07 审查发现）：
+                    # 原写法 len(tool_acc) 会让每个参数分片都开新槽，
+                    # 同一次工具调用被拆成多个残片，参数被截断。
+                    # 其它 provider（base/zen_free/workbuddy）都是默认 0。
+                    idx = 0
                 slot = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
                 if tc.get("id"):
                     slot["id"] = tc["id"]

@@ -46,14 +46,12 @@ SITES = {
         "api": "https://gateway.qoder.com.cn",
         "openapi": "https://openapi.qoder.com.cn",
         "cosy_version": "1.1.69",
-        "default_model": "dfmodel",
     },
     "qoder-cn": {
         "name": "Qoder CN",
         "api": "https://gateway.qoder.com.cn",
         "openapi": "https://openapi.qoder.com.cn",
         "cosy_version": "1.1.69",
-        "default_model": "dfmodel",
     },
 }
 
@@ -281,6 +279,12 @@ class QoderProvider(BaseLLMProvider):
         url = self.site["api"] + MODELS_PATH
         async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.get(url, headers=self._cosy_headers(url))
+        if r.status_code in (401, 403):
+            # 交给 _stream 刷新设备令牌后重试（2026-11-07 审查发现）：
+            # 这里是新实例的第一个网络调用，设备令牌过期是常态；原实现
+            # 抛普通 RuntimeError，_stream 只认 _AuthExpired → 刷新机制
+            # 对新实例完全失效。
+            raise _AuthExpired()
         if r.status_code >= 400:
             raise RuntimeError(
                 f"{self.site['name']} 模型清单失败: HTTP {r.status_code} {r.text[:160]}"
@@ -395,8 +399,19 @@ class QoderProvider(BaseLLMProvider):
             pass
         if not await self._refresh_access():
             raise RuntimeError(f"{self.site['name']} 令牌已过期且刷新失败，请重新配置凭证")
-        async for item in self._stream_once(messages, tools, max_tokens, temperature):
-            yield item
+        # 令牌换了，模型清单缓存也可能失效（清单本身要 401 才走到这里）
+        self._model_entry = None
+        try:
+            async for item in self._stream_once(messages, tools, max_tokens, temperature):
+                yield item
+        except _AuthExpired:
+            # 重取后仍被拒 = 凭证真的失效了（2026-11-07 审查发现：
+            # 原实现让内部异常裸抛出去，用户只看到空消息）
+            raise RuntimeError(
+                f"{self.site['name']} 认证失败（刷新令牌后仍被拒）。"
+                "凭证可能已失效：请在 magpie 重新登录，再把新的凭证 JSON "
+                "整段粘到系统设置的 API Key"
+            )
 
     async def _stream_once(self, messages: list[dict], tools: Optional[list[dict]],
                            max_tokens: int, temperature: float):
@@ -486,7 +501,11 @@ class QoderProvider(BaseLLMProvider):
             if tc:
                 idx = tc.get("index")
                 if not isinstance(idx, int):
-                    idx = len(tool_acc)
+                    # 缺 index 时归到 0 号槽（2026-11-07 审查发现）：
+                    # 原写法 len(tool_acc) 会让每个参数分片都开新槽，
+                    # 同一次工具调用被拆成多个残片，参数被截断。
+                    # 其它 provider（base/zen_free/workbuddy）都是默认 0。
+                    idx = 0
                 slot = tool_acc.setdefault(idx, {"id": "", "name": "", "arguments": ""})
                 if tc.get("id"):
                     slot["id"] = tc["id"]

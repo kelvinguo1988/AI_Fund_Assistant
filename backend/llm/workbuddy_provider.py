@@ -93,8 +93,17 @@ class WorkBuddyProvider(BaseLLMProvider):
         super().__init__(model_name, api_key, base_url or site["api"])
         self.site = site
         self.site_id = site_id if site_id in SITES else "workbuddy-ai"
-        # 配置里的 api_key 就是 refresh token
-        self._refresh_token = (api_key or "").strip()
+        # 配置里的 api_key 就是 refresh token。
+        # 但要兼容 JSON 形式（2026-11-07 审查）：早期版本把裸串回写成
+        # {"refresh": "..."}，若用户库里已是这种形状，直接当 token 发会失败。
+        # 这里两种都认，避免历史数据把人卡死。
+        raw = (api_key or "").strip()
+        if raw.startswith("{"):
+            try:
+                raw = (json.loads(raw).get("refresh") or "").strip()
+            except json.JSONDecodeError:
+                pass
+        self._refresh_token = raw
         self._access_token = ""
         self._access_expires = 0.0
         self._uid = ""

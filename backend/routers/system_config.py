@@ -71,9 +71,12 @@ _AI_MODEL_PRESETS: list[AIModelPreset] = [
     # magpie 已把这些协议实现并持续维护，所以项目侧只当它是「OpenAI 兼容网关」，
     # 协议细节交给 magpie —— 避免在项目里复刻两套易变的私有协议。
     # API Key 位置填 magpie 的 gateway key；Base URL 指向网关。
+    # base_url 留空：magpie 的网关地址因机器而异（回环 / 局域网 / Docker 网关），
+    # 写死一个内网 IP 既不对所有人适用，也会被连通性诊断的 SSRF 校验拦下
+    # （2026-11-07 审查）。让用户自己填，例如 http://127.0.0.1:3425/v1。
     AIModelPreset(
         key="magpie", label="Magpie 网关（Qoder/Trae 等）",
-        base_url="http://10.0.3.1:3425/v1",
+        base_url="",
         model_name="trae-cn/deepseek-v4.1-flash-max",
     ),
     # ── 原生接入（2026-10-31）：凭证取自 magpie 已登录账号，运行时不依赖 magpie ──

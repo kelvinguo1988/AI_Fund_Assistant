@@ -3,6 +3,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import {
+  Autocomplete,
   Box,
   Typography,
   Button,
@@ -423,31 +424,29 @@ const SystemPage: React.FC = () => {
               />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
-              {/* 预设带可选模型清单时给下拉（如 zen-free / workbuddy），
-                  否则保持自由输入——避免手敲模型 ID 敲错导致 400 */}
-              <TextField
-                select={currentModelChoices.length > 0}
-                label="模型 ID 覆盖（可选）"
+              {/* 可下拉选、也可手填（combo box）。2026-11-07 审查：原实现
+                  有清单就变**纯下拉**，而清单是刻意不穷尽的（如 magpie 的
+                  模型随 provider 变化），用户就填不进未列出的模型 ID 了。 */}
+              <Autocomplete
+                freeSolo
+                options={currentModelChoices}
                 value={aiModelId}
-                onChange={(e) => setAiModelId(e.target.value)}
-                placeholder="如 deepseek-v4-pro / glm-4-plus，空=用预设默认"
-                fullWidth
-                size="small"
-                helperText={
-                  currentModelChoices.length > 0
-                    ? `该供应商可选 ${currentModelChoices.length} 个模型`
-                    : '留空用供应商默认；须填端点接受的 API 名（DeepSeek 当前为 deepseek-flash / deepseek-v4-pro，官网宣传名会报 400）'
-                }
-              >
-                {currentModelChoices.length > 0 && (
-                  <MenuItem value="">供应商默认</MenuItem>
+                onInputChange={(_, v) => setAiModelId(v)}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="模型 ID 覆盖（可选）"
+                    placeholder="如 deepseek-v4-pro / glm-4-plus，空=用预设默认"
+                    fullWidth
+                    size="small"
+                    helperText={
+                      currentModelChoices.length > 0
+                        ? `可从 ${currentModelChoices.length} 个建议里选，也可直接输入`
+                        : '留空用供应商默认；须填端点接受的 API 名（DeepSeek 当前为 deepseek-flash / deepseek-v4-pro，官网宣传名会报 400）'
+                    }
+                  />
                 )}
-                {currentModelChoices.map((m) => (
-                  <MenuItem key={m} value={m}>
-                    {m}
-                  </MenuItem>
-                ))}
-              </TextField>
+              />
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <TextField

@@ -50,6 +50,42 @@ def _is_blocked_address(addr: "ipaddress.IPv4Address | ipaddress.IPv6Address") -
     return any(getattr(addr, t, False) for t in _blocked_addr_types)
 
 
+def _is_local_gateway(url: str) -> bool:
+    """是否为「用户显式配置的本地/内网 LLM 网关」
+
+    只认 http/https + 回环/私网/链路本地地址，或 *.local / localhost 这类
+    明确的本机名。用于放过 magpie(3425)、Ollama(11434) 等自建网关，
+    避免它们的私网地址被 SSRF 校验拦下导致连通性面板整体 400。
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+        return True
+    try:
+        return _is_blocked_address(ipaddress.ip_address(host))
+    except ValueError:
+        # 主机名：只有明确解析到私网才算（避免 attacker.com 借机绕过）
+        import socket
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            return False
+        for info in infos:
+            try:
+                if _is_blocked_address(ipaddress.ip_address(info[4][0])):
+                    return True
+            except ValueError:
+                continue
+        return False
+
+
 def _validate_public_url(url: str) -> None:
     """校验 URL 为公网 HTTPS 地址，防止 SSRF
 
@@ -130,8 +166,15 @@ async def test_all_connectivity(
     targets = list(TARGETS)
 
     if ai_enabled and ai_base_url:
-        _validate_public_url(ai_base_url)
-        targets.append({"name": "AI API", "url": ai_base_url.rstrip("/")})
+        # 本地/内网网关（magpie、Ollama、LM Studio、vLLM…）是**用户自己填的**
+        # 配置，不是攻击者可控输入，放行而不做公网校验（2026-11-07 审查：
+        # 原实现对 Magpie 预设的 10.0.3.1 直接抛 ValueError，导致整个连通性
+        # 面板 400，连东财那几项都测不了）。公网地址仍走 SSRF 校验。
+        if _is_local_gateway(ai_base_url):
+            targets.append({"name": "AI API", "url": ai_base_url.rstrip("/")})
+        else:
+            _validate_public_url(ai_base_url)
+            targets.append({"name": "AI API", "url": ai_base_url.rstrip("/")})
 
     results: list[ConnectivityItem] = []
     async with httpx.AsyncClient(timeout=CONNECT_TIMEOUT) as client:

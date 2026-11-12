@@ -27,11 +27,30 @@ _WRITABLE = {
 
 
 def _merge(existing: str, updates: dict) -> Optional[str]:
-    """把 updates 合并进已有凭证 JSON；无变化返回 None"""
+    """把 updates 合并进已有凭证；无变化返回 None
+
+    **两种凭证格式都要支持**（2026-11-07 代码审查发现）：
+      - JSON 对象：trae / qoder（含 access/refresh/uid/… 多个字段）
+      - 裸字符串：workbuddy（ai_api_key 就是一个 refresh token 本身，
+        `WorkBuddyProvider` 直接把它塞进 X-Refresh-Token 头）
+
+    原实现把裸字符串当空对象处理，于是回写成 {"refresh": "..."}；
+    WorkBuddy 下次启动会把整个 JSON 当 token 发出去 → 认证必然失败。
+    这恰好是回写机制本想避免的「重启后莫名失败」。
+    """
     if not updates:
         return None
+    raw = (existing or "").strip()
+
+    # 裸字符串凭证：只有 refresh 可回写，且必须保持裸串格式
+    if raw and not raw.startswith("{"):
+        new_rt = updates.get("refresh")
+        if new_rt and new_rt != raw:
+            return new_rt
+        return None
+
     try:
-        base = json.loads(existing) if (existing or "").strip().startswith("{") else {}
+        base = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
         base = {}
     if not isinstance(base, dict):
@@ -70,27 +89,36 @@ async def persist_credential(realm: str, changes: dict) -> bool:
             rows = (await db.execute(select(SystemConfig))).scalars().all()
             cm = {c.config_key: c.config_value for c in rows}
 
-            # 约束 2：本 provider 必须仍是当前配置，否则会覆盖用户的新选择
-            current_model = (cm.get("ai_model") or "").strip()
-            if current_model != realm:
+            # 约束 2：本 provider 必须仍是当前配置，否则会覆盖用户的新选择。
+            # 主链路与备用链路都要认（2026-11-07 审查：漏了 fallback 会让
+            # 备用链路的凭证轮换后立刻失效——provider 每个请求都从 DB 重建，
+            # 不必等重启，下一次 fallback 调用就会用废 token）。
+            main_model = (cm.get("ai_model") or "").strip()
+            fb_model = (cm.get("ai_fallback_model") or "").strip()
+            if main_model == realm:
+                key = "ai_api_key"
+            elif fb_model == realm:
+                key = "ai_fallback_api_key"
+            else:
                 logger.info(
-                    f"凭证回写跳过：当前 ai_model={current_model or '(空)'}，"
-                    f"本次刷新来自 {realm}"
+                    f"凭证回写跳过：当前 ai_model={main_model or '(空)'}"
+                    f" / fallback={fb_model or '(空)'}，本次刷新来自 {realm}"
                 )
                 return False
 
-            merged = _merge(cm.get("ai_api_key") or "", changes)
+            merged = _merge(cm.get(key) or "", changes)
             if merged is None:
                 return False  # 约束 3：内容没变
 
-            row = next((c for c in rows if c.config_key == "ai_api_key"), None)
+            row = next((c for c in rows if c.config_key == key), None)
             if row is None:
-                db.add(SystemConfig(config_key="ai_api_key", config_value=merged))
+                db.add(SystemConfig(config_key=key, config_value=merged))
             else:
                 row.config_value = merged
             await db.commit()
             logger.info(
-                f"{realm} 凭证已回写（更新字段: {', '.join(k for k, v in changes.items() if v)}）"
+                f"{realm} 凭证已回写到 {key}"
+                f"（更新字段: {', '.join(k for k, v in changes.items() if v)}）"
             )
             return True
     except Exception as e:  # noqa: BLE001 - 约束 1：绝不向上抛
