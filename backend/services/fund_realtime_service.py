@@ -249,8 +249,11 @@ def compute_holdings_growth(
         growth = weighted_sum / 100.0 + (1 - coverage) * INDEX_EQUITY_SHARE * index_pct
         return growth, coverage, "index_blend"
 
-    # 无指数数据也退化为归一法（宁可给粗估也不返回空）
-    return weighted_sum / weight_total, coverage, "normalized"
+    # 低覆盖且指数涨跌不可用（东财熔断日）→ 返回不可用而非归一法。
+    # 2026-11-12 实测教训：coverage=0.102 时归一法输出 = 唯一有行情的那只
+    # 重仓股自身跌幅（如中际旭创 -7.1%），当日基金实际 -1.16%，偏差 5.9pp——
+    # "宁可粗估"在单边大跌日会产出误导操作的假数字，比没有更有害。
+    return None, coverage, ""
 
 
 class FundRealtimeService:
@@ -1316,6 +1319,19 @@ class FundRealtimeService:
                 stock_position_ratio=positions.get(f.id),
             )
             if growth is None:
+                # 2026-11-12：低覆盖且无指数不再出归一假数字——给 unavailable 占位，
+                # 前端能区分"估算不可用"与"这只基金被漏算"
+                results[f.code] = {
+                    "code": f.code, "name": f.name or "",
+                    "source": "unavailable", "nav_date": "", "nav": None,
+                    "estimated_nav": None, "growth_pct": None,
+                    "quote_time": FundRealtimeService._spot_quote_time,
+                    "coverage": round(coverage, 3), "est_model": None,
+                    "error": (
+                        f"持仓行情覆盖不足（{coverage:.0%}）且指数涨跌不可用，"
+                        "估算会产生误导性数字——今日不提供该基金盘中估值"
+                    ),
+                }
                 continue
             row = {
                 "code": f.code,

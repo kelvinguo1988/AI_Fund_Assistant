@@ -56,12 +56,12 @@ class TestComputeHoldingsGrowth:
         assert cov == pytest.approx(0.3)
         assert model == "index_blend"
 
-    def test_low_coverage_without_index_falls_back_normalized(self):
+    def test_low_coverage_without_index_returns_none(self):
+        """2026-11-12 语义变更：低覆盖 + 无指数 → 不可用（原归一回退输出单股跌幅假数字）"""
         holdings = [("600000", 30.0)]
         pct = {"600000": 2.0}
         growth, cov, model = compute_holdings_growth(holdings, pct, index_pct=None)
-        assert growth == pytest.approx(2.0)
-        assert model == "normalized"
+        assert growth is None and model == ""
 
     def test_no_overlap_returns_none(self):
         growth, cov, model = compute_holdings_growth(
@@ -94,10 +94,17 @@ class TestComputeHoldingsGrowth:
         assert model == "index_blend"
 
     def test_null_ratio_skipped(self):
-        growth, _, _ = compute_holdings_growth(
-            [("600000", None), ("600036", 40.0)], {"600036": 1.0, "600000": 5.0}
+        """40% 覆盖 + 无指数 → 不可用（< 50% 阈值）；带指数 → index_blend"""
+        growth, cov, model = compute_holdings_growth(
+            [("600000", None), ("600036", 40.0)], {"600036": 1.0, "600000": 5.0},
+            index_pct=None,
         )
-        assert growth == pytest.approx(1.0)
+        assert growth is None and cov == pytest.approx(0.4)
+        growth2, _, model2 = compute_holdings_growth(
+            [("600000", None), ("600036", 40.0)], {"600036": 1.0, "600000": 5.0},
+            index_pct=0.5,
+        )
+        assert model2 == "index_blend"
 
 
 class TestPositionAwareGrowth:
@@ -917,3 +924,35 @@ class TestQuoteTime:
     def test_untrusted_fills_when_empty(self):
         FundRealtimeService._update_quote_time("", trusted=False)
         assert FundRealtimeService._spot_quote_time != ""
+
+
+# ── 低覆盖 + 无指数：不再出归一假数字（2026-11-12 大跌日实测教训）────
+
+class TestLowCoverageNoIndex:
+    def test_low_coverage_no_index_returns_none(self):
+        """coverage 0.102 + index 缺失 → None（旧行为输出单股跌幅 -7.1% 假数字）"""
+        import asyncio
+        from backend.services.fund_realtime_service import compute_holdings_growth
+        holdings = [("300308", 10.2)]  # 唯一有行情的重仓股
+        pct = {"300308": -7.1}
+        growth, cov, model = compute_holdings_growth(holdings, pct, index_pct=None)
+        assert growth is None and model == ""
+        assert cov == pytest.approx(0.102)
+
+    def test_low_coverage_with_index_still_blends(self):
+        """同低覆盖但指数可用 → index_blend 正常工作"""
+        from backend.services.fund_realtime_service import compute_holdings_growth
+        holdings = [("300308", 10.2)]
+        pct = {"300308": -7.1}
+        growth, cov, model = compute_holdings_growth(holdings, pct, index_pct=-2.0)
+        assert model == "index_blend"
+        # 10.2%×-7.1% + 89.8%×0.6×-2% = -0.724 - 1.078 = -1.80
+        assert growth == pytest.approx(-1.80, abs=0.02)
+
+    def test_high_coverage_normalized_unchanged(self):
+        """高覆盖归一法不受影响"""
+        from backend.services.fund_realtime_service import compute_holdings_growth
+        holdings = [(f"60000{i}", 8.0) for i in range(10)]  # 覆盖 80%
+        pct = {c: -1.0 for c, _ in holdings}
+        growth, cov, model = compute_holdings_growth(holdings, pct, index_pct=None)
+        assert model == "normalized" and growth == pytest.approx(-1.0)
