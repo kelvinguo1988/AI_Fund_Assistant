@@ -214,10 +214,12 @@ async def lifespan(app: FastAPI):
         logger.warning(f"关闭线程池失败: {e}")
 
 
+from backend.version import APP_VERSION
+
 app = FastAPI(
     title="基金量化交易系统",
     description="基金量化分析 + AI 对话 + 定时推送",
-    version="1.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 

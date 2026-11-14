@@ -46,6 +46,8 @@ class AIConfigOut(BaseModel):
     ai_base_url: str
     ai_model_id: Optional[str] = Field(None, description="具体模型 ID 覆盖，空=预设默认")
     presets: list[AIModelPreset] = Field(default_factory=list)
+    version: Optional[str] = Field(None, description="系统版本（顶栏显示）")
+    build_sha: Optional[str] = Field(None, description="构建 commit 短哈希（Docker 构建注入）")
 
 
 class ScoringTier(BaseModel):

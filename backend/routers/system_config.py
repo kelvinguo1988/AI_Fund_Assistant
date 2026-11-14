@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
+from backend.version import version_display, BUILD_SHA
 from backend.models.system_config import SystemConfig
 from backend.schemas.common import ApiResponse
 from backend.schemas.system_config import (

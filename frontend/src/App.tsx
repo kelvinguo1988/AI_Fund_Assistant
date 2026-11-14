@@ -195,13 +195,18 @@ const SidebarNav: React.FC = () => {
 /* ── 主布局组件 ───────────────────────────────────────────────────── */
 const AppLayout: React.FC = () => {
   const { sidebarOpen, aiEnabled, toggleSidebar, setAiEnabled } = useAppStore();
+  const [appVersion, setAppVersion] = useState('');
 
   // 开关状态以后端为准：store 默认 true，不回填则刷新后恒显示"开"，
   // 而后端 ai_enabled=false 时 AI 工作台/每日简报会报"未启用"
   useEffect(() => {
     import('./api/system')
       .then(({ systemApi }) => systemApi.getConfig())
-      .then((res) => setAiEnabled(Boolean(res.data?.ai_enabled)))
+      .then((res) => {
+        setAiEnabled(Boolean(res.data?.ai_enabled));
+        // 顶栏版本显示（后端 version.py 单一事实源，Docker 构建注入 sha）
+        if (res.data?.version) setAppVersion(res.data.version);
+      })
       .catch(() => { /* 读取失败保持现状 */ });
   }, [setAiEnabled]);
 
@@ -224,6 +229,13 @@ const AppLayout: React.FC = () => {
           </IconButton>
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
             基金量化交易系统
+            {appVersion && (
+              <Typography component="span" variant="caption"
+                sx={{ ml: 1, px: 0.75, py: 0.25, borderRadius: 1,
+                      bgcolor: 'rgba(255,255,255,0.15)', opacity: 0.9 }}>
+                {appVersion}
+              </Typography>
+            )}
             <HeaderClock />
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

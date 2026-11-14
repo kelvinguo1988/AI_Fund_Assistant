@@ -47,7 +47,10 @@ COPY requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
 # 复制后端代码
+# 构建时注入 git commit 短哈希（顶栏版本显示用；无 git 上下文时留空回退纯版本号）
+ARG APP_BUILD_SHA=""
 COPY . /app/backend/
+RUN echo "${APP_BUILD_SHA}" > /app/backend/.git_sha
 
 # 创建数据目录（SQLite 数据库将存放于此）
 RUN mkdir -p /app/data

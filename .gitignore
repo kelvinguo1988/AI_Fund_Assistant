@@ -50,3 +50,4 @@ deploy_qnap.sh
 
 # ── 截图与本地测试输出 ──────────────────────────────────────────────────
 screenshot_*.png
+backend/.git_sha

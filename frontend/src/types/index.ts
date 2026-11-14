@@ -324,6 +324,8 @@ export interface AIConfigOut {
   ai_base_url: string;
   ai_model_id?: string | null;
   presets: AIModelPreset[];
+  version?: string | null;
+  build_sha?: string | null;
 }
 
 /* ── AI Skills ─────────────────────────────────────────────────── */
