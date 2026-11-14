@@ -164,6 +164,10 @@ async def get_system_config(db: AsyncSession = Depends(get_db)):
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
         ai_model_id=config_map.get("ai_model_id") or None,
         presets=_presets_with_choices(),
+        # 顶栏版本徽标数据源（2026-11-14）：schema 早已声明这两个字段，
+        # 但构造响应时漏填 → 前端永远拿到 null、徽标不显示。
+        version=version_display(),
+        build_sha=BUILD_SHA,
     ))
 
 
@@ -216,6 +220,10 @@ async def update_system_config(
         ai_base_url=config_map.get("ai_base_url", "https://api.deepseek.com/v1"),
         ai_model_id=config_map.get("ai_model_id") or None,
         presets=_presets_with_choices(),
+        # 顶栏版本徽标数据源（2026-11-14）：schema 早已声明这两个字段，
+        # 但构造响应时漏填 → 前端永远拿到 null、徽标不显示。
+        version=version_display(),
+        build_sha=BUILD_SHA,
     ))
 
 
