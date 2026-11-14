@@ -31,7 +31,10 @@ import time
 import uuid
 from typing import Optional
 
-import httpx
+# 2026-11-14 根因修复：Trae 前置 TLB 风控按 **TLS 指纹** 判罚——同 token/
+# 同 headers/同 body，httpx(Python 指纹) 必得 4011"rate limit"（实为反脚本
+# 判罚），curl_cffi(Chrome 指纹) 正常流式。全部 HTTP 调用走 curl_cffi。
+from curl_cffi.requests import AsyncSession
 
 from backend.llm.base import BaseLLMProvider, LLMResponse, ToolCall, estimate_tokens
 
@@ -89,6 +92,22 @@ def parse_credential(raw: str) -> dict:
 class TraeProvider(BaseLLMProvider):
     """Trae CN / Global 的原生 Provider"""
 
+    # 2026-11-14 根因修复（4011 "rate limit"）：Trae 按 session_id 计对话数，
+    # 每个请求命名新 session = 每次都算一个新对话 —— agent_runner 每次任务
+    # 都新建 provider 实例，原"每实例一个新 session"让新对话配额迅速打光
+    # （实测无工具最小请求也 4011，而同账号走 magpie 网关正常）。
+    # 改为 per (realm, model) 复用会话：同一模型的连续请求落在同一对话计数里，
+    # 与 IDE/网关的行为一致。会话内容本就由 messages 全量携带，复用无副作用。
+    _sessions: dict[tuple[str, str], str] = {}
+
+    @classmethod
+    def _session_for(cls, realm: str, model: str) -> str:
+        key = (realm, model)
+        sid = cls._sessions.get(key)
+        if not sid:
+            sid = cls._sessions[key] = str(uuid.uuid4())
+        return sid
+
     def __init__(
         self,
         model_name: str = "deepseek-v4.1-flash",
@@ -103,8 +122,7 @@ class TraeProvider(BaseLLMProvider):
         self._cred = parse_credential(api_key)
         self._token = ""
         self._token_exp = 0.0
-        # 每个 provider 实例一条会话，避免每次请求都开新会话
-        self._session_id = str(uuid.uuid4())
+        # 会话复用见 _session_for（2026-11-14 4011 根因修复）
 
     # ── 鉴权 ───────────────────────────────────────────────────────
     def _missing(self) -> Optional[str]:
@@ -153,7 +171,7 @@ class TraeProvider(BaseLLMProvider):
             "ClientSecret": "-",
             "UserID": "",
         }
-        async with httpx.AsyncClient(timeout=30.0) as c:
+        async with AsyncSession(timeout=30.0, impersonate="chrome") as c:
             r = await c.post(
                 f"{self.site['auth']}/cloudide/api/v3/trae/oauth/ExchangeToken", json=body
             )
@@ -288,7 +306,7 @@ class TraeProvider(BaseLLMProvider):
             "model": base,
             "stream": True,  # Trae 只回 SSE
             "request_id": str(uuid.uuid4()),
-            "session_id": self._session_id,
+            "session_id": self._session_for(self.realm, base),
         }
         if max_tokens:
             body["max_tokens"] = int(max_tokens)
@@ -359,7 +377,7 @@ class TraeProvider(BaseLLMProvider):
         """单次尝试，yield (text, reasoning, tool_call_dict, usage)"""
         token = await self._ensure_token()
         body = self._body(messages, tools, max_tokens, temperature)
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with AsyncSession(timeout=120.0, impersonate="chrome") as client:
             async with client.stream(
                 "POST",
                 f"{self.site['api']}/api/agent/v3/llm_utils_chat",
@@ -372,7 +390,8 @@ class TraeProvider(BaseLLMProvider):
                     raw = (await resp.aread()).decode("utf-8", "replace")[:300]
                     raise RuntimeError(f"{self.site['name']} HTTP {resp.status_code}: {raw}")
                 event = ""
-                async for line in resp.aiter_lines():
+                async for _line in resp.aiter_lines():
+                    line = _line.decode("utf-8", "replace") if isinstance(_line, bytes) else _line
                     if not line:
                         event = ""
                         continue

@@ -29,7 +29,9 @@ import urllib.parse
 import uuid
 from typing import Optional
 
-import httpx
+# 2026-11-14：与 trae_provider 同因——TLB 风控按 TLS 指纹判 4011，
+# HTTP 层统一走 curl_cffi（Chrome 指纹）。
+from curl_cffi.requests import AsyncSession
 
 from backend.llm.base import BaseLLMProvider, LLMResponse, ToolCall, estimate_tokens
 
@@ -277,7 +279,7 @@ class QoderProvider(BaseLLMProvider):
         if err:
             raise RuntimeError(err)
         url = self.site["api"] + MODELS_PATH
-        async with httpx.AsyncClient(timeout=30.0) as c:
+        async with AsyncSession(timeout=30.0, impersonate="chrome") as c:
             r = await c.get(url, headers=self._cosy_headers(url))
         if r.status_code in (401, 403):
             # 交给 _stream 刷新设备令牌后重试（2026-11-07 审查发现）：
@@ -425,7 +427,7 @@ class QoderProvider(BaseLLMProvider):
             model_key=str(entry.get("key") or ""),
             model_source=str(entry.get("source") or ""),
         )
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with AsyncSession(timeout=180.0, impersonate="chrome") as client:
             async with client.stream("POST", url, content=wire.encode(), headers=headers) as resp:
                 if resp.status_code in (401, 403):
                     # 交由 _stream 统一处理：刷新令牌后重放一次
