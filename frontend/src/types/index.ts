@@ -686,6 +686,21 @@ export interface MarketTemperature {
   sample_note: string;
   note: string;
   updated: string;
+  /** 格雷厄姆指数（股债性价比）——利率扭曲状态见 cross.note */
+  graham?: {
+    available: boolean;
+    current?: number | null;
+    percentile_10y?: number | null;
+    series_min?: number;
+    series_max?: number;
+    series_median?: number;
+    series_points?: number;
+    bond_start?: string | null;
+    cross?: {
+      state: 'true_cheap' | 'rate_distorted_cheap' | 'true_expensive' | 'rare_review' | null;
+      note: string;
+    } | null;
+  } | null;
 }
 
 /* ── 美股择时风险面板（市场层风险参考；判据未过，后端不会下发任何仓位数字）── */

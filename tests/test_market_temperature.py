@@ -246,7 +246,9 @@ class TestCacheAndCooldown:
 
         async def _ok(func, timeout=None, **kw):
             calls.append(1)
-            return _frames(_series())
+            pe_df, pb_df = _frames(_series())
+            import pandas as pd
+            return pe_df, pb_df, None  # 第三元素 = 国债序列（格雷厄姆块降级路径）
         monkeypatch.setattr("backend.utils.concurrency.run_with_timeout", _ok)
 
         first = await MarketTemperatureService.get_temperature()

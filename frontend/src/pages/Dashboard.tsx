@@ -511,6 +511,12 @@ const Dashboard: React.FC = () => {
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                   PE {temperature.pe}（{temperature.pe_percentile}%）· PB {temperature.pb}（{temperature.pb_percentile}%）
                 </Typography>
+                {temperature.graham?.available && temperature.graham.cross && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+                    格雷厄姆 {temperature.graham.current}（10 年分位 {temperature.graham.percentile_10y}%）
+                    · {temperature.graham.cross.note}
+                  </Typography>
+                )}
                 {temperature.temperature_expanding !== null && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                     扩展窗口参照 {temperature.temperature_expanding.toFixed(1)}°（窗口不同，数字不可跨口径比）

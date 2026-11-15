@@ -16,6 +16,17 @@
 每档 1~5 个样本 —— 撑不起任何自动下单动作，所以这里只输出仓位参考与历史证据。
 
 缓存纪律与 IndexValuationService 一致：类级缓存 1h + 失败冷却 120s。
+
+格雷厄姆指数（股债性价比，2026-11-14 新增）:
+- 公式 = 盈利收益率(100/PE) ÷ 中国 10Y 国债收益率 —— 引入温度计没有的**利率维度**。
+- **阈值必须用自身历史分位，不能用绝对值分档**（如社区流传的">2.3 重仓"）：
+  2026-11-14 实测，中 10Y 国债 1.61% 的利率环境下中证800 PE 13.69 算出 4.53
+  （97% 分位）——国债 3% 时代同 PE 只算出 ≈2.4。绝对值分档随利率下行系统性漂移。
+- **与温度计是双确认不是二选一**：温度(PE/PB 分位)量股票绝对估值，格雷厄姆量
+  股债相对性价比。交叉四象限见 `_cross_status`——利率扭曲型"伪低估"必须点破，
+  否则单看格雷厄姆 4.53 会误判"历史底部重仓"。
+- 上游 +1 请求（bond_zh_us_rate，2014 起日频，月度取月末），国债缺失时格雷厄姆
+  块整体降级（temperature 主块不受影响）。
 失败不推进缓存时间戳会让每个页面请求都重打乐咕（前端无轮询但仪表盘/推送都会读），
 把一次风控抖动放大成请求风暴。
 """
@@ -46,6 +57,11 @@ REBALANCE_TRIGGER_DEG = 10.0
 
 # 档位 → 行动参考。阈值沿用回放定案的 20/30/50/70 四刀，
 # 与 DASHBOARD_PE_LOW/HIGH_PERCENTILE（展示用低估/高估两档）不是同一套分区。
+# 格雷厄姆交叉状态的温度阈值（复用 ZONE_RULES 的 50 刀：50 以下视为便宜侧）
+CROSS_TEMP_THRESHOLD = 50.0
+CROSS_GRAHAM_THRESHOLD = 50.0  # 格雷厄姆自身 10 年分位阈值
+GRAHAM_BOND_START = "20140101"  # 国债序列起点（乐咕 PE 序列 2007 起，交集决定格雷厄姆起点）
+
 ZONE_RULES: list[tuple[float, float, str, str]] = [
     (0.0, 20.0, "极度低估", "可分批加仓，权益可上到 8 成以上"),
     (20.0, 30.0, "低估", "正常定投 + 适度加码"),
@@ -100,6 +116,52 @@ def percentile_in_window(series: list[float], i: int, window: Optional[int]) -> 
     lo = 0 if window is None else max(0, i - window + 1)
     rank = percentile_rank_inclusive(series[lo:i + 1], series[i])
     return None if rank is None else rank * 100.0
+
+
+def graham_monthly_series(
+    pe: list[float], bond_month_end: dict[str, float], dates: list[str]
+) -> list[Optional[float]]:
+    """格雷厄姆指数月频序列 = (100/PE) ÷ 10Y 国债收益率(%)，point-in-time
+
+    bond_month_end: {YYYY-MM: 月末国债收益率%}（日频取月末）。
+    该月无国债数据 → None（分位计算跳过）。
+    """
+    out: list[Optional[float]] = []
+    for d, pe_v in zip(dates, pe):
+        ym = d[:7]
+        b = bond_month_end.get(ym)
+        if not b or b <= 0 or not pe_v or pe_v <= 0:
+            out.append(None)
+        else:
+            out.append((100.0 / pe_v) / b)
+    return out
+
+
+def _cross_status(temp_pct: Optional[float], graham_pct: Optional[float]) -> dict:
+    """双指标交叉四象限（阈值各取 50 分位）
+
+    温度量股票绝对估值，格雷厄姆量股债相对性价比——两者正交：
+    双低=真低估；温度低+格雷厄姆高=利率扭曲型伪低估（2026-11-14 当前状态）；
+    双高=真高估；温度高+格雷厄姆低=罕见（股票贵但利率更高），需人工复核。
+    """
+    if temp_pct is None or graham_pct is None:
+        return {"state": None, "note": "任一指标缺失，交叉状态不可算"}
+    temp_low = temp_pct < CROSS_TEMP_THRESHOLD
+    graham_low = graham_pct < CROSS_GRAHAM_THRESHOLD
+    if temp_low and graham_low:
+        st = "true_cheap"
+        note = "双指标同向低估——温度与股债性价比都处于低位，定投加码有双确认"
+    elif temp_low and not graham_low:
+        st = "rate_distorted_cheap"
+        note = ("利率扭曲型伪低估——温度计显示便宜但股债性价比分位偏高，"
+                "主因是国债收益率处于历史低位抬高了格雷厄姆读数；维持定投节奏，不建议因该读数加码")
+    elif not temp_low and graham_low:
+        st = "rare_review"
+        note = "罕见组合——温度偏高但股债性价比处于低位（利率大幅上行），需人工复核"
+    else:
+        st = "true_expensive"
+        note = "双指标同向偏高——温度与股债性价比都在高位，止盈/减投有双确认"
+    return {"state": st, "note": note}
 
 
 def monthly_temperatures(
@@ -183,12 +245,18 @@ class MarketTemperatureService:
             import akshare as ak
             pe_df = ak.stock_index_pe_lg(symbol=TEMPERATURE_INDEX)
             pb_df = ak.stock_index_pb_lg(symbol=TEMPERATURE_INDEX)
-            return pe_df, pb_df
+            bond_df = None
+            try:
+                # 格雷厄姆分母（中 10Y 国债日频，2014 起）；失败只降级格雷厄姆块
+                bond_df = ak.bond_zh_us_rate(start_date=GRAHAM_BOND_START)
+            except Exception as e:
+                logger.warning(f"国债收益率取数失败（格雷厄姆块降级）: {e}")
+            return pe_df, pb_df, bond_df
 
         from backend.utils.concurrency import run_with_timeout
 
         try:
-            pe_df, pb_df = await run_with_timeout(_fetch, timeout=90.0)
+            pe_df, pb_df, bond_df = await run_with_timeout(_fetch, timeout=90.0)
         except Exception as e:
             # 静默失败曾让首页温度计整块消失却无任何线索（2026-10-27 排查花了很久：
             # 接口 0.01s 返回 null，日志/错误页都查不到原因）。这里落一条错误日志，
@@ -228,10 +296,40 @@ class MarketTemperatureService:
             return cls._cache
 
         payload = _build_payload(series, now)
+
+        # ── 格雷厄姆块（bond 取数失败时整体降级，主温度不受影响）──
+        try:
+            bond_me = bond_month_end_map(bond_df) if bond_df is not None else {}
+            graham_block = build_graham_block(series, bond_me)
+            payload["graham"] = graham_block
+            if graham_block.get("available"):
+                _graham_cross_into(payload, graham_block)
+        except Exception as e:
+            logger.warning(f"格雷厄姆块构建失败（跳过）: {type(e).__name__}: {e}")
+
         cls._cache = payload
         cls._ts = now
         cls._fail_until = 0.0
         return payload
+
+
+def bond_month_end_map(bond_df) -> dict[str, float]:
+    """国债日频 → {YYYY-MM: 该月最后一个有效收益率%}（格雷厄姆月度分母）"""
+    out: dict[str, float] = {}
+    try:
+        for _, r in bond_df.iterrows():
+            d = str(r.get("日期") or "")[:10]
+            v = r.get("中国国债收益率10年")
+            if not d or v is None or str(v) == "nan":
+                continue
+            ym = d[:7]
+            fv = float(v)
+            if fv > 0:
+                out[ym] = fv  # 接口按日期升序返回，末次覆盖即月末
+    except Exception as e:
+        logger.warning(f"国债序列列名不识别: {e}")
+        return {}
+    return out
 
 
 def _align_series(pe_df, pb_df) -> Optional[dict]:
@@ -263,6 +361,53 @@ def _align_series(pe_df, pb_df) -> Optional[dict]:
         "close": [pe_rows[d][0] for d in dates],
         "pe": [pe_rows[d][1] for d in dates],
         "pb": [pb_rows[d] for d in dates],
+    }
+
+
+def build_graham_block(series: dict, bond_me: dict[str, float]) -> dict:
+    """格雷厄姆块：月频序列 → 当前值/10 年分位/交叉状态
+
+    全部输入来自已对齐的 PE 月频序列与国债月末映射；国债缺月 → 该点 None
+    （分位跳过）。纯函数，可单测。
+    """
+    dates, pe = series["dates"], series["pe"]
+    graham = graham_monthly_series(pe, bond_me, dates)
+    i = len(dates) - 1
+
+    valid = [(k, g) for k, g in enumerate(graham) if g is not None]
+    if len(valid) < MIN_WINDOW_MONTHS:
+        return {
+            "available": False,
+            "note": f"格雷厄姆序列不足（{len(valid)}/{MIN_WINDOW_MONTHS} 个有效月点）",
+        }
+
+    current = graham[i]
+    g_pct = percentile_in_window([g if g is not None else 0 for g in graham], i,
+                                 ROLLING_WINDOW_MONTHS)
+    # percentile_in_window 对 None 敏感——手写 point-in-time 分位更直接：
+    window_vals = [g for g in graham[max(0, i - ROLLING_WINDOW_MONTHS + 1):i + 1]
+                   if g is not None]
+    if len(window_vals) >= MIN_WINDOW_MONTHS // 2 and current is not None:
+        g_pct = sum(1 for v in window_vals if v <= current) / len(window_vals) * 100.0
+    else:
+        g_pct = None
+
+    temp_pct = (series.get("pe_percentile_last"))
+    # 温度分位从 payload 主块传入更干净——这里用 temps 的末值口径：
+    # 交叉状态由调用方在 _build_payload 尾部注入（温度分位已知），此处只算格雷厄姆侧
+    vals = [g for _, g in valid]
+    graham_min, graham_max = min(vals), max(vals)
+    graham_median = sorted(vals)[len(vals) // 2]
+
+    return {
+        "available": True,
+        "current": None if current is None else round(current, 2),
+        "percentile_10y": None if g_pct is None else round(g_pct, 1),
+        "series_min": round(graham_min, 2),
+        "series_max": round(graham_max, 2),
+        "series_median": round(graham_median, 2),
+        "series_points": len(valid),
+        "bond_start": min(bond_me) if bond_me else None,
     }
 
 
@@ -325,3 +470,15 @@ def _build_payload(series: dict, fetched_at: float) -> dict:
         "note": "市场层行动参考，不参与单只基金买卖判定",
         "updated": format_beijing(fetched_at),
     }
+
+    # ── 格雷厄姆块 + 双指标交叉状态（graham 块由 get_temperature 注入后再算交叉）──
+    return payload
+
+
+def _graham_cross_into(payload: dict, graham_block: dict) -> None:
+    """交叉状态需要温度分位（payload 已算出）与格雷厄姆分位——在两块齐备后调用"""
+    g = graham_block
+    temp_pct = payload.get("temperature")  # 温度本身即 (PE+PB)/2 分位
+    cross = _cross_status(temp_pct, g.get("percentile_10y"))
+    payload["graham"]["cross"] = cross
+    payload["graham"]["temp_percentile"] = temp_pct
