@@ -340,6 +340,65 @@ class TestBenchmarkApprox:
             IndexValuationService._cache = None
 
 
+# ── 中证800 增补（2026-11-15）：乐咕有数据（温度计同源），池内覆盖 10 → 14 只 ──
+
+class TestZZ800Match:
+    @staticmethod
+    def _seed():
+        from backend.services.index_valuation_service import IndexValuationService
+        IndexValuationService._cache = [
+            {"index": "沪深300", "pe": 12.8, "pe_percentile": 55.0,
+             "zone": "合理", "advice": "合理区间", "updated": "d"},
+            {"index": "中证800", "pe": 13.69, "pe_percentile": 62.5,
+             "zone": "合理", "advice": "合理区间——正常持有/定投", "updated": "d"},
+        ]
+        return IndexValuationService
+
+    def test_supported_indexes_contains_zz800(self):
+        from backend.services.index_valuation_service import SUPPORTED_INDEXES
+        assert "中证800" in SUPPORTED_INDEXES
+        assert SUPPORTED_INDEXES["中证800"][0] == "中证800"
+
+    def test_benchmark_zz800_approximate(self):
+        """基准 中证800*60% → 近似映射（011452 华泰柏瑞质量成长C 实测基准）"""
+        svc = self._seed()
+        try:
+            hint = svc.match_fund_hint(
+                "华泰柏瑞质量成长C",
+                "中证800指数收益率*60%+恒生指数收益率(使用估值汇率折算)*20%"
+                "+上证国债指数收益率*20%",
+            )
+            assert hint is not None
+            assert hint.get("approximate") is True
+            assert "中证800" in hint["message"] and "60%" in hint["message"]
+        finally:
+            svc._cache = None
+
+    def test_benchmark_zz800_direct_at_70(self):
+        """基准 中证800*70% → 直接跟踪口径（018495/700003 实测基准）"""
+        svc = self._seed()
+        try:
+            hint = svc.match_fund_hint(
+                "融通产业趋势臻选股票C",
+                "中证800指数收益率*70%+中证港股通综合指数(港元)收益率*20%"
+                "+中债-综合全价(总值)指数收益率*10%",
+            )
+            assert hint is not None
+            assert hint.get("approximate") is None
+            assert "跟踪指数" in hint["message"] and "中证800" in hint["message"]
+        finally:
+            svc._cache = None
+
+    def test_name_zz800_direct(self):
+        """名称含中证800 → 直接匹配"""
+        svc = self._seed()
+        try:
+            hint = svc.match_fund_hint("某中证800ETF联接A", None)
+            assert hint is not None and "跟踪指数" in hint["message"]
+        finally:
+            svc._cache = None
+
+
 # ── 特性开关 ─────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

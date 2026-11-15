@@ -50,3 +50,23 @@ async def test_index_valuations_gated(db_session, monkeypatch):
     resp = await index_valuations(force=False, db=db_session)
     assert resp.data == []
     assert not called
+
+
+def test_merge_order_declared_with_zz800():
+    """_merge 按声明顺序输出（中证800 增补后 5 个指数，部分成功不跳序）"""
+    from backend.services.index_valuation_service import (
+        IndexValuationService, SUPPORTED_INDEXES,
+    )
+
+    assert list(SUPPORTED_INDEXES) == ["沪深300", "中证500", "上证50", "中证1000", "中证800"]
+    IndexValuationService._cache = None
+    IndexValuationService._ts = 0.0
+    try:
+        # 仅部分成功：中证800 + 沪深300 抓到，其余沿用旧值（此处为空）
+        merged = IndexValuationService._merge(
+            [{"index": "中证800", "pe": 13.7}, {"index": "沪深300", "pe": 12.8}],
+            now=1e9,
+        )
+        assert [m["index"] for m in merged] == ["沪深300", "中证800"]
+    finally:
+        IndexValuationService._cache = None
