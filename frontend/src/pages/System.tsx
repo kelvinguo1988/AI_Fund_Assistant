@@ -103,6 +103,36 @@ const DataSourceHealthPanel: React.FC = () => {
         {err && <Alert severity="error" sx={{ mb: 1.5 }}>{err}</Alert>}
         {health && (
           <>
+            {/* 数据末点新鲜度（2026-11-21）：最容易被忽略的一类故障——
+                缓存"有值"、TTL 也"新鲜"，但数据本身是几天前的。
+                温度计停摆 6 天时这里会直接亮红。 */}
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>数据末点新鲜度</Typography>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
+              {(health.freshness || []).length === 0 && (
+                <Chip size="small" color="default" label="无可检查的数据源" />
+              )}
+              {(health.freshness || []).map((f) => (
+                <Tooltip
+                  key={f.name}
+                  title={
+                    f.data_date
+                      ? `数据末点 ${f.data_date}，距今天 ${f.lag_days} 天（阈值 ${f.max_lag_days} 天）${f.fail_count ? `；连续失败 ${f.fail_count} 次` : ''}${f.note ? `｜${f.note}` : ''}`
+                      : f.note || '尚无数据'
+                  }
+                >
+                  <Chip
+                    size="small"
+                    color={f.stale ? 'error' : 'success'}
+                    label={
+                      f.data_date
+                        ? `${f.name} ${f.data_date}${f.stale ? `（滞后 ${f.lag_days} 天）` : ''}`
+                        : `${f.name} 无数据`
+                    }
+                  />
+                </Tooltip>
+              ))}
+            </Box>
+
             <Typography variant="subtitle2" sx={{ mb: 0.5 }}>冷却 / 熔断</Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
               {health.cooldowns.length === 0 && (

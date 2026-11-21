@@ -573,15 +573,38 @@ export interface DataSourceCache {
   stale: boolean;
 }
 
+/** 数据末点新鲜度（2026-11-21）：缓存"有值"不等于数据"新"——
+ *  温度计停摆 6 天那次，缓存每小时都在"更新"，date 却一直是 6 天前。 */
+export interface DataSourceFreshness {
+  name: string;
+  /** 手上数据的末点日期（YYYY-MM-DD），null=从未成功取过数 */
+  data_date: string | null;
+  /** 距今天数 */
+  lag_days: number | null;
+  /** 该源的容忍阈值（日频 3 / 周频 7 / 月频 45） */
+  max_lag_days: number;
+  stale: boolean;
+  note: string;
+  fail_count?: number;
+  cached_at?: string | null;
+}
+
 export interface DataSourceHealth {
   generated_at: string;
   cooldowns: DataSourceCooldown[];
   caches: DataSourceCache[];
+  freshness: DataSourceFreshness[];
   scheduler: {
     daily_fail_limit: number;
     tripped_today: { schedule_id: number; consecutive_failures: number }[];
   };
-  summary: { cooldown_count: number; stale_cache_count: number };
+  summary: {
+    cooldown_count: number;
+    stale_cache_count: number;
+    /** 数据末点滞后超阈值的源数量 */
+    stale_data_count: number;
+    stale_data_names: string[];
+  };
 }
 
 /* ── 基金扩展详情 ──────────────────────────────────────────── */

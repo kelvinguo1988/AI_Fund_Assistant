@@ -139,6 +139,97 @@ def _collect_caches(now: float) -> list[dict[str, Any]]:
     return out
 
 
+# 数据末点新鲜度（2026-11-21 新增）
+#
+# 为什么需要这一维度：现有 `_cache()` 只比较「缓存年龄 vs TTL」，而温度计停摆
+# 6 天那次恰恰是 **缓存看似新鲜、数据却是 6 天前** —— 每次请求都失败并返回旧
+# cache，`_ts` 一直停在 11-15，`date` 停在 11-13，界面上却看不出任何异常。
+# 用户只能靠自己发现「怎么还是 13 号」。
+#
+# 这里登记「该服务手上的数据末点是哪天」，与当天比较给出滞后天数。
+# 阈值按数据频率分档：日频 >3 天可疑、周频 >10 天、月频 >45 天。
+_FRESHNESS_RULES = {
+    # name: (max_lag_days, 说明)
+    "temperature": (7, "月频序列，但每月都有新点；>7 天说明上游停摆"),
+    "index_valuation": (7, "同温度计同源（乐咕月频）"),
+    "market_capital_flow": (3, "日频资金流，>3 天可疑"),
+    "us_market_timing": (40, "月频趋势，容忍度宽"),
+}
+
+
+def _collect_freshness(now: float) -> list[dict[str, Any]]:
+    """各服务「手上数据的末点日期」vs 当天（纯内存，零网络）"""
+    out: list[dict[str, Any]] = []
+    today = now_beijing().date()
+
+    def _add(name: str, data_date, extra: Optional[dict] = None) -> None:
+        if not data_date:
+            # 缓存为空也要露一条：服务还没成功取过数（首次启动 / 一直在失败），
+            # 比"列表里干脆没有这一项"更容易发现异常
+            out.append({
+                "name": name, "data_date": None, "lag_days": None,
+                "max_lag_days": _FRESHNESS_RULES.get(name, (7, ""))[0],
+                "stale": True, "note": "尚无数据（未成功取过数）",
+                **(extra or {}),
+            })
+            return
+        try:
+            if isinstance(data_date, str):
+                from datetime import datetime
+                d = datetime.strptime(str(data_date)[:10], "%Y-%m-%d").date()
+            else:
+                d = data_date
+        except (ValueError, TypeError):
+            return
+        lag = (today - d).days
+        limit, note = _FRESHNESS_RULES.get(name, (7, ""))
+        item: dict[str, Any] = {
+            "name": name,
+            "data_date": d.isoformat(),
+            "lag_days": lag,
+            "max_lag_days": limit,
+            "stale": lag > limit,
+            "note": note,
+        }
+        if extra:
+            item.update(extra)
+        out.append(item)
+
+    # 温度计
+    try:
+        from backend.services.market_temperature_service import MarketTemperatureService
+        cache = MarketTemperatureService._cache or {}
+        _add("temperature", cache.get("date"), {
+            "fail_count": MarketTemperatureService._fail_count,
+            "cached_at": (
+                now_beijing().fromtimestamp(MarketTemperatureService._ts).strftime("%Y-%m-%d %H:%M")
+                if MarketTemperatureService._ts else None
+            ),
+        })
+    except Exception:  # noqa: BLE001 - 健康快照本身不能崩
+        pass
+
+    # 指数高低估
+    try:
+        from backend.services.index_valuation_service import IndexValuationService
+        rows = IndexValuationService._cache or []
+        dates = [r.get("date") for r in rows if isinstance(r, dict) and r.get("date")]
+        if dates:
+            _add("index_valuation", max(dates))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 美股择时
+    try:
+        from backend.services.us_market_timing_service import UsMarketTimingService
+        cache = UsMarketTimingService._cache or {}
+        _add("us_market_timing", cache.get("date"))
+    except Exception:  # noqa: BLE001
+        pass
+
+    return out
+
+
 def _collect_scheduler(now: float) -> dict[str, Any]:
     """调度器当日熔断：某计划连续失败达上限后当日不再重试（防整天反复打被限的源）"""
     from backend.scheduler.task_scheduler import task_scheduler
@@ -160,13 +251,18 @@ def collect_health() -> dict[str, Any]:
     now = time.time()
     cooldowns = _collect_cooldowns(now)
     caches = _collect_caches(now)
+    freshness = _collect_freshness(now)
     return {
         "generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
         "cooldowns": cooldowns,
         "caches": caches,
+        "freshness": freshness,
         "scheduler": _collect_scheduler(now),
         "summary": {
             "cooldown_count": len(cooldowns),
             "stale_cache_count": sum(1 for c in caches if c["stale"]),
+            # 数据末点滞后超阈值 —— 这次温度计停摆 6 天正是这类，原快照看不出
+            "stale_data_count": sum(1 for f in freshness if f["stale"]),
+            "stale_data_names": [f["name"] for f in freshness if f["stale"]],
         },
     }
