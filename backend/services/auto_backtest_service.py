@@ -81,6 +81,13 @@ class AutoBacktestService:
             funds = list((await self.db.execute(
                 select(Fund).where(Fund.status == "active")
             )).scalars().all())
+            # MissingGreenlet 防御（2026-11-21，1.93 线上 11-15 实锤）：
+            # expire_on_commit=False 只覆盖 commit，rollback 仍会把已加载 ORM
+            # 对象全部过期。循环中任一只失败后的 _reset_session() 都会让后续
+            # fund.id/fund.code 属性访问触发同步 lazy load，在 asyncio 里即
+            # MissingGreenlet 并逃逸到调度器把整轮打断。进循环前把用到的三个
+            # 字段快照为纯值，循环内不再触碰 ORM 属性，对任何回滚时序免疫。
+            snapshots = [(f.id, f.code, f.name or "") for f in funds]
             total = ok = failed = 0
 
             from backend.services.backtest_service import (
@@ -91,7 +98,7 @@ class AutoBacktestService:
             fee_pct = await load_fee_pct(self.db)
             policy = await load_measurement_policy(self.db)
 
-            for i, fund in enumerate(funds):
+            for i, (fund_id, fund_code, fund_name) in enumerate(snapshots):
                 # 12 小时兜底：单轮超时则终止，已完成的逐只结果保留
                 if time.time() - start_ts > RUN_TIMEOUT_SECONDS:
                     logger.warning("自动回测超过 12 小时兜底上限，终止本轮")
@@ -103,7 +110,7 @@ class AutoBacktestService:
                     # 单只上限 10 分钟（净值拉取重试最坏 ~80s × 3 接口 + 余量）
                     summary = await asyncio.wait_for(
                         svc.run_backtest(
-                            fund_id=fund.id, fee_pct=fee_pct, policy=policy
+                            fund_id=fund_id, fee_pct=fee_pct, policy=policy
                         ),
                         timeout=600.0,
                     )
@@ -114,33 +121,41 @@ class AutoBacktestService:
                         failed += 1
                         await self._reset_session()
                         try:
-                            await self._upsert_error(fund, "无净值数据")
+                            await self._upsert_error(
+                                fund_id, fund_code, fund_name, "无净值数据"
+                            )
                         except Exception as ue:
-                            logger.error(f"自动回测失败行落库失败 {fund.code}: {ue}")
+                            logger.error(f"自动回测失败行落库失败 {fund_code}: {ue}")
                     else:
-                        await self._upsert_result(fund, summary)
+                        await self._upsert_result(
+                            fund_id, fund_code, fund_name, summary
+                        )
                         ok += 1
                         logger.info(
-                            f"自动回测 [{i + 1}/{len(funds)}] {fund.code} 完成"
+                            f"自动回测 [{i + 1}/{len(snapshots)}] {fund_code} 完成"
                         )
                 except asyncio.TimeoutError:
                     failed += 1
-                    logger.error(f"自动回测 {fund.code} 超时(10 分钟)，记为失败")
+                    logger.error(f"自动回测 {fund_code} 超时(10 分钟)，记为失败")
                     # 超时/异常可能留下已 flush 未提交的部分写入：不回滚则 session 卡在
                     # PendingRollbackError，_upsert_error 与后续每只基金都会连锁失败
                     await self._reset_session()
                     try:
-                        await self._upsert_error(fund, "回测超时(10 分钟)")
+                        await self._upsert_error(
+                            fund_id, fund_code, fund_name, "回测超时(10 分钟)"
+                        )
                     except Exception as ue:
-                        logger.error(f"自动回测失败行落库失败 {fund.code}: {ue}")
+                        logger.error(f"自动回测失败行落库失败 {fund_code}: {ue}")
                 except Exception as e:
                     failed += 1
-                    logger.error(f"自动回测 {fund.code} 失败: {e}")
+                    logger.error(f"自动回测 {fund_code} 失败: {e}")
                     await self._reset_session()
                     try:
-                        await self._upsert_error(fund, str(e)[:180])
+                        await self._upsert_error(
+                            fund_id, fund_code, fund_name, str(e)[:180]
+                        )
                     except Exception as ue:
-                        logger.error(f"自动回测失败行落库失败 {fund.code}: {ue}")
+                        logger.error(f"自动回测失败行落库失败 {fund_code}: {ue}")
 
                 # 周末防封：只与下一只之间拉长随机间隔（最后一只不等待）
                 if i < len(funds) - 1:
@@ -161,16 +176,23 @@ class AutoBacktestService:
         except Exception as rb_err:
             logger.error(f"回测会话回滚失败: {rb_err}")
 
-    async def _upsert_result(self, fund: Fund, summary) -> None:
-        """逐基金覆盖落库（fund_id 唯一）"""
+    async def _upsert_result(
+        self, fund_id: int, fund_code: str, fund_name: str, summary
+    ) -> None:
+        """逐基金覆盖落库（fund_id 唯一）
+
+        传纯值不传 ORM 对象：rollback 过期后访问 fund 属性即 MissingGreenlet
+        （见 run_full_backtest 快照注释）。
+        """
         row = (await self.db.execute(
-            select(BacktestResult).where(BacktestResult.fund_id == fund.id)
+            select(BacktestResult).where(BacktestResult.fund_id == fund_id)
         )).scalars().first()
         if row is None:
-            row = BacktestResult(fund_id=fund.id)
+            row = BacktestResult(fund_id=fund_id, fund_code=fund_code,
+                                 fund_name=fund_name)
             self.db.add(row)
-        row.fund_code = fund.code
-        row.fund_name = fund.name or fund.code
+        row.fund_code = fund_code
+        row.fund_name = fund_name
         row.period = summary.period
         row.effectiveness_window = summary.effectiveness_window
         row.total_nav_return = summary.total_nav_return
@@ -199,13 +221,19 @@ class AutoBacktestService:
         row.ok = True
         await self.db.commit()
 
-    async def _upsert_error(self, fund: Fund, message: str) -> None:
-        """失败也落行（保留旧数值，仅更新错误与时间），前端可见失败状态"""
+    async def _upsert_error(
+        self, fund_id: int, fund_code: str, fund_name: str, message: str
+    ) -> None:
+        """失败也落行（保留旧数值，仅更新错误与时间），前端可见失败状态
+
+        同 _upsert_result：传纯值，rollback 过期后访问 fund 属性即 MissingGreenlet。
+        """
         row = (await self.db.execute(
-            select(BacktestResult).where(BacktestResult.fund_id == fund.id)
+            select(BacktestResult).where(BacktestResult.fund_id == fund_id)
         )).scalars().first()
         if row is None:
-            row = BacktestResult(fund_id=fund.id, fund_code=fund.code, fund_name=fund.name or "")
+            row = BacktestResult(fund_id=fund_id, fund_code=fund_code,
+                                 fund_name=fund_name)
             self.db.add(row)
         row.error = message
         row.ok = False

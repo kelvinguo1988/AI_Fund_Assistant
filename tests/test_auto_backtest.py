@@ -72,8 +72,8 @@ async def test_upsert_overwrites_per_fund(db_session):
     svc = AutoBacktestService(db_session)
     f1 = _fund(1, "018994", "中欧数字经济混合发起C")
 
-    await svc._upsert_result(f1, _FakeSummary())
-    await svc._upsert_result(f1, _FakeSummary())  # 第二轮
+    await svc._upsert_result(f1.id, f1.code, f1.name or "", _FakeSummary())
+    await svc._upsert_result(f1.id, f1.code, f1.name or "", _FakeSummary())  # 第二轮
 
     from sqlalchemy import select as _select
     rows = list((await db_session.execute(_select(BacktestResult))).scalars().all())
@@ -100,8 +100,8 @@ async def test_error_row_keeps_old_values(db_session):
 
     svc = AutoBacktestService(db_session)
     f2 = _fund(2, "016874", "广发远见智选混合C")
-    await svc._upsert_result(f2, _FakeSummary())
-    await svc._upsert_error(f2, "净值拉取超时")
+    await svc._upsert_result(f2.id, f2.code, f2.name or "", _FakeSummary())
+    await svc._upsert_error(f2.id, f2.code, f2.name or "", "净值拉取超时")
 
     rows = list((await db_session.execute(
         __import__("sqlalchemy").select(BacktestResult)
@@ -242,3 +242,46 @@ async def _const_fee():
 
 async def _const_policy():
     return {"carry_position": False, "min_signals": 0, "min_coverage_pct": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_rollback_expiry_does_not_poison_rest_of_round(db_session, monkeypatch):
+    """MissingGreenlet 回归（1.93 线上 11-15 实锤）
+
+    expire_on_commit=False 只覆盖 commit，rollback 仍会让已加载 ORM 对象全部
+    过期。原代码在任一只失败回滚后继续访问 fund.id/fund.code —— asyncio 里
+    即 MissingGreenlet，且在 run_backtest(fund_id=fund.id) 参数求值处抛出，
+    下一只基金也被记成失败整轮报废。快照纯值化后：失败只影响该只，其余照常。
+    """
+    db_session.add_all([_fund(1, "020001"), _fund(2, "020002")])
+    await db_session.commit()
+
+    class _FakeBacktestSvc:
+        def __init__(self, db):
+            self.db = db
+
+        async def run_backtest(self, fund_id, fee_pct=None, policy=None):
+            if fund_id == 1:
+                # 模拟 run_backtest 内部失败路径自己 rollback（真实服务的
+                # 异常清理正是如此）——rollback 使 session 里所有 fund 过期
+                await self.db.rollback()
+                raise RuntimeError("模拟内部失败")
+            return _FakeSummary()
+
+    import backend.services.backtest_service as bs_mod
+    import backend.services.auto_backtest_service as ab_mod
+    monkeypatch.setattr(bs_mod, "BacktestService", _FakeBacktestSvc)
+    monkeypatch.setattr(ab_mod.asyncio, "sleep", _noop_sleep)
+
+    svc = AutoBacktestService(db_session)
+    stats = await svc.run_full_backtest()
+    assert stats == {"total": 2, "ok": 1, "failed": 1, "skipped": 0}, \
+        "rollback 过期不能把第二只基金也拖成失败"
+
+    rows = list((await db_session.execute(
+        __import__("sqlalchemy").select(BacktestResult)
+        .order_by(BacktestResult.fund_id)
+    )).scalars().all())
+    assert len(rows) == 2
+    assert rows[0].ok is False and "模拟内部失败" in rows[0].error
+    assert rows[1].ok is True

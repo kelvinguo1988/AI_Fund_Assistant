@@ -92,12 +92,14 @@ class IndexValuationService:
         def _fetch_all():
             import akshare as ak
             out = []
+            failures: list[str] = []
             for index_name in SUPPORTED_INDEXES:
                 try:
                     df = ak.stock_index_pe_lg(symbol=index_name)
                     pe_col = "滚动市盈率"
                     pe_series = df[pe_col].dropna().astype(float)
                     if pe_series.empty:
+                        failures.append(f"{index_name}(无数据)")
                         continue
                     current_pe = float(pe_series.iloc[-1])
                     # 全历史序列分位（乐咕为 2007 起月频序列）；口径统一走 percentile_rank_inclusive
@@ -119,25 +121,61 @@ class IndexValuationService:
                         "updated": str(df["日期"].iloc[-1]),
                     })
                 except Exception as e:
+                    failures.append(f"{index_name}({type(e).__name__}: {str(e)[:60]})")
                     logger.warning(f"指数 PE 获取失败 {index_name}: {e}")
-            return out
+            return out, failures
 
         from backend.utils.concurrency import run_with_timeout
 
+        def _log_failure(category: str, message: str, detail: str) -> None:
+            """失败落错误日志（no-throw）。此前只写 logger.warning，用户在
+            1.93 看到指数卡数据停在 11-13 却无从知道原因（乐咕被网络断），
+            温度计有埋点而这里没有——2026-11-21 对齐。message 固定以便
+            60s 节流生效，变化部分放 detail。"""
+            try:
+                from backend.services.error_log_service import log_source_failure
+                log_source_failure(
+                    module="valuation.leigu",
+                    message=message,
+                    category=category, severity="warning", detail=detail,
+                )
+            except Exception:
+                pass
+
         try:
             # 走全局 akshare 信号量 + 强制超时（乐咕接口无 patch 超时保护）
-            rows = await run_with_timeout(_fetch_all, timeout=100.0)
+            rows, failures = await run_with_timeout(_fetch_all, timeout=100.0)
         except Exception as e:
             logger.warning(f"指数 PE 获取失败: {e}")
             cls._fail_until = now + cls._FAIL_COOLDOWN
+            _log_failure(
+                "network", "指数高低估取数失败（乐咕 PE）——缓存沿用旧值",
+                f"{type(e).__name__}: {str(e)[:160]}",
+            )
             return cls._cache or []
         if rows:
             cls._cache = cls._merge(rows, now)
             cls._ts = now
             cls._fail_until = 0.0
+            if failures:
+                # 部分成功：缺的指数沿用旧值，但失败本身也要可见（哪几个挂了）
+                _log_failure(
+                    "network", "指数高低估部分指数取数失败（乐咕 PE）",
+                    "; ".join(failures)[:400],
+                )
+            return cls._cache
+        # 接口通了但一行没有：同样是失败，需要冷却而不是下个请求再来一遍
+        cls._fail_until = now + cls._FAIL_COOLDOWN
+        if failures:
+            _log_failure(
+                "network", "指数高低估取数失败（乐咕 PE）——缓存沿用旧值",
+                "; ".join(failures)[:400],
+            )
         else:
-            # 接口通了但一行没有：同样是失败，需要冷却而不是下个请求再来一遍
-            cls._fail_until = now + cls._FAIL_COOLDOWN
+            _log_failure(
+                "data_quality", "指数高低估取数异常（乐咕接口通但无数据）",
+                f"indexes={list(SUPPORTED_INDEXES)}",
+            )
         return cls._cache or []
 
     # 基准指数占比提取（近似映射用）：指数名 ... ×占比%

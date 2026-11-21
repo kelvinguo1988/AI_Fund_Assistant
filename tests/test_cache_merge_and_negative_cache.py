@@ -84,7 +84,7 @@ class TestIndexValuationNegativeCache:
 
         async def _empty(func, timeout=None, **kw):
             calls.append(1)
-            return []
+            return [], []
         monkeypatch.setattr("backend.utils.concurrency.run_with_timeout", _empty)
 
         assert await IndexValuationService.get_valuations() == []
@@ -95,7 +95,7 @@ class TestIndexValuationNegativeCache:
     async def test_partial_success_keeps_missing_index(self, monkeypatch, _clean_ivs):
         """4 个指数抓成 3 个：缺的那个沿用上轮条目，而不是整批只剩 3 个"""
         async def _partial(func, timeout=None, **kw):
-            return [_row("沪深300", pe=13.1), _row("中证500", pe=22.0)]
+            return [_row("沪深300", pe=13.1), _row("中证500", pe=22.0)], []
         monkeypatch.setattr("backend.utils.concurrency.run_with_timeout", _partial)
 
         IndexValuationService._cache = [
@@ -115,7 +115,7 @@ class TestIndexValuationNegativeCache:
     async def test_stale_prev_cache_not_merged(self, monkeypatch, _clean_ivs):
         """上一轮缓存超过保留期时不合并：否则下线指数会永远挂在页面上"""
         async def _partial(func, timeout=None, **kw):
-            return [_row("沪深300")]
+            return [_row("沪深300")], []
         monkeypatch.setattr("backend.utils.concurrency.run_with_timeout", _partial)
 
         IndexValuationService._cache = [_row("沪深300"), _row("上证50")]
