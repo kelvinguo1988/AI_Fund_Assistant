@@ -133,6 +133,30 @@ const DataSourceHealthPanel: React.FC = () => {
               ))}
             </Box>
 
+            {(health.schedule_freshness || []).length > 0 && (
+              <>
+                <Typography variant="subtitle2" sx={{ mb: 0.5 }}>定时计划</Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
+                  {(health.schedule_freshness || []).map((f) => (
+                    <Tooltip
+                      key={f.name}
+                      title={`上次运行 ${f.last_run_at || '从未'}${f.lag_days != null ? `，距今 ${f.lag_days} 天` : ''}（阈值 ${f.max_lag_days} 天）`}
+                    >
+                      <Chip
+                        size="small"
+                        color={f.stale ? 'error' : 'success'}
+                        label={
+                          f.last_run_at
+                            ? `${f.label} ${f.lag_days != null ? `${f.lag_days} 天前` : ''}`
+                            : `${f.label} 从未运行`
+                        }
+                      />
+                    </Tooltip>
+                  ))}
+                </Box>
+              </>
+            )}
+
             <Typography variant="subtitle2" sx={{ mb: 0.5 }}>冷却 / 熔断</Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
               {health.cooldowns.length === 0 && (

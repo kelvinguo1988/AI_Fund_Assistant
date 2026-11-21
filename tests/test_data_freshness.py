@@ -122,3 +122,75 @@ class TestStaleDetection:
             assert t["stale"] is False
         finally:
             MarketTemperatureService._cache = old
+
+
+class TestExtendedCoverage:
+    """2026-11-21 扩展：资金流三源 + 定时计划"""
+
+    def test_capital_flow_rules_registered(self):
+        for name in ("market_capital_flow", "hsgt_flow", "sector_flow"):
+            assert name in _FRESHNESS_RULES, f"{name} 应被监控"
+            assert _FRESHNESS_RULES[name][0] <= 5, "日频源阈值不能太宽"
+
+    def test_capital_flow_reads_market_cache(self):
+        """资金流日期来自 MarketService._cache 的 (ts, payload) 元组"""
+        from backend.services.market_service import MarketService
+
+        old = dict(MarketService._cache)
+        try:
+            MarketService._cache["market_capital_flow"] = (
+                time.time(),
+                {"date": (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")},
+            )
+            items = {f["name"]: f for f in _collect_freshness(time.time())}
+            cf = items.get("market_capital_flow")
+            assert cf is not None
+            assert cf["lag_days"] == 1
+            assert cf["stale"] is False
+        finally:
+            MarketService._cache.clear()
+            MarketService._cache.update(old)
+
+    def test_sector_flow_takes_max_date(self):
+        """板块是 list，应取最大日期而不是第一条"""
+        from backend.services.market_service import MarketService
+
+        old = dict(MarketService._cache)
+        try:
+            MarketService._cache["sector_flow_rankings"] = (
+                time.time(),
+                [
+                    {"date": "2026-11-01"},
+                    {"date": "2026-11-20"},
+                    {"date": "2026-11-10"},
+                ],
+            )
+            items = {f["name"]: f for f in _collect_freshness(time.time())}
+            sf = items.get("sector_flow")
+            assert sf is not None
+            assert sf["data_date"] == "2026-11-20", "应取最大日期"
+        finally:
+            MarketService._cache.clear()
+            MarketService._cache.update(old)
+
+
+class TestScheduleFreshness:
+    def test_output_shape(self):
+        from backend.services.data_source_health import _collect_schedule_freshness
+
+        for item in _collect_schedule_freshness(time.time()):
+            for k in ("name", "label", "last_run_at", "lag_days", "max_lag_days", "stale"):
+                assert k in item
+            assert item["max_lag_days"] == 2, "日频计划留一天容错"
+
+    def test_never_raises_without_db(self):
+        """DB 读不到时返回空列表，不能让健康快照崩"""
+        from backend.services import data_source_health as m
+
+        got = m._collect_schedule_freshness(time.time())
+        assert isinstance(got, list)
+
+    def test_summary_includes_schedule_count(self):
+        h = collect_health()
+        assert "stale_schedule_count" in h["summary"]
+        assert "schedule_freshness" in h

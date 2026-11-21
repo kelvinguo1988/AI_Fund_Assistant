@@ -598,13 +598,26 @@ export interface DataSourceHealth {
     daily_fail_limit: number;
     tripped_today: { schedule_id: number; consecutive_failures: number }[];
   };
+  /** 定时计划的上次运行新鲜度（取数正常但推送链路没跑，同样要能发现） */
+  schedule_freshness: DataSourceScheduleFreshness[];
   summary: {
     cooldown_count: number;
     stale_cache_count: number;
     /** 数据末点滞后超阈值的源数量 */
     stale_data_count: number;
     stale_data_names: string[];
+    /** 超过 2 天未运行的启用计划数 */
+    stale_schedule_count: number;
   };
+}
+
+export interface DataSourceScheduleFreshness {
+  name: string;
+  label: string;
+  last_run_at: string | null;
+  lag_days: number | null;
+  max_lag_days: number;
+  stale: boolean;
 }
 
 /* ── 基金扩展详情 ──────────────────────────────────────────── */

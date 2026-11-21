@@ -150,9 +150,12 @@ def _collect_caches(now: float) -> list[dict[str, Any]]:
 # 阈值按数据频率分档：日频 >3 天可疑、周频 >10 天、月频 >45 天。
 _FRESHNESS_RULES = {
     # name: (max_lag_days, 说明)
+    # 阈值按数据频率分档：日频紧、月频宽，避免长假/停牌误报
     "temperature": (7, "月频序列，但每月都有新点；>7 天说明上游停摆"),
     "index_valuation": (7, "同温度计同源（乐咕月频）"),
-    "market_capital_flow": (3, "日频资金流，>3 天可疑"),
+    "market_capital_flow": (5, "日频资金流；>5 天覆盖周末+短假"),
+    "hsgt_flow": (5, "北向资金日频；同资金流"),
+    "sector_flow": (5, "板块资金流日频"),
     "us_market_timing": (40, "月频趋势，容忍度宽"),
 }
 
@@ -227,6 +230,35 @@ def _collect_freshness(now: float) -> list[dict[str, Any]]:
     except Exception:  # noqa: BLE001
         pass
 
+    # 日频资金流三兄弟（2026-11-21 扩展）：都从 MarketService 的 TTL 缓存读，
+    # 缓存值是 (ts, payload)，payload 里带 date/trade_date
+    try:
+        from backend.services.market_service import MarketService
+
+        def _payload(key: str):
+            hit = MarketService._cache.get(key)
+            if not hit:
+                return None
+            val = hit[1] if isinstance(hit, tuple) and len(hit) == 2 else hit
+            if isinstance(val, dict):
+                return val.get("date") or val.get("trade_date")
+            return None
+
+        _add("market_capital_flow", _payload("market_capital_flow"))
+        _add("hsgt_flow", _payload("hsgt_flow"))
+        # 板块是 list，取最大日期
+        sector = MarketService._cache.get("sector_flow_rankings")
+        if sector:
+            val = sector[1] if isinstance(sector, tuple) and len(sector) == 2 else sector
+            if isinstance(val, list):
+                dates = [r.get("date") or r.get("trade_date")
+                         for r in val if isinstance(r, dict)]
+                dates = [d for d in dates if d]
+                if dates:
+                    _add("sector_flow", max(dates))
+    except Exception:  # noqa: BLE001
+        pass
+
     return out
 
 
@@ -246,17 +278,71 @@ def _collect_scheduler(now: float) -> dict[str, Any]:
     }
 
 
+def _collect_schedule_freshness(now: float) -> list[dict[str, Any]]:
+    """各定时计划的「上次运行」距今天数（2026-11-21 扩展）
+
+    与数据末点互补：数据末点看的是**取数**成不成功，这里看的是**推送链路**
+    有没有跑起来。两者都正常才算整体健康——曾经出现过取数正常但定时任务
+    连续失败、用户几天收不到推送却毫无提示的情况。
+
+    读 DB（计划表很小，只取必要列），调用方是同步上下文，用短连接查询。
+    """
+    out: list[dict[str, Any]] = []
+    try:
+        import sqlite3
+
+        from backend.config import settings
+
+        # DATABASE_URL 形如 sqlite+aiosqlite:///./data/fund_quant.db
+        url = settings.DATABASE_URL
+        path = url.split("///", 1)[-1] if "///" in url else url
+        con = sqlite3.connect(path, timeout=5)
+        try:
+            rows = con.execute(
+                "select id, name, enabled, last_run_at from schedules order by id"
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001 - 健康快照不能因 DB 抖动而崩
+        return out
+
+    today = now_beijing().date()
+    for sid, name, enabled, last_run in rows:
+        if not enabled:
+            continue
+        lag = None
+        if last_run:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(str(last_run)[:19])
+                lag = (today - dt.date()).days
+            except (ValueError, TypeError):
+                lag = None
+        # 超过 2 天没跑过 = 可疑（日频计划每天该跑一次，留一天容错）
+        out.append({
+            "name": f"schedule#{sid}",
+            "label": name or f"计划 #{sid}",
+            "last_run_at": str(last_run)[:19] if last_run else None,
+            "lag_days": lag,
+            "max_lag_days": 2,
+            "stale": lag is None or lag > 2,
+        })
+    return out
+
+
 def collect_health() -> dict[str, Any]:
     """聚合快照（纯内存读取，可在 async 路径直接调用）"""
     now = time.time()
     cooldowns = _collect_cooldowns(now)
     caches = _collect_caches(now)
     freshness = _collect_freshness(now)
+    schedule_freshness = _collect_schedule_freshness(now)
     return {
         "generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
         "cooldowns": cooldowns,
         "caches": caches,
         "freshness": freshness,
+        "schedule_freshness": schedule_freshness,
         "scheduler": _collect_scheduler(now),
         "summary": {
             "cooldown_count": len(cooldowns),
@@ -264,5 +350,6 @@ def collect_health() -> dict[str, Any]:
             # 数据末点滞后超阈值 —— 这次温度计停摆 6 天正是这类，原快照看不出
             "stale_data_count": sum(1 for f in freshness if f["stale"]),
             "stale_data_names": [f["name"] for f in freshness if f["stale"]],
+            "stale_schedule_count": sum(1 for f in schedule_freshness if f["stale"]),
         },
     }
