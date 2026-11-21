@@ -44,11 +44,18 @@ class TestEndpointAndHeaders:
     def test_opencode_id_shape(self):
         """免费层校验 session id 形状：ses_ + 12 hex + 14 base62"""
         import re
-        sid = opencode_id("ses", descending=True)
-        assert re.fullmatch(r"ses_[0-9a-f]{12}[0-9A-Za-z]{14}", sid), sid
-        # 生成器自身的计数器很小（免费层会看这个）
-        counter = int(sid[5:9], 16)
-        assert 0xFFF - counter < 16, "计数器必须是 OpenCode 的形状"
+
+        for descending in (False, True):
+            sid = opencode_id("ses", descending=descending)
+            assert re.fullmatch(r"ses_[0-9a-f]{12}[0-9A-Za-z]{14}", sid), sid
+
+        # 计数器在 12 位 hex 的**最低 3 位**（value = now_ms << 12 | counter）。
+        # descending=True 会把整串按位取反，计数器就看不出来了，所以这里用非降序验证。
+        # 原断言取 sid[5:9]（时间戳高位）再算 0xFFF - counter < 16，几乎恒假
+        # ——2026-11-21 发现：与温度计修复无关的既有测试 bug（git stash 后同样失败）。
+        sid = opencode_id("ses")
+        counter = int(sid[13:16], 16)
+        assert counter < 16, f"计数器应是很小的值，实际 {counter}"
 
 
 class TestCoreTools:

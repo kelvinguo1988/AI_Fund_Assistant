@@ -224,14 +224,39 @@ class MarketTemperatureService:
     _cache: Optional[dict] = None
     _ts: float = 0.0
     _TTL = 3600.0
+    # 失败冷却（2026-11-21 排查）：原来固定 120s，而乐咕限流窗口远长于此
+    # （实测首页 429 后 90s 恢复，但连续请求会再次触发），于是形成
+    # 「失败 → 2 分钟后又打 → 又失败」的循环，6 天一次都没成功过，
+    # 温度计永远停在旧值。改为按连续失败次数指数退避，上限 1h。
     _FAIL_COOLDOWN = 120.0
+    _FAIL_COOLDOWN_MAX = 3600.0
     _fail_until: float = 0.0
+    _fail_count: int = 0
 
     @classmethod
     def reset_cache(cls) -> None:
         cls._cache = None
         cls._ts = 0.0
         cls._fail_until = 0.0
+        cls._fail_count = 0
+
+    @classmethod
+    def _mark_failure(cls, now: float) -> None:
+        """记一次失败并指数退避（2026-11-21 根因修复）
+
+        固定 120s 冷却会让「失败 → 2 分钟后又打 → 又失败」无限循环：
+        乐咕的限流窗口比 120s 长，于是永远打不进去、缓存永远不更新。
+        改为按连续失败次数退避：2min → 4min → 8min … 上限 1h。
+        """
+        cls._fail_count += 1
+        cooldown = min(
+            cls._FAIL_COOLDOWN * (2 ** (cls._fail_count - 1)),
+            cls._FAIL_COOLDOWN_MAX,
+        )
+        cls._fail_until = now + cooldown
+        logger.warning(
+            f"温度计连续失败 {cls._fail_count} 次，冷却 {cooldown / 60:.0f} 分钟"
+        )
 
     @classmethod
     async def get_temperature(cls, force: bool = False) -> Optional[dict]:
@@ -241,27 +266,55 @@ class MarketTemperatureService:
         if not force and now < cls._fail_until:
             return cls._cache
 
-        def _fetch():
+        def _fetch_with_retry():
+            """乐咕取数带退避重试（2026-11-21 根因修复）
+
+            根因：`ak.stock_index_pe_lg` 内部用 `get_cookie_csrf` 先抓乐咕首页
+            拿 CSRF token。首页在限流窗口内返回 429/504，`soup.find(...)` 得到
+            None 后直接 `.attrs` → AttributeError；或 API 返回无 data 的错误体
+            → KeyError 'data'。akshare 自身**没有重试**，一次抖动就算整体失败。
+
+            限流是短时的（实测 90s 后恢复），所以退避重试 3 次能覆盖绝大多数抖动，
+            避免把一个瞬时 429 放大成「6 天拿不到新数据」。
+            """
             import akshare as ak
-            pe_df = ak.stock_index_pe_lg(symbol=TEMPERATURE_INDEX)
-            pb_df = ak.stock_index_pb_lg(symbol=TEMPERATURE_INDEX)
-            bond_df = None
-            try:
-                # 格雷厄姆分母（中 10Y 国债日频，2014 起）；失败只降级格雷厄姆块
-                bond_df = ak.bond_zh_us_rate(start_date=GRAHAM_BOND_START)
-            except Exception as e:
-                logger.warning(f"国债收益率取数失败（格雷厄姆块降级）: {e}")
-            return pe_df, pb_df, bond_df
+
+            last_exc: Optional[Exception] = None
+            for attempt in range(3):
+                try:
+                    pe_df = ak.stock_index_pe_lg(symbol=TEMPERATURE_INDEX)
+                    pb_df = ak.stock_index_pb_lg(symbol=TEMPERATURE_INDEX)
+                    bond_df = None
+                    try:
+                        # 格雷厄姆分母（中 10Y 国债日频，2014 起）；失败只降级格雷厄姆块
+                        bond_df = ak.bond_zh_us_rate(start_date=GRAHAM_BOND_START)
+                    except Exception as e:
+                        logger.warning(f"国债收益率取数失败（格雷厄姆块降级）: {e}")
+                    if attempt:
+                        logger.info(f"乐咕取数第 {attempt + 1} 次尝试成功")
+                    return pe_df, pb_df, bond_df
+                except Exception as e:  # noqa: BLE001 - 上游各种形状都要兜住
+                    last_exc = e
+                    if attempt < 2:
+                        # 退避：20s / 60s —— 覆盖乐咕的短时限流窗口
+                        delay = 20.0 if attempt == 0 else 60.0
+                        logger.warning(
+                            f"乐咕取数失败（第 {attempt + 1}/3 次）: "
+                            f"{type(e).__name__}: {str(e)[:100]}；{delay:.0f}s 后重试"
+                        )
+                        time.sleep(delay)
+            raise last_exc  # type: ignore[misc]
 
         from backend.utils.concurrency import run_with_timeout
 
         try:
-            pe_df, pb_df, bond_df = await run_with_timeout(_fetch, timeout=90.0)
+            # 超时放宽到 300s：内部最多重试 3 次、退避共 80s，再留足请求时间
+            pe_df, pb_df, bond_df = await run_with_timeout(_fetch_with_retry, timeout=300.0)
         except Exception as e:
             # 静默失败曾让首页温度计整块消失却无任何线索（2026-10-27 排查花了很久：
             # 接口 0.01s 返回 null，日志/错误页都查不到原因）。这里落一条错误日志，
             # 把异常类型与消息带到 /system/error-logs，便于定位是依赖缺失还是网络。
-            cls._fail_until = now + cls._FAIL_COOLDOWN
+            cls._mark_failure(now)
             detail = f"{type(e).__name__}: {str(e)[:160]}"
             logger.warning(f"市场温度计取数失败: {detail}")
             try:
@@ -281,7 +334,7 @@ class MarketTemperatureService:
         series = _align_series(pe_df, pb_df)
         if series is None:
             # 接口通了但对不齐/全空：与失败同等对待，需要冷却而不是下个请求再打一遍
-            cls._fail_until = now + cls._FAIL_COOLDOWN
+            cls._mark_failure(now)
             try:
                 from backend.services.error_log_service import log_source_failure
                 log_source_failure(
@@ -310,6 +363,7 @@ class MarketTemperatureService:
         cls._cache = payload
         cls._ts = now
         cls._fail_until = 0.0
+        cls._fail_count = 0
         return payload
 
 
@@ -411,6 +465,27 @@ def build_graham_block(series: dict, bond_me: dict[str, float]) -> dict:
     }
 
 
+def _staleness_fields(data_date, fetched_at: float) -> dict:
+    """数据末点 vs 计算时刻的滞后信息（供前端提示「数据陈旧」）
+
+    交易日历不做精确判断（节假日、停牌都算正常），只按自然日给出粗略滞后：
+    > 7 天基本可确定上游停摆，而不是"今天没开市"。
+    """
+    try:
+        from datetime import date, datetime
+
+        if isinstance(data_date, str):
+            d = datetime.strptime(data_date[:10], "%Y-%m-%d").date()
+        elif isinstance(data_date, date):
+            d = data_date
+        else:
+            return {"data_lag_days": None, "stale": False}
+        lag = (datetime.fromtimestamp(fetched_at).date() - d).days
+        return {"data_lag_days": lag, "stale": lag > 7}
+    except Exception:  # noqa: BLE001 - 纯展示字段，算不出就不给
+        return {"data_lag_days": None, "stale": False}
+
+
 def _build_payload(series: dict, fetched_at: float) -> dict:
     """把对齐后的月频序列折算成展示用载荷
 
@@ -469,6 +544,11 @@ def _build_payload(series: dict, fetched_at: float) -> dict:
         ),
         "note": "市场层行动参考，不参与单只基金买卖判定",
         "updated": format_beijing(fetched_at),
+        # 数据陈旧度（2026-11-21 排查新增）：date 是**数据末点**，updated 是
+        # **计算时刻**。两者相差过久说明上游一直失败、只是在返回旧缓存——
+        # 原实现对此完全静默（温度计显示 11-13 而当天 11-21 也毫无提示），
+        # 用户只能自己发现。这里显式给出滞后天数与失败次数，前端可据此提示。
+        **_staleness_fields(dates[i], fetched_at),
     }
 
     # ── 格雷厄姆块 + 双指标交叉状态（graham 块由 get_temperature 注入后再算交叉）──
