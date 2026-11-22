@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS advice_log (
     action TEXT NOT NULL,
     reasons TEXT,
     score REAL,
-    benchmark_kind TEXT
+    benchmark_kind TEXT,
+    source TEXT
 );
 CREATE TABLE IF NOT EXISTS advice_outcomes (
     advice_id INTEGER PRIMARY KEY,
@@ -84,7 +85,7 @@ CREATE TABLE IF NOT EXISTS advice_calibration (
 # 现网 advice_outcomes 为 0 行，NULL 只可能出现在改造前的历史行，统计时按"未判定"排除。
 _OUTCOME_NEW_COLUMNS = ("hit_abs INTEGER", "hit_excess INTEGER")
 # advice_log.benchmark_kind（审查 #2）：NULL = 改造前的行，按"基准可比"处理
-_LOG_NEW_COLUMNS = ("benchmark_kind TEXT",)
+_LOG_NEW_COLUMNS = ("benchmark_kind TEXT", "source TEXT")
 
 # (表, 该表要补的列) —— 必须按表配对：早先版本把两张表的列都往 advice_outcomes 上 ALTER，
 # 于是新库（_SCHEMA 直接建齐）一切正常、只有存量库在 `stats()` 里炸 "no such column"。
@@ -220,7 +221,8 @@ class AdviceLearningStore:
     def log_advice(self, fund_code: str, action: str,
                    reasons: str = "", score: Optional[float] = None,
                    dedupe_same_day: bool = True,
-                   benchmark_kind: Optional[str] = None) -> Optional[int]:
+                   benchmark_kind: Optional[str] = None,
+                   source: str = "rebalance") -> Optional[int]:
         """工单落库；同一基金同一方向一天只记一条
 
         调仓页/Agent 任务/每日简报都会重算同一份四清单，不去重则 advice_log 会被
@@ -228,6 +230,10 @@ class AdviceLearningStore:
 
         `benchmark_kind` 缺省时读同库 `funds` 表自行判定（审查 #2）：口径由落库那刻
         锁死，事后改基金名称/类型不会让历史样本的判定口径漂移。
+
+        `source` 标注建议来源（rebalance=调仓引擎 / panel=基金评审团）：
+        两套引擎进同一套命中率考核，stats.by_source 可对比谁更准
+        （评审团 2026-11-22 接入；存量行 NULL 按 rebalance 读）。
         """
         with self._w:
             if dedupe_same_day:
@@ -240,10 +246,10 @@ class AdviceLearningStore:
                     return None
             kind = benchmark_kind or resolve_benchmark_kind(self._conn, fund_code)
             cur = self._conn.execute(
-                "INSERT INTO advice_log (ts, fund_code, action, reasons, score, benchmark_kind) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO advice_log (ts, fund_code, action, reasons, score, benchmark_kind, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
-                 fund_code, action, reasons[:500], score, kind),
+                 fund_code, action, reasons[:500], score, kind, source),
             )
             self._conn.commit()
             return cur.lastrowid
@@ -357,13 +363,13 @@ class AdviceLearningStore:
             if cutoff:
                 rows = self._conn.execute(
                     "SELECT a.action, o.hit, o.fund_change_pct, o.hit_abs, o.hit_excess, "
-                    "       a.benchmark_kind "
+                    "       a.benchmark_kind, COALESCE(a.source, 'rebalance') "
                     "FROM advice_outcomes o JOIN advice_log a ON a.id = o.advice_id "
                     "WHERE a.ts >= ?", (cutoff,)).fetchall()
             else:
                 rows = self._conn.execute(
                     "SELECT a.action, o.hit, o.fund_change_pct, o.hit_abs, o.hit_excess, "
-                    "       a.benchmark_kind "
+                    "       a.benchmark_kind, COALESCE(a.source, 'rebalance') "
                     "FROM advice_outcomes o JOIN advice_log a ON a.id = o.advice_id").fetchall()
             total = len(rows)
             cal = {r[0]: r[1] for r in self._conn.execute(
@@ -376,6 +382,23 @@ class AdviceLearningStore:
         def _side(items: list, col: int) -> dict:
             scored = [r for r in items if r[col] is not None]
             return {"total": len(scored), "hits": sum(1 for r in scored if r[col] == 1)}
+
+        # 按建议来源拆分（rebalance=调仓引擎 / panel=基金评审团）——同一套
+        # 命中率考核跑两套引擎，样本够时可直接对比谁更准（评审团 2026-11-22）
+        by_source: dict[str, dict] = {}
+        for src_key in sorted({r[6] for r in rows}):
+            sub = [r for r in rows if r[6] == src_key]
+            s_sell = [r for r in sub if r[0] in SELL_ACTIONS]
+            s_buy = [r for r in sub if r[0] in BUY_ACTIONS]
+            by_source[src_key] = {
+                "evaluated": len(sub),
+                "buy_total": len(s_buy), "buy_hits": sum(1 for r in s_buy if r[1] == 1),
+                "sell_total": len(s_sell), "sell_hits": sum(1 for r in s_sell if r[1] == 1),
+                "by_mode": {
+                    "abs": {"sell": _side(s_sell, 3), "buy": _side(s_buy, 3)},
+                    "excess": {"sell": _side(s_sell, 4), "buy": _side(s_buy, 4)},
+                },
+            }
 
         return {
             "evaluated": total,
@@ -393,6 +416,7 @@ class AdviceLearningStore:
                 "hs300_comparable": total - abs_only,
                 "abs_only": abs_only,
             },
+            "by_source": by_source,
             "params": cal or DEFAULT_PARAMS,
         }
 

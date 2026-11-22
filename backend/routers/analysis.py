@@ -498,6 +498,29 @@ async def compare_funds(
     return ApiResponse(data=report)
 
 
+@router.get("/panel/{fund_id}")
+async def fund_panel(
+    fund_id: int,
+    log: bool = Query(False, description="共识落 advice_log 进命中率闭环（同基金同方向一天一条）"),
+    db: AsyncSession = Depends(get_db),
+):
+    """基金评审团 — 13 位规则评委（配置/风控/质量/赛道/资金流五派）投票
+
+    全部输入来自库内落库数据与已有缓存，零新增上游请求；数据缺失的评委
+    显式弃权。log=true 时把共识落 advice_log(source='panel')，与调仓引擎
+    进同一套命中率考核（30 个净值日后 stats.by_source 可对比两套引擎）。
+    """
+    from backend.services.fund_panel_service import FundPanelService
+
+    try:
+        panel = await FundPanelService.convene(db, fund_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if log:
+        panel["log_result"] = FundPanelService.log_consensus(panel)
+    return ApiResponse(data=panel)
+
+
 # ── 收益口径（Q11：净值复权 / 基准股息，两个键即两条回滚路径）───────────
 
 def _caliber_state(policy: dict) -> dict:

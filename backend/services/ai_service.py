@@ -171,6 +171,8 @@ class AIService:
 
     async def _build_system_prompt(self, message: ChatMessage) -> str:
         """构建系统提示词 — 注入系统全量数据"""
+        from backend.ai.discipline import ANALYSIS_DISCIPLINE
+
         base_prompt = (
             "你是基金量化交易系统的AI助手，专门帮助用户分析基金投资机会。"
             "你可以基于量化因子评分、市场数据和历史分析结果，为用户提供专业的投资建议。\n\n"
@@ -178,6 +180,7 @@ class AIService:
             "- 所有建议仅供参考，不构成投资建议\n"
             "- 使用红涨绿跌的中国市场惯例\n"
             "- 回答要简洁专业，数据驱动\n"
+            "\n" + ANALYSIS_DISCIPLINE
         )
 
         # ── 始终注入：系统全量数据 ──

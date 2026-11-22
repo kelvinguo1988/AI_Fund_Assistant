@@ -481,9 +481,9 @@ class TestLegacyDbMigration:
         conn = self._legacy_conn(tmp_path)
         added = advice_mod.migrate_added_columns(conn)
         assert set(added) == {"advice_outcomes.hit_abs", "advice_outcomes.hit_excess",
-                              "advice_log.benchmark_kind"}
-        assert "benchmark_kind" in _cols(conn, "advice_log")
-        assert {"hit_abs", "hit_excess"} <= _cols(conn, "advice_outcomes")
+                              "advice_log.benchmark_kind", "advice_log.source"}
+        assert {"benchmark_kind", "source"} <= set(_cols(conn, "advice_log"))
+        assert {"hit_abs", "hit_excess"} <= set(_cols(conn, "advice_outcomes"))
         # 幂等：第二次不再改动任何东西
         assert advice_mod.migrate_added_columns(conn) == []
 

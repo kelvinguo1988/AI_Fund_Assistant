@@ -270,6 +270,11 @@ class FundRealtimeService:
     _etf_ts: float = 0.0
     _hk_ts: float = 0.0
     _index_ts: float = 0.0
+    # A 股个股主力净流入（评审团资金面维度，2026-11-22）：东财全市场快照
+    # 自带"主力净流入-净额"列——同一请求的衍生数据，零新增上游请求。
+    # 腾讯/新浪降级源无此列，过期后不补（调用方如实降级为"资金面不可用"）。
+    _stock_inflow_cache: Optional[dict[str, float]] = None
+    _stock_inflow_ts: float = 0.0
     # 补锁：四类快照原来共用一把 _spot_lock，东财全市场刷新（60s+）期间
     # ETF/港股/指数全部排在同一把锁上；按快照类型分锁后互不阻塞
     # （每个方法只取自己的一把，无嵌套，不存在锁序问题）
@@ -872,6 +877,20 @@ class FundRealtimeService:
                         self._mark_source_ok(EM_SOURCE)
                         # 东财 A 股快照无时间列，用服务器拉取时间近似（仅空时填）
                         self._update_quote_time()
+                        # 顺带解析主力净流入（同一份 df，零新增请求；列缺失时置 None
+                        # 让下游走"资金面不可用"而不是拿旧值当新值）
+                        inflow: dict[str, float] = {}
+                        for _, row in df.iterrows():
+                            code = str(row.get("代码", ""))
+                            v = _to_float(row.get("主力净流入-净额"))
+                            if code and v is not None:
+                                inflow[code] = v
+                        FundRealtimeService._stock_inflow_cache = (
+                            inflow if inflow else None
+                        )
+                        FundRealtimeService._stock_inflow_ts = (
+                            now if inflow else 0.0
+                        )
                         logger.info(f"A 股实时快照刷新(东财): {len(pct_map)} 只")
                 except Exception as e:
                     self._mark_source_fail(EM_SOURCE, str(e)[:80])
@@ -891,6 +910,34 @@ class FundRealtimeService:
                 FundRealtimeService._stock_spot_cache = pct_map
                 FundRealtimeService._stock_ts = now
             return pct_map
+
+    # 资金面只读接口（评审团/提示用，2026-11-22）——零新增请求：
+    # A 股个股走东财快照衍生缓存，ETF 走已有 ETF 快照的 main_inflow_pct。
+    # 缓存不可用时返回 None，调用方必须如实降级（不给假数字）。
+    STOCK_INFLOW_TTL = 600.0  # 盘中资金流噪音大，10 分钟内有效
+
+    @classmethod
+    def get_stock_inflow(cls, codes: list[str]) -> Optional[dict[str, float]]:
+        """A 股个股主力净流入（元）→ {code: net_inflow}；只读缓存不发请求"""
+        cache = cls._stock_inflow_cache
+        if not cache or time.time() - cls._stock_inflow_ts > cls.STOCK_INFLOW_TTL:
+            return None
+        out = {c: cache[c] for c in codes if c in cache}
+        return out or None
+
+    @classmethod
+    def get_etf_inflow(cls, codes: list[str]) -> Optional[dict[str, float]]:
+        """ETF 主力净流入占比（%）→ {code: pct}；只读 ETF 快照缓存不发请求"""
+        cache = cls._etf_spot_cache
+        if not cache:
+            return None
+        out: dict[str, float] = {}
+        for c in codes:
+            row = cache.get(c)
+            v = row.get("main_inflow_pct") if row else None
+            if v is not None:
+                out[c] = v
+        return out or None
 
     async def _get_hk_spot(
         self, codes: Optional[list[str]] = None

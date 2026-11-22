@@ -17,6 +17,7 @@ from typing import AsyncIterator, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.ai.discipline import AGENT_DISCIPLINE_EXTRA
 from backend.ai_tools.registry import execute_tool, tool_specs
 from backend.llm.base import estimate_tokens
 from backend.models.ai_conversation import AIConversation
@@ -44,7 +45,10 @@ SYSTEM_PROMPT = """你是「AI 基金量化助手」的分析 Agent，服务于�
 - 回答中的每个数字都应能追溯到某次工具返回；结论要区分"数据显示"与"我的推断"。
 - 优先小步查询（指定 code/days/limit），避免一次性拉全池明细。
 - 最终回答用 Markdown：结论在前，表格列数据，末尾用一行注明本次调用了哪些工具。
-- 用户问与基金无关的问题，直接说明系统边界，不要调用工具。"""
+- 用户问与基金无关的问题，直接说明系统边界，不要调用工具。
+
+# 表达硬门控（2026-11-22 增补，借鉴 UZI-Skill HARD-GATE）
+""" + AGENT_DISCIPLINE_EXTRA + '"""'
 
 
 async def _load_ai_config(db: AsyncSession) -> dict:

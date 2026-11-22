@@ -26,7 +26,28 @@ logger = logging.getLogger(__name__)
 _DATA_SKILLS = {
     "组合X光透视": "_run_xray",
     "调仓建议自进化": "_run_advice_stats",
+    "基金评审团": "_run_fund_panel",
 }
+
+
+async def _run_fund_panel(db: AsyncSession, **kwargs) -> dict:
+    """基金评审团数据引擎（fund_id 必填；log=true 时共识落 advice_log 闭环）"""
+    from backend.services.fund_panel_service import FundPanelService
+
+    fund_id = kwargs.get("fund_id")
+    if fund_id is None or not str(fund_id).strip().isdigit():
+        return {"error": "缺少 fund_id 参数（基金的数字 ID，可从基金列表工具获取）"}
+    panel = await FundPanelService.convene(db, int(str(fund_id).strip()))
+    out = {"panel": panel}
+    if str(kwargs.get("log", "")).lower() in ("true", "1", "yes"):
+        advice_id = FundPanelService.log_consensus(panel)
+        out["logged"] = bool(advice_id)
+        out["log_note"] = (
+            "共识已落 advice_log(source='panel')，30 个净值日后自动回填命中率"
+            if advice_id else
+            "未落库：同基金同方向今日已有记录（去重）或共识为中性无操作方向"
+        )
+    return out
 
 
 async def _run_xray(db: AsyncSession, **kwargs) -> dict:
