@@ -52,6 +52,8 @@ class TestFundgzOffHours:
 
         monkeypatch.setattr(frs, "_in_trading_hours", lambda: True)
         frs.FundRealtimeService._fundgz_fail_until = 0.0
+        # 本用例验证的是「反爬 → 冷却」分支，必须确保没被下线标记短路
+        monkeypatch.setattr(frs, "_fundgz_dead", False)
 
         class FakeResp:
             text = "<html>blocked</html>"

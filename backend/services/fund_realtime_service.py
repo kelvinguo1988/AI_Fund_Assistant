@@ -1349,8 +1349,17 @@ class FundRealtimeService:
         """天天基金估值 JSONP（失败进入 5 分钟冷却，防反爬穿透）
 
         只在冷却期外逐基金请求；全池 OTC 基金由调用方在冷却时整批跳过。
+
+        2026-11-26：fundgz 已被监管下线（对任意代码返回 HTML 404 页），
+        探测到后置 _fundgz_dead，本进程内不再请求。
         """
+        global _fundgz_dead
         now = time.time()
+        # 已判定接口下线 → 一次都不再请求（2026-11-26）。
+        # 否则 24 只基金每轮都要打 24 次必然失败的请求，纯属浪费且增加
+        # 被上游风控记住的风险。下线是政策性的，本进程内不会自己恢复。
+        if _fundgz_dead:
+            return None
         # 冷却只在盘中生效：收盘后 fundgz 本就不给估值，没必要拦，也不该让
         # 上一交易时段残留的冷却挡住次日开盘（2026-10-21）
         if _in_trading_hours() and now < FundRealtimeService._fundgz_fail_until:
@@ -1389,7 +1398,6 @@ class FundRealtimeService:
             # ② 收盘后正常无估值：按收盘常态跳过，不冷却。
             #
             # ③ 盘中真被反爬：才进冷却。
-            global _fundgz_dead
             if looks_like_html_error(text):
                 if not _fundgz_dead:
                     _fundgz_dead = True
