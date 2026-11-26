@@ -265,13 +265,36 @@ def looks_like_html_error(text: str) -> bool:
       · 反爬页：可能是别的拦截页（"blocked"/验证页），那属于风控，
         仍应走「盘中反爬 → 冷却」的既有逻辑，不能误判成永久下线。
 
-    只认 404 页特征，其余 HTML 一律交给反爬分支。
+    **编码坑**（实测踩到）：该响应是 GBK，而 requests 的 `r.text` 按
+    UTF-8 猜测解码 → 中文变成 `é¡µé¢æªæ¾å°`，`"页面未找到"` 永远匹配不上，
+    于是判定失效、每轮仍白打 24 次请求。这里同时认：
+      · 解码后的中文（若调用方已正确解码）
+      · GBK 原文的字节特征（UTF-8 误解码后的乱码前缀）
+      · 结构特征（doctype html + title 标签 + 非 JSONP）
     """
     t = text or ""
+    if not t.strip():
+        return False
+    # 1) 已正确解码：直接认中文
     if "页面未找到" in t:
         return True
-    head = t[:600]
-    return "东方财富" in head and "404" in head
+    low = t[:600].lower()
+    is_html = "<!doctype html" in low or "<html" in low
+    if not is_html:
+        return False
+    # 2) GBK 被按 UTF-8 误解码的典型乱码前缀（"页面未找到"的 GBK 字节）
+    #    b'\xd2\xb3\xc3\xe6\xce\xb4\xd5\xd2\xb5\xbd' 解成 UTF-8 会带这些片段
+    if "é¡µé¢" in t or "\xd2\xb3\xc3\xe6" in t:
+        return True
+    # 3) 结构特征兜底：东方财富 404 页同时满足「HTML + 无 JSONP + 无验证/风控特征」。
+    #    不能只看 "有 title 就判下线"——那会把「请完成验证」这类反爬页也误判，
+    #    导致真正的风控被当成永久失效、整条链路自己关掉。
+    if "jsonpgz" in low:
+        return False
+    for bot_kw in ("验证", "captcha", "blocked", "访问频繁", "安全检测"):
+        if bot_kw in t:
+            return False
+    return "<title" in low and ("404" in low or "not found" in low)
 
 
 def compute_holdings_growth(

@@ -58,6 +58,20 @@ class TestHtmlErrorDetection:
     def test_empty_text(self):
         assert looks_like_html_error("") is False
 
+    def test_gbk_mojibake_detected(self):
+        """关键坑：该响应是 GBK，requests 的 r.text 按 UTF-8 误解码
+
+        中文变成 `é¡µé¢æªæ¾å°`，若只匹配 "页面未找到" 则永远失效，
+        导致判定不生效、每轮白打 24 次请求（2026-11-26 实测踩到）。
+        """
+        mojibake = '\n<!doctype html>\n<html>\n<head> \n<title>é¡µé¢æªæ¾å° - ä¸æ¹è´¢å¯ç½</title>'
+        assert looks_like_html_error(mojibake) is True
+
+    def test_anti_bot_with_title_still_not_deprecated(self):
+        """带 title 的反爬页仍不能判下线（只认 404 特征）"""
+        page = "<html><head><title>请完成验证</title></head><body>captcha</body></html>"
+        assert looks_like_html_error(page) is False
+
 
 class TestTencentNavParser:
     RAW = (
