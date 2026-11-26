@@ -8,8 +8,17 @@ import type { ApiResponse, AnalysisResultOut, MarketSummaryOut, MarketRegimeOut,
 const BASE = '/api/analysis';
 
 export const analysisApi = {
-  query: (params?: { date?: string; fund_id?: number }) =>
+  query: (params?: {
+    date?: string;
+    fund_id?: number;
+    limit?: number;
+    offset?: number;
+  }) =>
     apiClient.get<ApiResponse<AnalysisResultOut[]>>(BASE, { params }).then((r) => r.data),
+
+  /** 分析结果总数（分页器用；只扫索引，不加载行） */
+  count: (params?: { date?: string; fund_id?: number }) =>
+    apiClient.get<ApiResponse<{ total: number }>>(`${BASE}/count`, { params }).then((r) => r.data),
 
   exportAnalysis: () =>
     apiClient.get(`${BASE}/export`, { responseType: 'blob' }).then((r) => {

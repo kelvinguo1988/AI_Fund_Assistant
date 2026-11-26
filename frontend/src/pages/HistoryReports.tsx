@@ -11,6 +11,8 @@ import {
   TableBody,
   TableCell,
   TableContainer,
+  TablePagination,
+  LinearProgress,
   TableHead,
   TableRow,
   Paper,
@@ -35,6 +37,12 @@ import type { AnalysisResultOut } from '../types';
 const HistoryReports: React.FC = () => {
   const [results, setResults] = useState<AnalysisResultOut[]>([]);
   const [filterDate, setFilterDate] = useState('');
+  // 服务端分页（2026-11-26 性能修复）：原先一次性拉全量 856 条 / 1.85MB
+  // 并在前端 map 渲染全部卡片，进页面要等数秒。
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);        // 0-based
+  const [rowsPerPage, setRowsPerPage] = useState(50);
+  const [loading, setLoading] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedResult, setSelectedResult] = useState<AnalysisResultOut | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
@@ -42,15 +50,37 @@ const HistoryReports: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadResults = async () => {
+    setLoading(true);
     try {
-      const res = await analysisApi.query(filterDate ? { date: filterDate } : undefined);
+      const res = await analysisApi.query({
+        ...(filterDate ? { date: filterDate } : {}),
+        limit: rowsPerPage,
+        offset: page * rowsPerPage,
+      });
       if (res.data) setResults(res.data);
     } catch {
       setSnackbar({ open: true, message: '加载历史报告失败', severity: 'error' });
+    } finally {
+      setLoading(false);
     }
   };
 
-  useEffect(() => { loadResults(); }, [filterDate]);
+  // 总数单独取（count 只扫索引，比拉全量再数长度快两个数量级）
+  const loadTotal = async () => {
+    try {
+      const res = await analysisApi.count(filterDate ? { date: filterDate } : undefined);
+      if (res.data) setTotal(res.data.total);
+    } catch {
+      // 总数拿不到不影响列表展示，静默降级
+    }
+  };
+
+  useEffect(() => {
+    setPage(0);        // 换筛选条件回到第一页
+  }, [filterDate]);
+
+  useEffect(() => { loadResults(); }, [filterDate, page, rowsPerPage]);
+  useEffect(() => { loadTotal(); }, [filterDate]);
 
   const handleExport = async () => {
     try {
@@ -110,6 +140,7 @@ const HistoryReports: React.FC = () => {
       </Box>
 
       <TableContainer component={Paper}>
+        {loading && <LinearProgress sx={{ height: 2 }} />}
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -153,6 +184,22 @@ const HistoryReports: React.FC = () => {
             )}
           </TableBody>
         </Table>
+        <TablePagination
+          component="div"
+          count={total}
+          page={page}
+          onPageChange={(_, p) => setPage(p)}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={(e) => {
+            setRowsPerPage(parseInt(e.target.value, 10));
+            setPage(0);
+          }}
+          rowsPerPageOptions={[20, 50, 100, 200]}
+          labelRowsPerPage="每页"
+          labelDisplayedRows={({ from, to, count }) =>
+            `${from}–${to} / ${count === -1 ? `超过 ${to}` : count}`
+          }
+        />
       </TableContainer>
 
       {/* 详情弹窗 */}

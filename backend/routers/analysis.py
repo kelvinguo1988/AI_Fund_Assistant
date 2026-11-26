@@ -146,14 +146,32 @@ async def _batch_load_funds(db: AsyncSession, results: list[AnalysisResult]) -> 
 async def query_analysis(
     date_param: Optional[str] = Query(None, alias="date"),
     fund_id: Optional[int] = Query(None),
+    limit: Optional[int] = Query(
+        None, ge=1, le=2000,
+        description="返回条数上限；不传=全量（历史行为，兼容导出等场景）",
+    ),
+    offset: int = Query(0, ge=0, description="跳过条数（配合 limit 做分页）"),
     db: AsyncSession = Depends(get_db),
 ):
-    """查询分析结果"""
-    stmt = select(AnalysisResult).order_by(AnalysisResult.analysis_date.desc())
+    """查询分析结果
+
+    分页（2026-11-26 性能修复）：
+    历史页原先一次性拉全量 856 条 / 1.85MB 并在前端 map 渲染全部卡片，
+    实测进页面要等数秒。加 limit/offset 后默认只取最近一页，
+    响应体积与渲染量都降一个数量级。
+
+    **不传 limit 时保持全量**，避免影响导出、回测等既有调用方。
+    """
+    stmt = select(AnalysisResult).order_by(
+        AnalysisResult.analysis_date.desc(), AnalysisResult.id.desc()
+    )
     if date_param:
         stmt = stmt.where(AnalysisResult.analysis_date == date_param)
     if fund_id:
         stmt = stmt.where(AnalysisResult.fund_id == fund_id)
+
+    if limit is not None:
+        stmt = stmt.offset(offset).limit(limit)
 
     result = await db.execute(stmt)
     results = result.scalars().all()
@@ -162,6 +180,28 @@ async def query_analysis(
     out_list = [_result_to_out(r, fund_map.get(r.fund_id)) for r in results]
 
     return ApiResponse(data=out_list)
+
+
+@router.get("/count", response_model=ApiResponse[dict])
+async def count_analysis(
+    date_param: Optional[str] = Query(None, alias="date"),
+    fund_id: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """分析结果总数（供前端分页器计算页数）
+
+    单独一个轻量接口：count 只扫索引，不加载行，
+    比让前端拿全量再数长度快两个数量级。
+    """
+    from sqlalchemy import func
+
+    stmt = select(func.count(AnalysisResult.id))
+    if date_param:
+        stmt = stmt.where(AnalysisResult.analysis_date == date_param)
+    if fund_id:
+        stmt = stmt.where(AnalysisResult.fund_id == fund_id)
+    total = (await db.execute(stmt)).scalar() or 0
+    return ApiResponse(data={"total": int(total)})
 
 
 @router.get("/latest", response_model=ApiResponse[list[AnalysisResultOut]])
