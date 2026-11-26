@@ -282,10 +282,20 @@ def looks_like_html_error(text: str) -> bool:
     is_html = "<!doctype html" in low or "<html" in low
     if not is_html:
         return False
-    # 2) GBK 被按 UTF-8 误解码的典型乱码前缀（"页面未找到"的 GBK 字节）
-    #    b'\xd2\xb3\xc3\xe6\xce\xb4\xd5\xd2\xb5\xbd' 解成 UTF-8 会带这些片段
-    if "é¡µé¢" in t or "\xd2\xb3\xc3\xe6" in t:
+    # 2) GBK 被按 UTF-8 误解码：中文变成不可打印字节混杂的乱码，
+    #    字面量匹配不可靠（实测 'é¡µé\x9d¢' 里夹着 \x9d）。
+    #    改用**字节级**判据：东方财富 404 页的 GBK 原文必含「页面未找到」，
+    #    其 GBK 字节为 b'\xd2\xb3\xc3\xe6\xce\xb4\xd5\xd2\xb5\xbd'。
+    try:
+        raw = t.encode("utf-8", "surrogateescape")
+    except (UnicodeEncodeError, ValueError):
+        raw = b""
+    if b"\xd2\xb3\xc3\xe6\xce\xb4\xd5\xd2\xb5\xbd" in raw:
         return True
+    # 兜底：乱码里若出现「页面未找到」经 UTF-8 误解码后的可打印片段
+    for frag in ("é¡µé", "æªæ¾å", "ä¸æ¹è´¢å"):
+        if frag in t:
+            return True
     # 3) 结构特征兜底：东方财富 404 页同时满足「HTML + 无 JSONP + 无验证/风控特征」。
     #    不能只看 "有 title 就判下线"——那会把「请完成验证」这类反爬页也误判，
     #    导致真正的风控被当成永久失效、整条链路自己关掉。

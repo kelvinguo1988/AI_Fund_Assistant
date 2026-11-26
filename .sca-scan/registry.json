@@ -1,0 +1,294 @@
+{
+  "['npm', '@dnd-kit/core']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/clauderic/dnd-kit.git",
+    "latest_version": null,
+    "weekly_downloads": 45165271
+  },
+  "['npm', '@dnd-kit/sortable']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/clauderic/dnd-kit.git",
+    "latest_version": null,
+    "weekly_downloads": 43369005
+  },
+  "['npm', '@emotion/react']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/emotion-js/emotion.git#main",
+    "latest_version": null,
+    "weekly_downloads": 29215847
+  },
+  "['npm', '@emotion/styled']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/emotion-js/emotion.git#main",
+    "latest_version": null,
+    "weekly_downloads": 18992212
+  },
+  "['npm', '@mui/icons-material']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/mui/material-ui.git",
+    "latest_version": null,
+    "weekly_downloads": 10791315
+  },
+  "['npm', '@mui/material']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/mui/material-ui.git",
+    "latest_version": null,
+    "weekly_downloads": 14815592
+  },
+  "['npm', '@types/react']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+    "latest_version": null,
+    "weekly_downloads": 246625635
+  },
+  "['npm', '@types/react-dom']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "https://github.com/DefinitelyTyped/DefinitelyTyped.git",
+    "latest_version": null,
+    "weekly_downloads": 209441588
+  },
+  "['npm', '@vitejs/plugin-react']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/vitejs/vite-plugin-react.git",
+    "latest_version": null,
+    "weekly_downloads": 141946313
+  },
+  "['npm', 'autoprefixer']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/postcss/autoprefixer.git",
+    "latest_version": null,
+    "weekly_downloads": 78790506
+  },
+  "['npm', 'axios']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/axios/axios.git",
+    "latest_version": null,
+    "weekly_downloads": 150856375
+  },
+  "['npm', 'echarts']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/apache/echarts.git",
+    "latest_version": null,
+    "weekly_downloads": 11175170
+  },
+  "['npm', 'echarts-for-react']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/hustcc/echarts-for-react.git",
+    "latest_version": null,
+    "weekly_downloads": 2194600
+  },
+  "['npm', 'postcss']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/postcss/postcss.git",
+    "latest_version": null,
+    "weekly_downloads": 441252928
+  },
+  "['npm', 'react']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/facebook/react.git",
+    "latest_version": null,
+    "weekly_downloads": 273970923
+  },
+  "['npm', 'react-dom']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/facebook/react.git",
+    "latest_version": null,
+    "weekly_downloads": 258598987
+  },
+  "['npm', 'react-markdown']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/remarkjs/react-markdown.git",
+    "latest_version": null,
+    "weekly_downloads": 61191222
+  },
+  "['npm', 'react-router-dom']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/remix-run/react-router.git",
+    "latest_version": null,
+    "weekly_downloads": 59528719
+  },
+  "['npm', 'remark-gfm']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/remarkjs/remark-gfm.git",
+    "latest_version": null,
+    "weekly_downloads": 76031091
+  },
+  "['npm', 'tailwindcss']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/tailwindlabs/tailwindcss.git#v3",
+    "latest_version": null,
+    "weekly_downloads": 190424610
+  },
+  "['npm', 'typescript']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/microsoft/TypeScript.git",
+    "latest_version": null,
+    "weekly_downloads": 448017757
+  },
+  "['npm', 'vite']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/vitejs/vite.git",
+    "latest_version": null,
+    "weekly_downloads": 288613751
+  },
+  "['npm', 'zustand']": {
+    "exists": true,
+    "checked": true,
+    "deprecated": null,
+    "repository": "git+https://github.com/pmndrs/zustand.git",
+    "latest_version": null,
+    "weekly_downloads": 96784159
+  },
+  "['pypi', 'aiosqlite']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 18662603
+  },
+  "['pypi', 'akshare']": {
+    "exists": true,
+    "checked": true,
+    "license": "MIT",
+    "weekly_downloads": 285257
+  },
+  "['pypi', 'apscheduler']": {
+    "exists": true,
+    "checked": true,
+    "license": "MIT",
+    "weekly_downloads": 9986662
+  },
+  "['pypi', 'chinese-calendar']": {
+    "exists": true,
+    "checked": true,
+    "license": "MIT License",
+    "weekly_downloads": 19016
+  },
+  "['pypi', 'cryptography']": {
+    "exists": true,
+    "checked": true,
+    "license": "Apache-2.0 OR BSD-3-Clause",
+    "weekly_downloads": 316243255
+  },
+  "['pypi', 'curl-cffi']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 8004518
+  },
+  "['pypi', 'fastapi']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 136078054
+  },
+  "['pypi', 'httpx']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 196294891
+  },
+  "['pypi', 'numpy']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 263204641
+  },
+  "['pypi', 'openai']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 91828050
+  },
+  "['pypi', 'pydantic']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 282417094
+  },
+  "['pypi', 'pytest']": {
+    "exists": true,
+    "checked": true,
+    "license": "MIT",
+    "weekly_downloads": 241156321
+  },
+  "['pypi', 'pytest-asyncio']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 69735078
+  },
+  "['pypi', 'python-dotenv']": {
+    "exists": true,
+    "checked": true,
+    "license": "BSD-3-Clause",
+    "weekly_downloads": 182400277
+  },
+  "['pypi', 'requests']": {
+    "exists": true,
+    "checked": true,
+    "license": "Apache-2.0",
+    "weekly_downloads": 351080229
+  },
+  "['pypi', 'sqlalchemy']": {
+    "exists": true,
+    "checked": true,
+    "license": "MIT",
+    "weekly_downloads": 102133587
+  },
+  "['pypi', 'tzdata']": {
+    "exists": true,
+    "checked": true,
+    "license": "Apache-2.0",
+    "weekly_downloads": 168044888
+  },
+  "['pypi', 'uvicorn']": {
+    "exists": true,
+    "checked": true,
+    "license": null,
+    "weekly_downloads": 164839304
+  }
+}

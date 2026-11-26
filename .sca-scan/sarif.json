@@ -1,0 +1,2564 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "ai-sca-scan",
+          "version": "1.0.0",
+          "informationUri": "https://osv.dev"
+        }
+      },
+      "rules": [
+        {
+          "id": "CVE-2026-49356",
+          "name": "CVE-2026-49356",
+          "shortDescription": {
+            "text": "@babel/core: Arbitrary File Read via sourceMappingURL Comment"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-49356"
+        },
+        {
+          "id": "CVE-2026-40181",
+          "name": "CVE-2026-40181",
+          "shortDescription": {
+            "text": "React Router's same-origin redirect with path starting // causes open redirect via protocol-relative URL reinterpretation"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-40181"
+        },
+        {
+          "id": "CVE-2026-101898",
+          "name": "CVE-2026-101898",
+          "shortDescription": {
+            "text": "Axios: HTTP/2 adapter bypasses configured DNS lookup and proxy controls"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101898"
+        },
+        {
+          "id": "CVE-2026-67313",
+          "name": "CVE-2026-67313",
+          "shortDescription": {
+            "text": "Axios: Excessive recursion in formDataToJSON can cause denial of service"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67313"
+        },
+        {
+          "id": "CVE-2026-101899",
+          "name": "CVE-2026-101899",
+          "shortDescription": {
+            "text": "Axios: CIDR-form NO_PROXY entries are ignored, causing proxy exclusion bypass for internal IP ranges"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101899"
+        },
+        {
+          "id": "CVE-2026-101900",
+          "name": "CVE-2026-101900",
+          "shortDescription": {
+            "text": "Axios: Fetch Adapter Header Injection via Inherited FormData getHeaders"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101900"
+        },
+        {
+          "id": "CVE-2026-101901",
+          "name": "CVE-2026-101901",
+          "shortDescription": {
+            "text": "Axios: Denial of Service via Unhandled 'error' Event in HTTP/2 ClientHttp2Session Initialization"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101901"
+        },
+        {
+          "id": "CVE-2026-67319",
+          "name": "CVE-2026-67319",
+          "shortDescription": {
+            "text": "Axios: Nested axios option objects can consume polluted prototype values"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67319"
+        },
+        {
+          "id": "CVE-2026-101902",
+          "name": "CVE-2026-101902",
+          "shortDescription": {
+            "text": "Axios: Prototype-Pollution Gadget in the Default Instance Allows Inherited Object.prototype.method to Override HTTP Method"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101902"
+        },
+        {
+          "id": "CVE-2026-101903",
+          "name": "CVE-2026-101903",
+          "shortDescription": {
+            "text": "Axios: ReDoS in fromDataURI data: URL parser freezes the Node event loop (DoS)"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101903"
+        },
+        {
+          "id": "CVE-2026-67315",
+          "name": "CVE-2026-67315",
+          "shortDescription": {
+            "text": "Axios: NO_PROXY bypass for 0.0.0.0 local addresses in axios"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67315"
+        },
+        {
+          "id": "CVE-2026-67320",
+          "name": "CVE-2026-67320",
+          "shortDescription": {
+            "text": "Axios Node HTTP adapter can use an inherited proxy after interceptor config cloning"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67320"
+        },
+        {
+          "id": "CVE-2026-67321",
+          "name": "CVE-2026-67321",
+          "shortDescription": {
+            "text": "Axios form serializer maxDepth bypass via {} metatoken"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67321"
+        },
+        {
+          "id": "CVE-2026-101904",
+          "name": "CVE-2026-101904",
+          "shortDescription": {
+            "text": "Axios: Header Injection via Inherited headers After Minimal Interceptor"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101904"
+        },
+        {
+          "id": "CVE-2026-67317",
+          "name": "CVE-2026-67317",
+          "shortDescription": {
+            "text": "Axios: Fetch adapter `ReadableStream` uploads bypass `maxBodyLength`"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67317"
+        },
+        {
+          "id": "CVE-2026-101905",
+          "name": "CVE-2026-101905",
+          "shortDescription": {
+            "text": "Axios: Node HTTP adapter prototype-pollution gadget allows request socket hijack via inherited createConnection"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101905"
+        },
+        {
+          "id": "CVE-2026-101906",
+          "name": "CVE-2026-101906",
+          "shortDescription": {
+            "text": "Axios: ReDoS (O(N²)) in shouldBypassProxy host normalization, reachable via untrusted redirect Location"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101906"
+        },
+        {
+          "id": "CVE-2026-67316",
+          "name": "CVE-2026-67316",
+          "shortDescription": {
+            "text": "Axios: Prototype pollution gadgets can alter axios request construction"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67316"
+        },
+        {
+          "id": "CVE-2026-67318",
+          "name": "CVE-2026-67318",
+          "shortDescription": {
+            "text": "Axios: HTTP/2 streamed uploads bypass `maxBodyLength`"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67318"
+        },
+        {
+          "id": "CVE-2026-67312",
+          "name": "CVE-2026-67312",
+          "shortDescription": {
+            "text": "Axios: Deep formToJSON Key Recursion Can Cause Denial of Service"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67312"
+        },
+        {
+          "id": "CVE-2026-101908",
+          "name": "CVE-2026-101908",
+          "shortDescription": {
+            "text": "Axios: Prototype pollution gadget in fetch adapter can alter outbound requests"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101908"
+        },
+        {
+          "id": "CVE-2026-101909",
+          "name": "CVE-2026-101909",
+          "shortDescription": {
+            "text": "Axios: Prototype Pollution Gadget in axios toFormData Options"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-101909"
+        },
+        {
+          "id": "CVE-2026-67314",
+          "name": "CVE-2026-67314",
+          "shortDescription": {
+            "text": "Axios: Prototype pollution auth subfields can inject Basic auth"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67314"
+        },
+        {
+          "id": "CVE-2026-45819",
+          "name": "CVE-2026-45819",
+          "shortDescription": {
+            "text": "baseline-browser-mapping process termination on invalid input causes denial of service"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-45819"
+        },
+        {
+          "id": "CVE-2026-73088",
+          "name": "CVE-2026-73088",
+          "shortDescription": {
+            "text": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-73088"
+        },
+        {
+          "id": "CVE-2026-73089",
+          "name": "CVE-2026-73089",
+          "shortDescription": {
+            "text": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-73089"
+        },
+        {
+          "id": "CVE-2026-45249",
+          "name": "CVE-2026-45249",
+          "shortDescription": {
+            "text": "Apache ECharts has a cross-site scripting (XSS) vulnerability"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-45249"
+        },
+        {
+          "id": "GHSA-67mh-4wv8-2f99",
+          "name": "GHSA-67mh-4wv8-2f99",
+          "shortDescription": {
+            "text": "esbuild enables any website to send any requests to the development server and read the response"
+          },
+          "helpUri": "https://osv.dev/vulnerability/GHSA-67mh-4wv8-2f99"
+        },
+        {
+          "id": "CVE-2026-111755",
+          "name": "CVE-2026-111755",
+          "shortDescription": {
+            "text": "follow-redirects sensitiveHeaders regex escaping can expose credential headers"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-111755"
+        },
+        {
+          "id": "CVE-2026-116689",
+          "name": "CVE-2026-116689",
+          "shortDescription": {
+            "text": "follow-redirects: Cross-realm sensitiveHeaders arrays are discarded and custom credentials can follow redirects"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-116689"
+        },
+        {
+          "id": "CVE-2026-111756",
+          "name": "CVE-2026-111756",
+          "shortDescription": {
+            "text": "follow-redirects array-form headers bypass cross-origin credential stripping"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-111756"
+        },
+        {
+          "id": "CVE-2026-12143",
+          "name": "CVE-2026-12143",
+          "shortDescription": {
+            "text": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-12143"
+        },
+        {
+          "id": "CVE-2026-67214",
+          "name": "CVE-2026-67214",
+          "shortDescription": {
+            "text": "nanoid: non-secure generators can loop indefinitely with negative size"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67214"
+        },
+        {
+          "id": "CVE-2026-67213",
+          "name": "CVE-2026-67213",
+          "shortDescription": {
+            "text": "nanoid: custom generators can loop indefinitely when size is zero"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-67213"
+        },
+        {
+          "id": "CVE-2026-69153",
+          "name": "CVE-2026-69153",
+          "shortDescription": {
+            "text": "PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-69153"
+        },
+        {
+          "id": "CVE-2026-73646",
+          "name": "CVE-2026-73646",
+          "shortDescription": {
+            "text": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-73646"
+        },
+        {
+          "id": "CVE-2026-104844",
+          "name": "CVE-2026-104844",
+          "shortDescription": {
+            "text": "PostCSS: Quadratic complexity in flat selector parsing allows CPU exhaustion"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-104844"
+        },
+        {
+          "id": "CVE-2026-9358",
+          "name": "CVE-2026-9358",
+          "shortDescription": {
+            "text": "postcss-selector-parser allows denial of service through uncontrolled AST recursion"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-9358"
+        },
+        {
+          "id": "CVE-2026-53666",
+          "name": "CVE-2026-53666",
+          "shortDescription": {
+            "text": "React Router: Arbitrary Constructor Injection via deserializeErrors() in React Router SSR Hydration"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-53666"
+        },
+        {
+          "id": "CVE-2026-53669",
+          "name": "CVE-2026-53669",
+          "shortDescription": {
+            "text": "React Router: Open redirect via backslash in <Link> and useNavigate (CVE-2025-68470 bypass)"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-53669"
+        },
+        {
+          "id": "CVE-2026-53668",
+          "name": "CVE-2026-53668",
+          "shortDescription": {
+            "text": "React Router: Open redirect leading to XSS"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-53668"
+        },
+        {
+          "id": "CVE-2026-93749",
+          "name": "CVE-2026-93749",
+          "shortDescription": {
+            "text": "source-map-js allows event-loop denial of service through indexed source-map section offsets"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-93749"
+        },
+        {
+          "id": "CVE-2026-39365",
+          "name": "CVE-2026-39365",
+          "shortDescription": {
+            "text": "Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-39365"
+        },
+        {
+          "id": "CVE-2026-112942",
+          "name": "CVE-2026-112942",
+          "shortDescription": {
+            "text": "launch-editor: `fs.existsSync()` existence check can be bypassed on Windows"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-112942"
+        },
+        {
+          "id": "CVE-2026-112943",
+          "name": "CVE-2026-112943",
+          "shortDescription": {
+            "text": "launch-editor: escapeCmdArgs() omits % escaping on Windows"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-112943"
+        },
+        {
+          "id": "CVE-2026-112945",
+          "name": "CVE-2026-112945",
+          "shortDescription": {
+            "text": "Vite: Cross origin script execution through Vite custom middleware"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-112945"
+        },
+        {
+          "id": "CVE-2026-53571",
+          "name": "CVE-2026-53571",
+          "shortDescription": {
+            "text": "vite: `server.fs.deny` bypass on Windows alternate paths"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-53571"
+        },
+        {
+          "id": "CVE-2026-112944",
+          "name": "CVE-2026-112944",
+          "shortDescription": {
+            "text": "launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-112944"
+        },
+        {
+          "id": "CVE-2026-112946",
+          "name": "CVE-2026-112946",
+          "shortDescription": {
+            "text": "Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-112946"
+        },
+        {
+          "id": "CVE-2026-53632",
+          "name": "CVE-2026-53632",
+          "shortDescription": {
+            "text": "launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-53632"
+        },
+        {
+          "id": "GHSA-537c-gmf6-5ccf",
+          "name": "GHSA-537c-gmf6-5ccf",
+          "shortDescription": {
+            "text": "Vulnerable OpenSSL included in cryptography wheels"
+          },
+          "helpUri": "https://osv.dev/vulnerability/GHSA-537c-gmf6-5ccf"
+        },
+        {
+          "id": "CVE-2024-26130",
+          "name": "CVE-2024-26130",
+          "shortDescription": {
+            "text": "cryptography NULL pointer dereference with pkcs12.serialize_key_and_certificates when called with a non-matching certificate and private key and an hmac_hash override"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2024-26130"
+        },
+        {
+          "id": "CVE-2024-12797",
+          "name": "CVE-2024-12797",
+          "shortDescription": {
+            "text": "Vulnerable OpenSSL included in cryptography wheels"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2024-12797"
+        },
+        {
+          "id": "CVE-2024-0727",
+          "name": "CVE-2024-0727",
+          "shortDescription": {
+            "text": "Null pointer dereference in PKCS12 parsing"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2024-0727"
+        },
+        {
+          "id": "GHSA-h4gh-qq45-vh27",
+          "name": "GHSA-h4gh-qq45-vh27",
+          "shortDescription": {
+            "text": "pyca/cryptography has a vulnerable OpenSSL included in cryptography wheels"
+          },
+          "helpUri": "https://osv.dev/vulnerability/GHSA-h4gh-qq45-vh27"
+        },
+        {
+          "id": "CVE-2026-69249",
+          "name": "CVE-2026-69249",
+          "shortDescription": {
+            "text": "python-cryptography: Duplicate self-signed intermediates can cause exponential path-building"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-69249"
+        },
+        {
+          "id": "CVE-2026-34073",
+          "name": "CVE-2026-34073",
+          "shortDescription": {
+            "text": "cryptography has incomplete DNS name constraint enforcement on peer names"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-34073"
+        },
+        {
+          "id": "CVE-2026-26007",
+          "name": "CVE-2026-26007",
+          "shortDescription": {
+            "text": "cryptography Vulnerable to a Subgroup Attack Due to Missing Subgroup Validation for SECT Curves"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-26007"
+        },
+        {
+          "id": "CVE-2026-69248",
+          "name": "CVE-2026-69248",
+          "shortDescription": {
+            "text": "python-cryptography verifier accepts wildcard DNS names allowing escape from permittedSubtrees"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-69248"
+        },
+        {
+          "id": "CVE-2025-71176",
+          "name": "CVE-2025-71176",
+          "shortDescription": {
+            "text": "pytest has vulnerable tmpdir handling"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2025-71176"
+        },
+        {
+          "id": "CVE-2026-28684",
+          "name": "CVE-2026-28684",
+          "shortDescription": {
+            "text": "python-dotenv: Symlink following in set_key allows arbitrary file overwrite via cross-device rename fallback"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-28684"
+        },
+        {
+          "id": "CVE-2025-54121",
+          "name": "CVE-2025-54121",
+          "shortDescription": {
+            "text": "Starlette has possible denial-of-service vector when parsing large files in multipart forms"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2025-54121"
+        },
+        {
+          "id": "CVE-2026-54283",
+          "name": "CVE-2026-54283",
+          "shortDescription": {
+            "text": "Starlette: request.form() limits silently ignored for application/x-www-form-urlencoded enable DoS"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-54283"
+        },
+        {
+          "id": "CVE-2026-48710",
+          "name": "CVE-2026-48710",
+          "shortDescription": {
+            "text": "Starlette has missing Host header validation that poisons request.url.path, bypassing path-based security checks"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-48710"
+        },
+        {
+          "id": "CVE-2024-47874",
+          "name": "CVE-2024-47874",
+          "shortDescription": {
+            "text": "Starlette Denial of service (DoS) via multipart/form-data"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2024-47874"
+        },
+        {
+          "id": "CVE-2026-54282",
+          "name": "CVE-2026-54282",
+          "shortDescription": {
+            "text": "Starlette: Unvalidated request path concatenated into authority poisons request.url.hostname"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-54282"
+        },
+        {
+          "id": "CVE-2026-48818",
+          "name": "CVE-2026-48818",
+          "shortDescription": {
+            "text": "Starlette: SSRF and NTLM credential theft via UNC paths in StaticFiles on Windows"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-48818"
+        },
+        {
+          "id": "CVE-2026-48817",
+          "name": "CVE-2026-48817",
+          "shortDescription": {
+            "text": "Starlette: Arbitrary HTTP method dispatched to `HTTPEndpoint` attributes via `getattr`"
+          },
+          "helpUri": "https://osv.dev/vulnerability/CVE-2026-48817"
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "CVE-2026-49356",
+          "ruleIndex": 0,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-49356 @babel/core@7.29.0 (GHSA/OSV): @babel/core: Arbitrary File Read via sourceMappingURL Comment | priority=P2 | trigger=network_input | fix=7.29.6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "@babel/core@7.29.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/%40babel/core@7.29.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-40181",
+          "ruleIndex": 1,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-40181 @remix-run/router@1.23.2 (GHSA/OSV): React Router's same-origin redirect with path starting // causes open redirect via protocol-relative URL reinterpretatio | priority=P3 | trigger=unknown | fix=1.23.3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "@remix-run/router@1.23.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/%40remix-run/router@1.23.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101898",
+          "ruleIndex": 2,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101898 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: HTTP/2 adapter bypasses configured DNS lookup and proxy controls | priority=P0 | trigger=network_input | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67313",
+          "ruleIndex": 3,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67313 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Excessive recursion in formDataToJSON can cause denial of service | priority=P1 | trigger=dos_remote | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101899",
+          "ruleIndex": 4,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101899 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: CIDR-form NO_PROXY entries are ignored, causing proxy exclusion bypass for internal IP ranges | priority=P1 | trigger=unknown | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101900",
+          "ruleIndex": 5,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101900 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Fetch Adapter Header Injection via Inherited FormData getHeaders | priority=P0 | trigger=network_input | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101901",
+          "ruleIndex": 6,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101901 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Denial of Service via Unhandled 'error' Event in HTTP/2 ClientHttp2Session Initialization | priority=P1 | trigger=dos_remote | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67319",
+          "ruleIndex": 7,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67319 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Nested axios option objects can consume polluted prototype values | priority=P0 | trigger=network_input | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101902",
+          "ruleIndex": 8,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101902 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Prototype-Pollution Gadget in the Default Instance Allows Inherited Object.prototype.method to Override HTTP Meth | priority=P0 | trigger=network_input | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101903",
+          "ruleIndex": 9,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101903 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: ReDoS in fromDataURI data: URL parser freezes the Node event loop (DoS) | priority=P1 | trigger=dos_remote | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67315",
+          "ruleIndex": 10,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67315 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: NO_PROXY bypass for 0.0.0.0 local addresses in axios | priority=P0 | trigger=network_input | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67320",
+          "ruleIndex": 11,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67320 axios@1.16.1 (GHSA/OSV/deps.dev): Axios Node HTTP adapter can use an inherited proxy after interceptor config cloning | priority=P0 | trigger=network_input | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67321",
+          "ruleIndex": 12,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67321 axios@1.16.1 (GHSA/OSV/deps.dev): Axios form serializer maxDepth bypass via {} metatoken | priority=P1 | trigger=unknown | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101904",
+          "ruleIndex": 13,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101904 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Header Injection via Inherited headers After Minimal Interceptor | priority=P0 | trigger=network_input | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67317",
+          "ruleIndex": 14,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67317 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Fetch adapter `ReadableStream` uploads bypass `maxBodyLength` | priority=P1 | trigger=dos_remote | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101905",
+          "ruleIndex": 15,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101905 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Node HTTP adapter prototype-pollution gadget allows request socket hijack via inherited createConnection | priority=P0 | trigger=network_input | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101906",
+          "ruleIndex": 16,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101906 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: ReDoS (O(N²)) in shouldBypassProxy host normalization, reachable via untrusted redirect Location | priority=P1 | trigger=dos_remote | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67316",
+          "ruleIndex": 17,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67316 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Prototype pollution gadgets can alter axios request construction | priority=P0 | trigger=network_input | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67318",
+          "ruleIndex": 18,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67318 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: HTTP/2 streamed uploads bypass `maxBodyLength` | priority=P1 | trigger=dos_remote | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67312",
+          "ruleIndex": 19,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67312 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Deep formToJSON Key Recursion Can Cause Denial of Service | priority=P1 | trigger=dos_remote | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101908",
+          "ruleIndex": 20,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101908 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Prototype pollution gadget in fetch adapter can alter outbound requests | priority=P0 | trigger=network_input | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-101909",
+          "ruleIndex": 21,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-101909 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Prototype Pollution Gadget in axios toFormData Options | priority=P0 | trigger=network_input | fix=1.20.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67314",
+          "ruleIndex": 22,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-67314 axios@1.16.1 (GHSA/OSV/deps.dev): Axios: Prototype pollution auth subfields can inject Basic auth | priority=P0 | trigger=network_input | fix=1.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "axios@1.16.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/axios@1.16.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-45819",
+          "ruleIndex": 23,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-45819 baseline-browser-mapping@2.10.30 (GHSA/OSV/deps.dev): baseline-browser-mapping process termination on invalid input causes denial of service | priority=P2 | trigger=unknown | fix=2.11.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "baseline-browser-mapping@2.10.30",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/baseline-browser-mapping@2.10.30"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-73088",
+          "ruleIndex": 24,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-73088 browserslist@4.28.2 (GHSA/OSV/deps.dev): Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats) | priority=P2 | trigger=network_input | fix=4.28.7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "browserslist@4.28.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/browserslist@4.28.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-73089",
+          "ruleIndex": 25,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-73089 browserslist@4.28.2 (GHSA/OSV/deps.dev): Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM | priority=P2 | trigger=dos_remote | fix=4.28.7"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "browserslist@4.28.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/browserslist@4.28.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-45249",
+          "ruleIndex": 26,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-45249 echarts@5.6.0 (GHSA/OSV/deps.dev): Apache ECharts has a cross-site scripting (XSS) vulnerability | priority=P0 | trigger=network_input | fix=6.1.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "echarts@5.6.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/echarts@5.6.0"
+          }
+        },
+        {
+          "ruleId": "GHSA-67mh-4wv8-2f99",
+          "ruleIndex": 27,
+          "level": "warning",
+          "message": {
+            "text": "GHSA-67mh-4wv8-2f99 esbuild@0.21.5 (GHSA/OSV/deps.dev): esbuild enables any website to send any requests to the development server and read the response | priority=P2 | trigger=network_input | fix=0.25.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "esbuild@0.21.5",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/esbuild@0.21.5"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-111755",
+          "ruleIndex": 28,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-111755 follow-redirects@1.16.0 (GHSA/OSV/deps.dev): follow-redirects sensitiveHeaders regex escaping can expose credential headers | priority=P3 | trigger=unknown | fix=1.16.1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "follow-redirects@1.16.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/follow-redirects@1.16.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-116689",
+          "ruleIndex": 29,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-116689 follow-redirects@1.16.0 (GHSA/OSV/deps.dev): follow-redirects: Cross-realm sensitiveHeaders arrays are discarded and custom credentials can follow redirects | priority=P3 | trigger=unknown | fix=1.16.2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "follow-redirects@1.16.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/follow-redirects@1.16.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-111756",
+          "ruleIndex": 30,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-111756 follow-redirects@1.16.0 (GHSA/OSV/deps.dev): follow-redirects array-form headers bypass cross-origin credential stripping | priority=P3 | trigger=unknown | fix=1.16.1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "follow-redirects@1.16.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/follow-redirects@1.16.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-12143",
+          "ruleIndex": 31,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-12143 form-data@4.0.5 (GHSA/OSV/deps.dev): form-data: CRLF injection in form-data via unescaped multipart field names and filenames | priority=P3 | trigger=unknown | fix=4.0.6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "form-data@4.0.5",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/form-data@4.0.5"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67214",
+          "ruleIndex": 32,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-67214 nanoid@3.3.12 (OSV/deps.dev): nanoid: non-secure generators can loop indefinitely with negative size | priority=P2 | trigger=unknown | fix=3.3.16"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "nanoid@3.3.12",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/nanoid@3.3.12"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-67213",
+          "ruleIndex": 33,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-67213 nanoid@3.3.12 (OSV/deps.dev): nanoid: custom generators can loop indefinitely when size is zero | priority=P2 | trigger=unknown | fix=3.3.18"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "nanoid@3.3.12",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/nanoid@3.3.12"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-69153",
+          "ruleIndex": 34,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-69153 postcss@8.5.14 (OSV/deps.dev): PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `f | priority=P2 | trigger=network_input | fix=8.5.23"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "postcss@8.5.14",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/postcss@8.5.14"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-73646",
+          "ruleIndex": 35,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-73646 postcss@8.5.14 (OSV/deps.dev): PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure | priority=P2 | trigger=network_input | fix=8.5.18"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "postcss@8.5.14",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/postcss@8.5.14"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-104844",
+          "ruleIndex": 36,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-104844 postcss-selector-parser@6.1.2 (OSV/deps.dev): PostCSS: Quadratic complexity in flat selector parsing allows CPU exhaustion | priority=P2 | trigger=dos_remote | fix=6.1.5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "postcss-selector-parser@6.1.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/postcss-selector-parser@6.1.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-9358",
+          "ruleIndex": 37,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-9358 postcss-selector-parser@6.1.2 (OSV/deps.dev): postcss-selector-parser allows denial of service through uncontrolled AST recursion | priority=P2 | trigger=unknown | fix=6.1.3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "postcss-selector-parser@6.1.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/postcss-selector-parser@6.1.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-40181",
+          "ruleIndex": 1,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-40181 react-router@6.30.3 (GHSA/OSV): React Router's same-origin redirect with path starting // causes open redirect via protocol-relative URL reinterpretatio | priority=P3 | trigger=unknown | fix=6.30.4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "react-router@6.30.3",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/react-router@6.30.3"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-53666",
+          "ruleIndex": 38,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-53666 react-router@6.30.3 (OSV): React Router: Arbitrary Constructor Injection via deserializeErrors() in React Router SSR Hydration | priority=P3 | trigger=unknown | fix=7.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "react-router@6.30.3",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/react-router@6.30.3"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-53669",
+          "ruleIndex": 39,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-53669 react-router@6.30.3 (OSV): React Router: Open redirect via backslash in <Link> and useNavigate (CVE-2025-68470 bypass) | priority=P3 | trigger=unknown | fix=7.18.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "react-router@6.30.3",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/react-router@6.30.3"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-53668",
+          "ruleIndex": 40,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-53668 react-router-dom@6.30.3 (OSV): React Router: Open redirect leading to XSS | priority=P0 | trigger=network_input | fix=6.30.6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "react-router-dom@6.30.3",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/react-router-dom@6.30.3"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-93749",
+          "ruleIndex": 41,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-93749 source-map-js@1.2.1 (OSV): source-map-js allows event-loop denial of service through indexed source-map section offsets | priority=P2 | trigger=unknown | fix=1.2.2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "source-map-js@1.2.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/source-map-js@1.2.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-39365",
+          "ruleIndex": 42,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-39365 vite@5.4.21 (OSV): Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling | priority=P2 | trigger=network_input | fix=6.4.2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-112942",
+          "ruleIndex": 43,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-112942 vite@5.4.21 (OSV): launch-editor: `fs.existsSync()` existence check can be bypassed on Windows | priority=P2 | trigger=network_input | fix=6.4.4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-112943",
+          "ruleIndex": 44,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-112943 vite@5.4.21 (OSV): launch-editor: escapeCmdArgs() omits % escaping on Windows | priority=P2 | trigger=network_input | fix=6.4.4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-112945",
+          "ruleIndex": 45,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-112945 vite@5.4.21 (OSV): Vite: Cross origin script execution through Vite custom middleware | priority=P2 | trigger=unknown | fix=6.4.4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-53571",
+          "ruleIndex": 46,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-53571 vite@5.4.21 (OSV): vite: `server.fs.deny` bypass on Windows alternate paths | priority=P2 | trigger=network_input | fix=6.4.3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-112944",
+          "ruleIndex": 47,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-112944 vite@5.4.21 (OSV): launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors | priority=P2 | trigger=unknown | fix=6.4.4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-112946",
+          "ruleIndex": 48,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-112946 vite@5.4.21 (OSV): Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine | priority=P2 | trigger=network_input | fix=6.4.4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-53632",
+          "ruleIndex": 49,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-53632 vite@5.4.21 (OSV): launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows | priority=P2 | trigger=unknown | fix=6.4.3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "frontend/package-lock.json"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "vite@5.4.21",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:npm/vite@5.4.21"
+          }
+        },
+        {
+          "ruleId": "GHSA-537c-gmf6-5ccf",
+          "ruleIndex": 50,
+          "level": "error",
+          "message": {
+            "text": "GHSA-537c-gmf6-5ccf cryptography@42.0.0 (OSV): Vulnerable OpenSSL included in cryptography wheels | priority=P1 | trigger=unknown | fix=48.0.1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2024-26130",
+          "ruleIndex": 51,
+          "level": "error",
+          "message": {
+            "text": "CVE-2024-26130 cryptography@42.0.0 (OSV): cryptography NULL pointer dereference with pkcs12.serialize_key_and_certificates when called with a non-matching certifi | priority=P1 | trigger=unknown | fix=42.0.4"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2024-12797",
+          "ruleIndex": 52,
+          "level": "error",
+          "message": {
+            "text": "CVE-2024-12797 cryptography@42.0.0 (OSV): Vulnerable OpenSSL included in cryptography wheels | priority=P1 | trigger=unknown | fix=44.0.1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2024-0727",
+          "ruleIndex": 53,
+          "level": "error",
+          "message": {
+            "text": "CVE-2024-0727 cryptography@42.0.0 (OSV): Null pointer dereference in PKCS12 parsing | priority=P1 | trigger=unknown | fix=42.0.2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "GHSA-h4gh-qq45-vh27",
+          "ruleIndex": 54,
+          "level": "error",
+          "message": {
+            "text": "GHSA-h4gh-qq45-vh27 cryptography@42.0.0 (OSV): pyca/cryptography has a vulnerable OpenSSL included in cryptography wheels | priority=P1 | trigger=unknown | fix=43.0.1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-69249",
+          "ruleIndex": 55,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-69249 cryptography@42.0.0 (OSV): python-cryptography: Duplicate self-signed intermediates can cause exponential path-building | priority=P1 | trigger=dos_remote | fix=49.0.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-34073",
+          "ruleIndex": 56,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-34073 cryptography@42.0.0 (OSV): cryptography has incomplete DNS name constraint enforcement on peer names | priority=P1 | trigger=unknown | fix=46.0.6"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-26007",
+          "ruleIndex": 57,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-26007 cryptography@42.0.0 (OSV): cryptography Vulnerable to a Subgroup Attack Due to Missing Subgroup Validation for SECT Curves | priority=P1 | trigger=unknown | fix=46.0.5"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-69248",
+          "ruleIndex": 58,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-69248 cryptography@42.0.0 (OSV): python-cryptography verifier accepts wildcard DNS names allowing escape from permittedSubtrees | priority=P1 | trigger=unknown | fix=49.0.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 28
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "cryptography@42.0.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/cryptography@42.0.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2025-71176",
+          "ruleIndex": 59,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2025-71176 pytest@8.4.0 (OSV): pytest has vulnerable tmpdir handling | priority=P2 | trigger=unknown | fix=9.0.3"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 23
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "pytest@8.4.0",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/pytest@8.4.0"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-28684",
+          "ruleIndex": 60,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-28684 python-dotenv@1.0.1 (OSV): python-dotenv: Symlink following in set_key allows arbitrary file overwrite via cross-device rename fallback | priority=P1 | trigger=unknown | fix=1.2.2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 13
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "python-dotenv@1.0.1",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/python-dotenv@1.0.1"
+          }
+        },
+        {
+          "ruleId": "CVE-2025-54121",
+          "ruleIndex": 61,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2025-54121 starlette@0.37.2 (OSV): Starlette has possible denial-of-service vector when parsing large files in multipart forms | priority=P2 | trigger=dos_remote | fix=0.47.2"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "starlette@0.37.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/starlette@0.37.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-54283",
+          "ruleIndex": 62,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-54283 starlette@0.37.2 (OSV): Starlette: request.form() limits silently ignored for application/x-www-form-urlencoded enable DoS | priority=P2 | trigger=dos_remote | fix=1.3.1"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "starlette@0.37.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/starlette@0.37.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-48710",
+          "ruleIndex": 63,
+          "level": "error",
+          "message": {
+            "text": "CVE-2026-48710 starlette@0.37.2 (OSV): Starlette has missing Host header validation that poisons request.url.path, bypassing path-based security checks | priority=P0 | trigger=network_input | fix=1.0.1 | KEV"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "starlette@0.37.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/starlette@0.37.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2024-47874",
+          "ruleIndex": 64,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2024-47874 starlette@0.37.2 (OSV): Starlette Denial of service (DoS) via multipart/form-data | priority=P2 | trigger=dos_remote | fix=0.40.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "starlette@0.37.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/starlette@0.37.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-54282",
+          "ruleIndex": 65,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-54282 starlette@0.37.2 (OSV): Starlette: Unvalidated request path concatenated into authority poisons request.url.hostname | priority=P3 | trigger=unknown | fix=1.3.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "starlette@0.37.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/starlette@0.37.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-48818",
+          "ruleIndex": 66,
+          "level": "warning",
+          "message": {
+            "text": "CVE-2026-48818 starlette@0.37.2 (OSV): Starlette: SSRF and NTLM credential theft via UNC paths in StaticFiles on Windows | priority=P2 | trigger=network_input | fix=1.1.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "starlette@0.37.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/starlette@0.37.2"
+          }
+        },
+        {
+          "ruleId": "CVE-2026-48817",
+          "ruleIndex": 67,
+          "level": "note",
+          "message": {
+            "text": "CVE-2026-48817 starlette@0.37.2 (OSV): Starlette: Arbitrary HTTP method dispatched to `HTTPEndpoint` attributes via `getattr` | priority=P3 | trigger=unknown | fix=1.1.0"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "backend/requirements.txt"
+                },
+                "region": {
+                  "startLine": 1
+                }
+              },
+              "logicalLocations": [
+                {
+                  "name": "starlette@0.37.2",
+                  "kind": "package"
+                }
+              ]
+            }
+          ],
+          "partialFingerprints": {
+            "purl": "pkg:pypi/starlette@0.37.2"
+          }
+        }
+      ]
+    }
+  ]
+}

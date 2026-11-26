@@ -1,0 +1,113 @@
+{
+  "scan_tool": "ai-sca-scan 1.0.0",
+  "generated_at": "2026-11-19T16:24:12.287020+00:00",
+  "project": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant",
+  "components": {
+    "total": 443,
+    "resolved": 442,
+    "unresolved": 1,
+    "hallucination_suspected": 0,
+    "slopsquatting_suspected": 0,
+    "deprecated": 0,
+    "dev_only": 148
+  },
+  "findings": {
+    "total": 69,
+    "malicious": 0,
+    "kev": 1,
+    "by_priority": {
+      "P0": 15,
+      "P1": 19,
+      "P2": 25,
+      "P3": 10
+    }
+  },
+  "licenses_source": "deps.dev",
+  "degraded": [
+    "ghsa: unavailable_or_rate_limited",
+    "scorecard: unavailable_or_skipped"
+  ],
+  "api_status": [
+    {
+      "api": "deps.dev",
+      "ok": true,
+      "http_status": 200,
+      "detail": "estimated 60 transitive components, 8 range-filled",
+      "latency_ms": null,
+      "calls": 18
+    },
+    {
+      "api": "Registry (npm/PyPI)",
+      "ok": true,
+      "http_status": 200,
+      "detail": "checked 41 packages",
+      "latency_ms": null,
+      "calls": 1
+    },
+    {
+      "api": "OSV",
+      "ok": true,
+      "http_status": 200,
+      "detail": "batch 200 queries",
+      "latency_ms": null,
+      "calls": 200
+    },
+    {
+      "api": "OSV",
+      "ok": true,
+      "http_status": 200,
+      "detail": "batch 200 queries",
+      "latency_ms": null,
+      "calls": 200
+    },
+    {
+      "api": "OSV",
+      "ok": true,
+      "http_status": 200,
+      "detail": "batch 42 queries",
+      "latency_ms": null,
+      "calls": 42
+    },
+    {
+      "api": "OSV",
+      "ok": true,
+      "http_status": 200,
+      "detail": "fetched 83 vulnerability details",
+      "latency_ms": null,
+      "calls": 83
+    },
+    {
+      "api": "deps.dev",
+      "ok": true,
+      "http_status": 200,
+      "detail": "resolved 176/300 version infos",
+      "latency_ms": null,
+      "calls": 300
+    },
+    {
+      "api": "GHSA",
+      "ok": false,
+      "http_status": 403,
+      "detail": "43 advisories over 7 calls (RATE LIMITED)",
+      "latency_ms": null,
+      "calls": 7
+    },
+    {
+      "api": "KEV",
+      "ok": true,
+      "http_status": null,
+      "detail": "cache hit (1786 entries)",
+      "latency_ms": null,
+      "calls": 1
+    },
+    {
+      "api": "EPSS",
+      "ok": true,
+      "http_status": 200,
+      "detail": "65 CVEs scored",
+      "latency_ms": null,
+      "calls": 1
+    }
+  ],
+  "scorecard": {}
+}

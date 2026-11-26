@@ -1,0 +1,4978 @@
+[
+  {
+    "component": {
+      "name": "@babel/core",
+      "version": "7.29.0",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/%40babel/core@7.29.0",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-49356",
+    "aliases": [
+      "GHSA-4x5r-pxfx-6jf8"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV"
+    ],
+    "summary": "@babel/core: Arbitrary File Read via sourceMappingURL Comment",
+    "cwes": [
+      "CWE-200",
+      "CWE-22"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": 3.2,
+    "cvss_vector": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:C/C:L/I:N/A:N",
+    "fixed_version": "7.29.6",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00152,
+      "percentile": 0.04411
+    },
+    "ghsa_ranges": [
+      ">= 8.0.0-alpha.0, < 8.0.0-rc.5",
+      "<= 7.29.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "@remix-run/router",
+      "version": "1.23.2",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/%40remix-run/router@1.23.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-40181",
+    "aliases": [
+      "GHSA-2j2x-hqr9-3h42"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV"
+    ],
+    "summary": "React Router's same-origin redirect with path starting // causes open redirect via protocol-relative URL reinterpretation",
+    "cwes": [
+      "CWE-601"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:U",
+    "fixed_version": "1.23.3",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00221,
+      "percentile": 0.12829
+    },
+    "ghsa_ranges": [
+      ">= 1.3.0, < 1.23.3"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101898",
+    "aliases": [
+      "GHSA-3pq3-5fj3-cg6v"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: HTTP/2 adapter bypasses configured DNS lookup and proxy controls",
+    "cwes": [
+      "CWE-918"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:H/SI:H/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00545,
+      "percentile": 0.46529
+    },
+    "ghsa_ranges": [
+      ">= 1.13.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67313",
+    "aliases": [
+      "GHSA-42h9-826w-cgv3"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Excessive recursion in formDataToJSON can cause denial of service",
+    "cwes": [
+      "CWE-400",
+      "CWE-674"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00521,
+      "percentile": 0.45018
+    },
+    "ghsa_ranges": [
+      ">= 0.28.0, < 0.33.0",
+      ">= 1.0.0, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101899",
+    "aliases": [
+      "GHSA-44g4-m2mj-wpvx"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: CIDR-form NO_PROXY entries are ignored, causing proxy exclusion bypass for internal IP ranges",
+    "cwes": [
+      "CWE-693"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:H/SI:N/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00512,
+      "percentile": 0.44432
+    },
+    "ghsa_ranges": [
+      ">= 1.15.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101900",
+    "aliases": [
+      "GHSA-4hqw-qxg8-jxx2"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Fetch Adapter Header Injection via Inherited FormData getHeaders",
+    "cwes": [
+      "CWE-1321",
+      "CWE-693",
+      "CWE-74"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:L/SI:H/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00546,
+      "percentile": 0.46578
+    },
+    "ghsa_ranges": [
+      ">= 1.12.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101901",
+    "aliases": [
+      "GHSA-542g-h47m-68v8"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Denial of Service via Unhandled 'error' Event in HTTP/2 ClientHttp2Session Initialization",
+    "cwes": [
+      "CWE-400"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00536,
+      "percentile": 0.45972
+    },
+    "ghsa_ranges": [
+      ">= 1.13.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67319",
+    "aliases": [
+      "GHSA-7q8q-rj6j-mhjq"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Nested axios option objects can consume polluted prototype values",
+    "cwes": [
+      "CWE-1321"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:L/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00318,
+      "percentile": 0.25242
+    },
+    "ghsa_ranges": [
+      ">= 0.8.0, < 0.33.0",
+      ">= 1.0.0, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101902",
+    "aliases": [
+      "GHSA-9fr6-4gfg-395g"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Prototype-Pollution Gadget in the Default Instance Allows Inherited Object.prototype.method to Override HTTP Method",
+    "cwes": [
+      "CWE-1321"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:N/SI:H/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00414,
+      "percentile": 0.36404
+    },
+    "ghsa_ranges": [
+      ">= 0.27.2, < 0.34.0",
+      ">= 1.0.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101903",
+    "aliases": [
+      "GHSA-c29m-xwm3-cm6r"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: ReDoS in fromDataURI data: URL parser freezes the Node event loop (DoS)",
+    "cwes": [
+      "CWE-1333"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00436,
+      "percentile": 0.38602
+    },
+    "ghsa_ranges": [
+      ">= 1.16.1, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67315",
+    "aliases": [
+      "GHSA-f4gw-2p7v-4548"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: NO_PROXY bypass for 0.0.0.0 local addresses in axios",
+    "cwes": [
+      "CWE-183",
+      "CWE-918"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:H/SI:N/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00455,
+      "percentile": 0.40208
+    },
+    "ghsa_ranges": [
+      ">= 1.15.0, < 1.18.0",
+      ">= 0.31.0, < 0.33.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67320",
+    "aliases": [
+      "GHSA-gcfj-64vw-6mp9"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios Node HTTP adapter can use an inherited proxy after interceptor config cloning",
+    "cwes": [
+      "CWE-1321",
+      "CWE-200"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:L/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00523,
+      "percentile": 0.45121
+    },
+    "ghsa_ranges": [
+      ">= 0.31.1, < 0.33.0",
+      ">= 1.15.2, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67321",
+    "aliases": [
+      "GHSA-hcpx-6fm6-wx23"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios form serializer maxDepth bypass via {} metatoken",
+    "cwes": [
+      "CWE-674"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00534,
+      "percentile": 0.45851
+    },
+    "ghsa_ranges": [
+      ">= 0.31.1, < 0.33.0",
+      ">= 1.15.1, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101904",
+    "aliases": [
+      "GHSA-j8rh-479h-cp32"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Header Injection via Inherited headers After Minimal Interceptor",
+    "cwes": [
+      "CWE-1321",
+      "CWE-74"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:L/SI:H/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00488,
+      "percentile": 0.42787
+    },
+    "ghsa_ranges": [
+      ">= 1.0.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67317",
+    "aliases": [
+      "GHSA-jqh4-m9w3-8hp9"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Fetch adapter `ReadableStream` uploads bypass `maxBodyLength`",
+    "cwes": [
+      "CWE-770"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:L",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00602,
+      "percentile": 0.49593
+    },
+    "ghsa_ranges": [
+      ">= 1.7.0, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101905",
+    "aliases": [
+      "GHSA-m8m8-qj5v-23w3"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Node HTTP adapter prototype-pollution gadget allows request socket hijack via inherited createConnection",
+    "cwes": [
+      "CWE-1321",
+      "CWE-441"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00418,
+      "percentile": 0.36848
+    },
+    "ghsa_ranges": [
+      ">= 1.15.2, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101906",
+    "aliases": [
+      "GHSA-mghh-pgcx-3jjj"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: ReDoS (O(N²)) in shouldBypassProxy host normalization, reachable via untrusted redirect Location",
+    "cwes": [
+      "CWE-1333",
+      "CWE-400"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00457,
+      "percentile": 0.40419
+    },
+    "ghsa_ranges": [
+      ">= 1.15.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67316",
+    "aliases": [
+      "GHSA-mmx7-hfxf-jppx"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Prototype pollution gadgets can alter axios request construction",
+    "cwes": [
+      "CWE-1321"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:H/AT:P/PR:N/UI:N/VC:N/VI:L/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00424,
+      "percentile": 0.37459
+    },
+    "ghsa_ranges": [
+      ">= 1.0.0, < 1.18.0",
+      "< 0.33.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67318",
+    "aliases": [
+      "GHSA-mwf2-3pr3-8698"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: HTTP/2 streamed uploads bypass `maxBodyLength`",
+    "cwes": [
+      "CWE-400"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:L",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00616,
+      "percentile": 0.50335
+    },
+    "ghsa_ranges": [
+      ">= 1.13.0, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67312",
+    "aliases": [
+      "GHSA-pmv8-rq9r-6j72"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Deep formToJSON Key Recursion Can Cause Denial of Service",
+    "cwes": [
+      "CWE-400",
+      "CWE-770"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:L/SC:N/SI:N/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00521,
+      "percentile": 0.45018
+    },
+    "ghsa_ranges": [
+      ">= 0.28.0, < 0.33.0",
+      ">= 1.0.0, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101908",
+    "aliases": [
+      "GHSA-vh66-26gq-q6x8"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Prototype pollution gadget in fetch adapter can alter outbound requests",
+    "cwes": [
+      "CWE-1321"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:N/VA:N/SC:L/SI:H/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00471,
+      "percentile": 0.41468
+    },
+    "ghsa_ranges": [
+      ">= 1.7.0, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-101909",
+    "aliases": [
+      "GHSA-x97p-jq2g-jp4f"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Prototype Pollution Gadget in axios toFormData Options",
+    "cwes": [
+      "CWE-1321"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:L/VA:H/SC:N/SI:N/SA:N",
+    "fixed_version": "1.20.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00497,
+      "percentile": 0.43407
+    },
+    "ghsa_ranges": [
+      ">= 0.28.0, < 0.34.0",
+      ">= 1.15.1, < 1.20.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "axios",
+      "version": "1.16.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/axios@1.16.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67314",
+    "aliases": [
+      "GHSA-xj6q-8x83-jv6g"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Axios: Prototype pollution auth subfields can inject Basic auth",
+    "cwes": [
+      "CWE-1321"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:N/VI:L/VA:L/SC:N/SI:N/SA:N",
+    "fixed_version": "1.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00411,
+      "percentile": 0.3613
+    },
+    "ghsa_ranges": [
+      ">= 1.15.2, < 1.18.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 2,
+          "text": "* Axios 实例 + 拦截器"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 5,
+          "text": "import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 8,
+          "text": "const apiClient = axios.create({"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 18,
+          "text": "(config: InternalAxiosRequestConfig) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 45,
+          "text": "(error: AxiosError) => {"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 63,
+          "text": "const isCanceled = axios.isCancel(error);"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 73,
+          "text": "response?: AxiosError['response'];"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "baseline-browser-mapping",
+      "version": "2.10.30",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/baseline-browser-mapping@2.10.30",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-45819",
+    "aliases": [
+      "GHSA-w5vr-8v7q-w6rv"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "baseline-browser-mapping process termination on invalid input causes denial of service",
+    "cwes": [
+      "CWE-705"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N/E:U/S:N/AU:Y/R:U/V:D/RE:M/U:Amber",
+    "fixed_version": "2.11.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00507,
+      "percentile": 0.44008
+    },
+    "ghsa_ranges": [
+      ">= 2.0.0, < 2.11.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "browserslist",
+      "version": "4.28.2",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/browserslist@4.28.2",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-73088",
+    "aliases": [
+      "GHSA-73wf-gq98-2v4g"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)",
+    "cwes": [
+      "CWE-1321",
+      "CWE-248"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": 7.5,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "4.28.7",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00658,
+      "percentile": 0.5229
+    },
+    "ghsa_ranges": [
+      "<= 4.28.6"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "browserslist",
+      "version": "4.28.2",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/browserslist@4.28.2",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-73089",
+    "aliases": [
+      "GHSA-c83g-rgw3-j3cx"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM",
+    "cwes": [
+      "CWE-770"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": 7.5,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "4.28.7",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00655,
+      "percentile": 0.5218
+    },
+    "ghsa_ranges": [
+      "<= 4.28.6"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "echarts",
+      "version": "5.6.0",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/echarts@5.6.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-45249",
+    "aliases": [
+      "GHSA-fgmj-fm8m-jvvx"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "Apache ECharts has a cross-site scripting (XSS) vulnerability",
+    "cwes": [
+      "CWE-79"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": 6.1,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+    "fixed_version": "6.1.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00749,
+      "percentile": 0.55691
+    },
+    "ghsa_ranges": [
+      "< 6.1.0"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 16,
+          "text": "echarts: ['echarts', 'echarts-for-react'],"
+        },
+        {
+          "file": "frontend/src/components/FactorRadarChart.tsx",
+          "line": 2,
+          "text": "* 因子雷达图 — ECharts"
+        },
+        {
+          "file": "frontend/src/components/FactorRadarChart.tsx",
+          "line": 6,
+          "text": "import ReactECharts from 'echarts-for-react';"
+        },
+        {
+          "file": "frontend/src/components/FactorRadarChart.tsx",
+          "line": 73,
+          "text": "return <ReactECharts option={option} style={{ height }} />;"
+        },
+        {
+          "file": "frontend/src/components/FundDetailPanel.tsx",
+          "line": 26,
+          "text": "import ReactECharts from 'echarts-for-react';"
+        },
+        {
+          "file": "frontend/src/components/FundDetailPanel.tsx",
+          "line": 370,
+          "text": "深度分析 — ECharts 图表组件"
+        },
+        {
+          "file": "frontend/src/components/FundDetailPanel.tsx",
+          "line": 395,
+          "text": "return <ReactECharts option={option} style={CHART_STYLE} />;"
+        },
+        {
+          "file": "frontend/src/components/FundDetailPanel.tsx",
+          "line": 421,
+          "text": "return <ReactECharts option={option} style={CHART_STYLE} />;"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "esbuild",
+      "version": "0.21.5",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/esbuild@0.21.5",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "GHSA-67mh-4wv8-2f99",
+    "aliases": [],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "esbuild enables any website to send any requests to the development server and read the response",
+    "cwes": [
+      "CWE-346"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": 5.3,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:N/A:N",
+    "fixed_version": "0.25.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": null,
+    "ghsa_ranges": [
+      "<= 0.24.2"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "follow-redirects",
+      "version": "1.16.0",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/follow-redirects@1.16.0",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-111755",
+    "aliases": [
+      "GHSA-8r9p-f939-6h3c"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "follow-redirects sensitiveHeaders regex escaping can expose credential headers",
+    "cwes": [
+      "CWE-185",
+      "CWE-200"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "1.16.1",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00471,
+      "percentile": 0.41509
+    },
+    "ghsa_ranges": [
+      ">= 1.16.0, < 1.16.1"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "follow-redirects",
+      "version": "1.16.0",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/follow-redirects@1.16.0",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-116689",
+    "aliases": [
+      "GHSA-mrwp-f3q8-3g9p"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "follow-redirects: Cross-realm sensitiveHeaders arrays are discarded and custom credentials can follow redirects",
+    "cwes": [
+      "CWE-201"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": 5.9,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "fixed_version": "1.16.2",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00266,
+      "percentile": 0.19005
+    },
+    "ghsa_ranges": [
+      ">= 1.16.0, <= 1.16.1"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "follow-redirects",
+      "version": "1.16.0",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/follow-redirects@1.16.0",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-111756",
+    "aliases": [
+      "GHSA-q3jh-wrc6-jgq8"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "follow-redirects array-form headers bypass cross-origin credential stripping",
+    "cwes": [
+      "CWE-200",
+      "CWE-212"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "1.16.1",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00471,
+      "percentile": 0.4151
+    },
+    "ghsa_ranges": [
+      ">= 1.16.0, < 1.16.1"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "form-data",
+      "version": "4.0.5",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/form-data@4.0.5",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-12143",
+    "aliases": [
+      "GHSA-hmw2-7cc7-3qxx"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "form-data: CRLF injection in form-data via unescaped multipart field names and filenames",
+    "cwes": [
+      "CWE-93"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": 7.5,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N",
+    "fixed_version": "4.0.6",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00669,
+      "percentile": 0.52755
+    },
+    "ghsa_ranges": [
+      "< 2.5.6",
+      ">= 3.0.0, < 3.0.5",
+      ">= 4.0.0, < 4.0.6"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "nanoid",
+      "version": "3.3.12",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/nanoid@3.3.12",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67214",
+    "aliases": [
+      "GHSA-28wg-ghj8-5hjv"
+    ],
+    "sources": [
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "nanoid: non-secure generators can loop indefinitely with negative size",
+    "cwes": [
+      "CWE-835"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "3.3.16",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.0033,
+      "percentile": 0.26642
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "nanoid",
+      "version": "3.3.12",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/nanoid@3.3.12",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-67213",
+    "aliases": [
+      "GHSA-2v37-7h3g-55p8"
+    ],
+    "sources": [
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "nanoid: custom generators can loop indefinitely when size is zero",
+    "cwes": [
+      "CWE-835"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "3.3.18",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00331,
+      "percentile": 0.26789
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "postcss",
+      "version": "8.5.14",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/postcss@8.5.14",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-69153",
+    "aliases": [
+      "GHSA-fxqj-rqcc-2cmp"
+    ],
+    "sources": [
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset",
+    "cwes": [
+      "CWE-200",
+      "CWE-22"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "8.5.23",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00451,
+      "percentile": 0.39936
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": false,
+      "matches": [],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "postcss",
+      "version": "8.5.14",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/postcss@8.5.14",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-73646",
+    "aliases": [
+      "GHSA-r28c-9q8g-f849"
+    ],
+    "sources": [
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure",
+    "cwes": [
+      "CWE-22"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "fixed_version": "8.5.18",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.0053,
+      "percentile": 0.45573
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": false,
+      "matches": [],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "postcss-selector-parser",
+      "version": "6.1.2",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/postcss-selector-parser@6.1.2",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-104844",
+    "aliases": [
+      "GHSA-rj75-hqrm-r3gf"
+    ],
+    "sources": [
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "PostCSS: Quadratic complexity in flat selector parsing allows CPU exhaustion",
+    "cwes": [
+      "CWE-400",
+      "CWE-407"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "6.1.5",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00389,
+      "percentile": 0.33714
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "postcss-selector-parser",
+      "version": "6.1.2",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/postcss-selector-parser@6.1.2",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-9358",
+    "aliases": [
+      "GHSA-w9m9-85wc-3x92"
+    ],
+    "sources": [
+      "OSV",
+      "deps.dev"
+    ],
+    "summary": "postcss-selector-parser allows denial of service through uncontrolled AST recursion",
+    "cwes": [
+      "CWE-404"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:L",
+    "fixed_version": "6.1.3",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00325,
+      "percentile": 0.26116
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "react-router",
+      "version": "6.30.3",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/react-router@6.30.3",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-40181",
+    "aliases": [
+      "GHSA-2j2x-hqr9-3h42"
+    ],
+    "sources": [
+      "GHSA",
+      "OSV"
+    ],
+    "summary": "React Router's same-origin redirect with path starting // causes open redirect via protocol-relative URL reinterpretation",
+    "cwes": [
+      "CWE-601"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:H/VA:N/SC:N/SI:N/SA:N/E:U",
+    "fixed_version": "6.30.4",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00221,
+      "percentile": 0.12829
+    },
+    "ghsa_ranges": [
+      ">= 7.0.0, < 7.14.1",
+      ">= 6.7.0, < 6.30.4"
+    ],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "react-router",
+      "version": "6.30.3",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/react-router@6.30.3",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-53666",
+    "aliases": [
+      "GHSA-337j-9hxr-rhxg"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "React Router: Arbitrary Constructor Injection via deserializeErrors() in React Router SSR Hydration",
+    "cwes": [
+      "CWE-470"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+    "fixed_version": "7.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.0042,
+      "percentile": 0.37114
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "react-router",
+      "version": "6.30.3",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/react-router@6.30.3",
+      "direct": false,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-53669",
+    "aliases": [
+      "GHSA-wrjc-x8rr-h8h6"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "React Router: Open redirect via backslash in <Link> and useNavigate (CVE-2025-68470 bypass)",
+    "cwes": [
+      "CWE-601"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:A/VC:N/VI:L/VA:N/SC:L/SI:L/SA:N",
+    "fixed_version": "7.18.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00319,
+      "percentile": 0.25371
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "react-router-dom",
+      "version": "6.30.3",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/react-router-dom@6.30.3",
+      "direct": true,
+      "dev": false,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-53668",
+    "aliases": [
+      "GHSA-jjmj-jmhj-qwj2"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "React Router: Open redirect leading to XSS",
+    "cwes": [
+      "CWE-601",
+      "CWE-79"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:C/C:H/I:L/A:N",
+    "fixed_version": "6.30.6",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00341,
+      "percentile": 0.28196
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "direct dependency + exploitable trigger surface",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 18,
+          "text": "vendor: ['react', 'react-dom', 'react-router-dom', 'axios', 'zustand'],"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "line": 7,
+          "text": "import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "source-map-js",
+      "version": "1.2.1",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/source-map-js@1.2.1",
+      "direct": false,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-93749",
+    "aliases": [
+      "GHSA-68fv-2mgg-jv7q"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "source-map-js allows event-loop denial of service through indexed source-map section offsets",
+    "cwes": [
+      "CWE-1284"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "1.2.2",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00455,
+      "percentile": 0.40249
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-39365",
+    "aliases": [
+      "GHSA-4w7w-66w2-5vf9"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling",
+    "cwes": [
+      "CWE-200",
+      "CWE-22"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "6.4.2",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00914,
+      "percentile": 0.60854
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-112942",
+    "aliases": [
+      "GHSA-587h-7wmj-h5pm"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "launch-editor: `fs.existsSync()` existence check can be bypassed on Windows",
+    "cwes": [
+      "CWE-77"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+    "fixed_version": "6.4.4",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.01694,
+      "percentile": 0.77635
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-112943",
+    "aliases": [
+      "GHSA-698v-4r3x-3vcv"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "launch-editor: escapeCmdArgs() omits % escaping on Windows",
+    "cwes": [
+      "CWE-78"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:L/SC:N/SI:N/SA:N",
+    "fixed_version": "6.4.4",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00414,
+      "percentile": 0.36473
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-112945",
+    "aliases": [
+      "GHSA-9jrq-w75r-8gcw"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Vite: Cross origin script execution through Vite custom middleware",
+    "cwes": [
+      "CWE-80"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:A/VC:L/VI:L/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "6.4.4",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00672,
+      "percentile": 0.52858
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-53571",
+    "aliases": [
+      "GHSA-fx2h-pf6j-xcff"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "vite: `server.fs.deny` bypass on Windows alternate paths",
+    "cwes": [
+      "CWE-200",
+      "CWE-22"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:H/SI:N/SA:N",
+    "fixed_version": "6.4.3",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00577,
+      "percentile": 0.48326
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-112944",
+    "aliases": [
+      "GHSA-r825-w8mm-5pxw"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors",
+    "cwes": [
+      "CWE-88"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:L/VA:L/SC:N/SI:N/SA:N",
+    "fixed_version": "6.4.4",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00705,
+      "percentile": 0.54125
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-112946",
+    "aliases": [
+      "GHSA-rq7h-c2jc-7f22"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine",
+    "cwes": [
+      "CWE-22",
+      "CWE-284"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:N/VA:N/SC:N/SI:N/SA:N",
+    "fixed_version": "6.4.4",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00852,
+      "percentile": 0.59015
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "vite",
+      "version": "5.4.21",
+      "ecosystem": "npm",
+      "purl": "pkg:npm/vite@5.4.21",
+      "direct": true,
+      "dev": true,
+      "confidence": "high",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/frontend/package-lock.json",
+      "source_line": null,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-53632",
+    "aliases": [
+      "GHSA-v6wh-96g9-6wx3"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows",
+    "cwes": [
+      "CWE-522",
+      "CWE-73"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:A/VC:N/VI:N/VA:N/SC:H/SI:H/SA:H",
+    "fixed_version": "6.4.3",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00464,
+      "percentile": 0.40943
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 1,
+          "text": "import { defineConfig, loadEnv } from 'vite';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 2,
+          "text": "import react from '@vitejs/plugin-react';"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 4,
+          "text": "// https://vitejs.dev/config/"
+        },
+        {
+          "file": "frontend/vite.config.ts",
+          "line": 7,
+          "text": "const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000';"
+        },
+        {
+          "file": "frontend/src/vite-env.d.ts",
+          "line": 1,
+          "text": "/// <reference types=\"vite/client\" />"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 28,
+          "text": "// 生产构建不打印原始错误（错误已进告警铃铛），排障时把 VITE_DEBUG=1 打开"
+        },
+        {
+          "file": "frontend/src/api/client.ts",
+          "line": 29,
+          "text": "const DEBUG = import.meta.env.DEV || import.meta.env.VITE_DEBUG === '1';"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "GHSA-537c-gmf6-5ccf",
+    "aliases": [],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Vulnerable OpenSSL included in cryptography wheels",
+    "cwes": [
+      "CWE-125",
+      "CWE-1395"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "48.0.1",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": null,
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2024-26130",
+    "aliases": [
+      "GHSA-6vqw-3v5j-54x4",
+      "PYSEC-2024-225"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "cryptography NULL pointer dereference with pkcs12.serialize_key_and_certificates when called with a non-matching certificate and private key and an hmac_hash override",
+    "cwes": [
+      "CWE-476"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "42.0.4",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00831,
+      "percentile": 0.58339
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2024-12797",
+    "aliases": [
+      "GHSA-79v4-65xg-pq4g",
+      "PYSEC-2026-1284"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Vulnerable OpenSSL included in cryptography wheels",
+    "cwes": [
+      "CWE-1395",
+      "CWE-392"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": null,
+    "fixed_version": "44.0.1",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.01818,
+      "percentile": 0.79184
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2024-0727",
+    "aliases": [
+      "GHSA-9v9h-cgj8-h64p",
+      "PYSEC-2026-1285"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Null pointer dereference in PKCS12 parsing",
+    "cwes": [
+      "CWE-476"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H",
+    "fixed_version": "42.0.2",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.03187,
+      "percentile": 0.88356
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "GHSA-h4gh-qq45-vh27",
+    "aliases": [],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "pyca/cryptography has a vulnerable OpenSSL included in cryptography wheels",
+    "cwes": [
+      "CWE-1395"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": null,
+    "fixed_version": "43.0.1",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": null,
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-69249",
+    "aliases": [
+      "GHSA-jwv3-5hgf-82ww",
+      "PYSEC-2026-3553"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "python-cryptography: Duplicate self-signed intermediates can cause exponential path-building",
+    "cwes": [
+      "CWE-400"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:N/VI:N/VA:H/SC:N/SI:N/SA:N",
+    "fixed_version": "49.0.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00262,
+      "percentile": 0.18183
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-34073",
+    "aliases": [
+      "GHSA-m959-cc7f-wv43",
+      "PYSEC-2026-35"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "cryptography has incomplete DNS name constraint enforcement on peer names",
+    "cwes": [
+      "CWE-295"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+    "fixed_version": "46.0.6",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00227,
+      "percentile": 0.13626
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-26007",
+    "aliases": [
+      "GHSA-r6ph-v2qm-q3c2",
+      "PYSEC-2026-2141"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "cryptography Vulnerable to a Subgroup Attack Due to Missing Subgroup Validation for SECT Curves",
+    "cwes": [
+      "CWE-345"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:H/AT:N/PR:N/UI:N/VC:H/VI:N/VA:N/SC:N/SI:N/SA:N/E:X/CR:X/IR:X/AR:X/MAV:X/MAC:X/MAT:X/MPR:X/MUI:X/MVC:X/MVI:X/MVA:X/MSC:X/MSI:X/MSA:X/S:X/AU:X/R:X/V:X/RE:X/U:X",
+    "fixed_version": "46.0.5",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00384,
+      "percentile": 0.33179
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "cryptography",
+      "version": "42.0.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/cryptography@42.0.0",
+      "direct": true,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 28,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-69248",
+    "aliases": [
+      "GHSA-m2h6-j472-rp4c",
+      "PYSEC-2026-3554"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "python-cryptography verifier accepts wildcard DNS names allowing escape from permittedSubtrees",
+    "cwes": [],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:4.0/AV:N/AC:L/AT:P/PR:N/UI:N/VC:L/VI:H/VA:N/SC:N/SI:N/SA:N/E:P",
+    "fixed_version": "49.0.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00244,
+      "percentile": 0.15758
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 187,
+          "text": "def test_cryptography_declared(self):"
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 188,
+          "text": "\"\"\"Qoder 依赖 cryptography，必须在 requirements 里（否则镜像静默失败）\"\"\""
+        },
+        {
+          "file": "tests/test_trae_qoder_providers.py",
+          "line": 191,
+          "text": "assert \"cryptography\" in req"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 149,
+          "text": "from cryptography.hazmat.primitives import serialization"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 150,
+          "text": "from cryptography.hazmat.primitives.asymmetric import padding"
+        },
+        {
+          "file": "backend/llm/qoder_provider.py",
+          "line": 151,
+          "text": "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "pytest",
+      "version": "8.4.0",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/pytest@8.4.0",
+      "direct": true,
+      "dev": true,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 23,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2025-71176",
+    "aliases": [
+      "GHSA-6w46-j5rx-g56g",
+      "PYSEC-2026-1845"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "pytest has vulnerable tmpdir handling",
+    "cwes": [
+      "CWE-379"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:C/C:L/I:L/A:L",
+    "fixed_version": "9.0.3",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00154,
+      "percentile": 0.04579
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "dev-only dependency (downgraded)",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "tests/test_no_nav_skip.py",
+          "line": 11,
+          "text": "import pytest"
+        },
+        {
+          "file": "tests/test_no_nav_skip.py",
+          "line": 116,
+          "text": "@pytest.mark.asyncio"
+        },
+        {
+          "file": "tests/test_no_nav_skip.py",
+          "line": 142,
+          "text": "@pytest.mark.asyncio"
+        },
+        {
+          "file": "tests/test_no_nav_skip.py",
+          "line": 169,
+          "text": "@pytest.mark.asyncio"
+        },
+        {
+          "file": "tests/test_no_nav_skip.py",
+          "line": 193,
+          "text": "@pytest.mark.asyncio"
+        },
+        {
+          "file": "tests/test_no_nav_skip.py",
+          "line": 223,
+          "text": "@pytest.mark.asyncio"
+        },
+        {
+          "file": "tests/test_no_nav_skip.py",
+          "line": 254,
+          "text": "@pytest.mark.asyncio"
+        },
+        {
+          "file": "tests/test_nav_freshness.py",
+          "line": 16,
+          "text": "import pytest"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "python-dotenv",
+      "version": "1.0.1",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/python-dotenv@1.0.1",
+      "direct": true,
+      "dev": false,
+      "confidence": "medium",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": 13,
+      "estimated": false
+    },
+    "vuln_id": "CVE-2026-28684",
+    "aliases": [
+      "GHSA-mf9w-mj56-hr94",
+      "PYSEC-2026-2270"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "python-dotenv: Symlink following in set_key allows arbitrary file overwrite via cross-device rename fallback",
+    "cwes": [
+      "CWE-59",
+      "CWE-61"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:R/S:U/C:N/I:H/A:H",
+    "fixed_version": "1.2.2",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00262,
+      "percentile": 0.18263
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P1",
+    "priority_reason": "direct dependency",
+    "static_signal": {
+      "referenced": true,
+      "matches": [
+        {
+          "file": "backend/config.py",
+          "line": 1,
+          "text": "\"\"\"配置加载模块 — python-dotenv + 系统配置表\"\"\""
+        },
+        {
+          "file": "backend/config.py",
+          "line": 5,
+          "text": "from dotenv import load_dotenv"
+        },
+        {
+          "file": "backend/config.py",
+          "line": 11,
+          "text": "load_dotenv(PROJECT_ROOT / \".env\")"
+        }
+      ],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "starlette",
+      "version": "0.37.2",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/starlette@0.37.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": null,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2025-54121",
+    "aliases": [
+      "GHSA-2c2j-9gv5-cj73",
+      "PYSEC-2026-1941"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Starlette has possible denial-of-service vector when parsing large files in multipart forms",
+    "cwes": [
+      "CWE-770"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L",
+    "fixed_version": "0.47.2",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.0066,
+      "percentile": 0.52358
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "starlette",
+      "version": "0.37.2",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/starlette@0.37.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": null,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-54283",
+    "aliases": [
+      "GHSA-82w8-qh3p-5jfq",
+      "PYSEC-2026-249"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Starlette: request.form() limits silently ignored for application/x-www-form-urlencoded enable DoS",
+    "cwes": [
+      "CWE-770"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H",
+    "fixed_version": "1.3.1",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00481,
+      "percentile": 0.42238
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "starlette",
+      "version": "0.37.2",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/starlette@0.37.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": null,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-48710",
+    "aliases": [
+      "GHSA-86qp-5c8j-p5mr",
+      "PYSEC-2026-161",
+      "X41-2026-002"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Starlette has missing Host header validation that poisons request.url.path, bypassing path-based security checks",
+    "cwes": [
+      "CWE-1289",
+      "CWE-444"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N",
+    "fixed_version": "1.0.1",
+    "malicious": false,
+    "kev": {
+      "listed": true,
+      "dateAdded": "2026-09-02",
+      "ransomware": null
+    },
+    "epss": {
+      "score": 0.70288,
+      "percentile": 0.99397
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P0",
+    "priority_reason": "listed in CISA KEV (known exploited)",
+    "static_signal": {
+      "referenced": false,
+      "matches": [],
+      "note": "package name referenced in source; LLM must read matched lines to judge if the vulnerable code path is actually used"
+    }
+  },
+  {
+    "component": {
+      "name": "starlette",
+      "version": "0.37.2",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/starlette@0.37.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": null,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2024-47874",
+    "aliases": [
+      "GHSA-f96h-pmfr-66vw",
+      "PYSEC-2026-1943"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Starlette Denial of service (DoS) via multipart/form-data",
+    "cwes": [
+      "CWE-770"
+    ],
+    "trigger_surface": "dos_remote",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:N",
+    "fixed_version": "0.40.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00653,
+      "percentile": 0.52099
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "starlette",
+      "version": "0.37.2",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/starlette@0.37.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": null,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-54282",
+    "aliases": [
+      "GHSA-jp82-jpqv-5vv3",
+      "PYSEC-2026-248"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Starlette: Unvalidated request path concatenated into authority poisons request.url.hostname",
+    "cwes": [
+      "CWE-20",
+      "CWE-706"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N",
+    "fixed_version": "1.3.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00273,
+      "percentile": 0.20021
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "starlette",
+      "version": "0.37.2",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/starlette@0.37.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": null,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-48818",
+    "aliases": [
+      "GHSA-wqp7-x3pw-xc5r",
+      "PYSEC-2026-2281"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Starlette: SSRF and NTLM credential theft via UNC paths in StaticFiles on Windows",
+    "cwes": [
+      "CWE-918"
+    ],
+    "trigger_surface": "network_input",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+    "fixed_version": "1.1.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00368,
+      "percentile": 0.31302
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P2",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  },
+  {
+    "component": {
+      "name": "starlette",
+      "version": "0.37.2",
+      "ecosystem": "pypi",
+      "purl": "pkg:pypi/starlette@0.37.2",
+      "direct": false,
+      "dev": false,
+      "confidence": "low",
+      "source_path": "/Users/sec-t/Downloads/daily_stock_analysis-main/AI_Fund_Assistant/backend/requirements.txt",
+      "source_line": null,
+      "estimated": true
+    },
+    "vuln_id": "CVE-2026-48817",
+    "aliases": [
+      "GHSA-x746-7m8f-x49c",
+      "PYSEC-2026-2280"
+    ],
+    "sources": [
+      "OSV"
+    ],
+    "summary": "Starlette: Arbitrary HTTP method dispatched to `HTTPEndpoint` attributes via `getattr`",
+    "cwes": [
+      "CWE-470"
+    ],
+    "trigger_surface": "unknown",
+    "cvss_score": null,
+    "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N",
+    "fixed_version": "1.1.0",
+    "malicious": false,
+    "kev": {
+      "listed": false
+    },
+    "epss": {
+      "score": 0.00213,
+      "percentile": 0.11703
+    },
+    "ghsa_ranges": [],
+    "vulnerable_functions": [],
+    "nvd_enriched": false,
+    "conflict": false,
+    "preliminary_priority": "P3",
+    "priority_reason": "transitive dependency",
+    "static_signal": {
+      "referenced": null
+    }
+  }
+]

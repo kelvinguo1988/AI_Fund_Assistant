@@ -64,7 +64,10 @@ class TestHtmlErrorDetection:
         中文变成 `é¡µé¢æªæ¾å°`，若只匹配 "页面未找到" 则永远失效，
         导致判定不生效、每轮白打 24 次请求（2026-11-26 实测踩到）。
         """
-        mojibake = '\n<!doctype html>\n<html>\n<head> \n<title>é¡µé¢æªæ¾å° - ä¸æ¹è´¢å¯ç½</title>'
+        # 真实响应里夹着不可打印字节（\x9d \x9c \x88 \x91），
+        # 所以不能靠字面量匹配，必须用字节级判据
+        mojibake = ('\n<!doctype html>\n<html>\n<head> \n<title>'
+                    'é¡µé\x9d¢æ\x9cªæ\x89¾å\x88° - ä¸\x9cæ\x96¹è´¢å¯\x8cç½\x91</title>')
         assert looks_like_html_error(mojibake) is True
 
     def test_anti_bot_with_title_still_not_deprecated(self):
