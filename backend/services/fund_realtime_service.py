@@ -62,6 +62,7 @@ FUNDGZ_FAIL_COOLDOWN = 600.0    # fundgz 盘中失败冷却（10 分钟）
                                 # 全 unavailable）。现在只有**盘中**失败才冷却，长度回到
                                 # 10 分钟；非盘中的无估值页直接跳过、不冷却。
 FUNDGZ_TIMEOUT = 8.0
+TENCENT_TIMEOUT = 10.0         # 腾讯净值批量（50 只一次，给足时间）
 
 # 持仓数据陈旧阈值（天）：超过则在前端标注「估算可能有偏差」。
 # 季报持仓是季度快照，长时间不跑「刷新详情」时估算失真会明显放大。
@@ -95,6 +96,18 @@ TENCENT_BATCH_RETRY = 2        # 单批最多尝试次数
 TENCENT_FAIL_RATIO = 0.5       # 失败批次占比超过该值才熔断整个腾讯源
 
 FUNDGZ_URL = "https://fundgz.1234567.com.cn/js/{code}.js"
+
+# 腾讯基金净值（2026-11-26 新增，替代已下线的 fundgz）
+# 天天基金应监管要求下线「基金实时估值」：fundgz 对任意代码都返回
+# HTTP 200 + HTML「页面未找到」，JSONP 回调永不触发。
+# 腾讯这个接口给**官方净值 + 净值日期 + 日涨跌%**（不是盘中估算），
+# 稳定性远好于 fundgz，且覆盖 QDII/互认基金（实测 968049 也有数据）。
+TENCENT_FUND_NAV_URL = "https://qt.gtimg.cn/q=jj{code}"
+TENCENT_FUND_BATCH = 50        # 单次可查代码数（与股票行情同样的上限）
+
+# fundgz 是否已被上游永久下线（探测到 HTML 404 页即置 True）
+# 一旦确认，本进程内不再请求，避免每天刷「反爬拦截」的误判日志
+_fundgz_dead = False
 
 # 估值模型参数
 LOW_COVERAGE_THRESHOLD = 0.5   # 低于此覆盖率切换指数混合法
@@ -188,6 +201,77 @@ def parse_fundgz_jsonp(text: str) -> Optional[dict]:
         return data if isinstance(data, dict) else None
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def parse_tencent_fund_nav(text: str) -> dict[str, dict]:
+    """解析腾讯基金净值批量响应（GBK 文本）
+
+    格式: v_jj009033="009033~建信上海金ETF联接A~0.0000~0.0000~~1.8062~1.8062~1.2330~2026-11-26~";
+    字段: [0]代码 [1]名称 [5]单位净值 [6]累计净值 [7]日涨跌幅% [8]净值日期
+
+    与 fundgz 的差别（重要）：这是**官方净值**（收盘后公布），不是盘中估算。
+    fundgz 下线后盘中估算无处可取，官方净值是当下最可靠的替代——
+    至少能保证「名称/净值/涨跌」三件事正确，而不是留空或给假数字。
+    """
+    out: dict[str, dict] = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line.startswith("v_jj") or '"' not in line:
+            continue
+        try:
+            body = line.split('"', 2)[1]
+        except IndexError:
+            continue
+        parts = body.split("~")
+        if len(parts) < 9:
+            continue
+        code = parts[0].strip()
+        if not code:
+            continue
+
+        def _num(idx: int) -> Optional[float]:
+            try:
+                v = float(parts[idx])
+            except (ValueError, IndexError):
+                return None
+            # 0.0 在腾讯表示"无数据"（盘中字段恒为 0），不能当真实净值
+            return v if v != 0.0 else None
+
+        nav = _num(5)
+        if nav is None:
+            continue
+        out[code] = {
+            "fundcode": code,
+            "name": parts[1].strip(),
+            "dwjz": nav,                      # 单位净值（对齐 fundgz 字段名）
+            "ljjz": _num(6),                  # 累计净值
+            "gszzl": _num(7),                 # 日涨跌幅%（对齐 fundgz 字段名）
+            "jzrq": parts[8].strip() or None,  # 净值日期（对齐 fundgz 字段名）
+            "source": "tencent_nav",
+        }
+    return out
+
+
+def is_fundgz_dead() -> bool:
+    """fundgz 是否已被判定永久下线（供健康快照与测试读取）"""
+    return _fundgz_dead
+
+
+def looks_like_html_error(text: str) -> bool:
+    """fundgz 下线后的响应特征：HTTP 200 但内容是**东方财富的 404 页**
+
+    判据要精确，不能「见到 HTML 就判下线」（2026-11-26）：
+      · 下线页：`<title>页面未找到 - 东方财富网</title>`（所有代码一致，实测 3924 字节）
+      · 反爬页：可能是别的拦截页（"blocked"/验证页），那属于风控，
+        仍应走「盘中反爬 → 冷却」的既有逻辑，不能误判成永久下线。
+
+    只认 404 页特征，其余 HTML 一律交给反爬分支。
+    """
+    t = text or ""
+    if "页面未找到" in t:
+        return True
+    head = t[:600]
+    return "东方财富" in head and "404" in head
 
 
 def compute_holdings_growth(
@@ -435,7 +519,33 @@ class FundRealtimeService:
                     }
                     self._cache_estimate(f.code, results[f.code])
 
-        # fundgz 未覆盖的场外基金 → 持仓自算（主力兜底）
+        # ── 腾讯官方净值（fundgz 下线后的主替代，2026-11-26）──
+        # fundgz 已因监管要求下线（对所有代码返回 HTML 404 页），
+        # 它拿不到的基金先走腾讯官方净值：这是**确定的官方数字**，
+        # 比持仓自算的近似估值更可信，所以排在持仓自算之前。
+        otc_missing = [f for f in otc_funds if f.code not in results]
+        if otc_missing:
+            nav_map = await self._fetch_tencent_nav([f.code for f in otc_missing])
+            for f in otc_missing:
+                est = nav_map.get(f.code)
+                if not est:
+                    continue
+                results[f.code] = {
+                    "code": f.code,
+                    "name": f.name or est.get("name", ""),
+                    "source": "tencent_nav",
+                    "nav_date": est.get("jzrq") or "",
+                    "nav": est.get("dwjz"),
+                    # 官方净值没有「估算净值」，字段留空以区分数据性质
+                    "estimated_nav": None,
+                    "growth_pct": est.get("gszzl"),
+                    "quote_time": est.get("jzrq") or "",
+                    "coverage": None,
+                    "est_model": "official_nav",
+                }
+                self._cache_estimate(f.code, results[f.code])
+
+        # 仍未覆盖的场外基金 → 持仓自算（近似估值，兜底）
         otc_missing = [f for f in otc_funds if f.code not in results]
         if otc_missing:
             await self._fill_from_holdings(otc_missing, results)
@@ -1196,6 +1306,45 @@ class FundRealtimeService:
         )
         return {c: q["pct"] for c, q in quotes.items() if q.get("pct") is not None}
 
+    async def _fetch_tencent_nav(self, codes: list[str]) -> dict[str, dict]:
+        """批量取腾讯官方净值（fundgz 下线后的主数据源，2026-11-26）
+
+        与 fundgz 的本质差别：这是**收盘后的官方净值**，不是盘中估算。
+        fundgz 因监管下线后，盘中估算无处可取；官方净值是当下最可靠的替代，
+        至少保证「名称 / 净值 / 净值日期 / 日涨跌」四件事正确，
+        而不是留空或拿持仓自算出个近似值。
+
+        批量查询（单次 ≤50 个代码），比逐只请求省 98% 的往返，
+        也大幅降低被限流的概率。
+        """
+        if not codes:
+            return {}
+        out: dict[str, dict] = {}
+        for i in range(0, len(codes), TENCENT_FUND_BATCH):
+            chunk = codes[i:i + TENCENT_FUND_BATCH]
+            query = ",".join(f"jj{c}" for c in chunk)
+            url = "https://qt.gtimg.cn/q=" + query
+
+            def _do() -> str:
+                resp = requests.get(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                      "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                        "Referer": "https://fund.eastmoney.com/",
+                    },
+                    timeout=TENCENT_TIMEOUT,
+                )
+                # 腾讯返回 GBK 编码
+                return resp.content.decode("gbk", "replace")
+
+            try:
+                text = await asyncio.to_thread(_do)
+                out.update(parse_tencent_fund_nav(text))
+            except Exception as e:  # noqa: BLE001 - 单批失败不影响其它批
+                logger.warning(f"腾讯基金净值批量取数失败({len(chunk)} 只): {e}")
+        return out
+
     async def _fetch_fundgz(self, code: str) -> Optional[dict]:
         """天天基金估值 JSONP（失败进入 5 分钟冷却，防反爬穿透）
 
@@ -1229,10 +1378,38 @@ class FundRealtimeService:
                 # 一只特殊基金会把全池官方估值关停一整天
                 logger.info(f"fundgz 无估值数据(code={code})，跳过该基金")
                 return None
-            # 反爬页 / 收盘后 404 页（都无 jsonpgz 标记）→ 需要区分：
-            #   收盘后（非盘中）fundgz 对全部基金返回"页面未找到"，这是正常行为，
-            #   绝不能当成反爬封禁去冷却整池——2026-10-21 线上就是因此每天收盘后
-            #   到次日开盘，42 只基金估值全部 unavailable，且冷却被不断续期。
+            # 无 jsonpgz 标记的三种情况必须区分（2026-11-26 重新定性）：
+            #
+            # ① **接口已永久下线**（真实情况）：HTTP 200 + HTML「页面未找到」。
+            #    天天基金应监管要求下线「基金实时估值」，对任意代码都返回这个页。
+            #    原实现把它当成「反爬拦截」，于是每天刷一条 category=rate_limit
+            #    的误导日志，排查时方向全错（会去查代理/换 UA，实际是政策下线）。
+            #    → 置 _fundgz_dead，本进程内不再请求，日志降级为 info 且只说一次。
+            #
+            # ② 收盘后正常无估值：按收盘常态跳过，不冷却。
+            #
+            # ③ 盘中真被反爬：才进冷却。
+            global _fundgz_dead
+            if looks_like_html_error(text):
+                if not _fundgz_dead:
+                    _fundgz_dead = True
+                    logger.warning(
+                        "fundgz 接口已下线（返回 HTML 404 页）——"
+                        "天天基金应监管要求下线基金实时估值，"
+                        "后续改用腾讯官方净值，本进程内不再请求 fundgz"
+                    )
+                    try:
+                        from backend.services.error_log_service import log_source_failure
+                        log_source_failure(
+                            module="realtime.fundgz",
+                            message="fundgz 实时估值接口已下线（监管要求），已降级为腾讯官方净值",
+                            category="dependency", severity="info",
+                            detail=f"first_code={code}; 返回 HTML 404 页而非 JSONP",
+                        )
+                    except Exception:
+                        pass
+                return None
+
             if not _in_trading_hours():
                 logger.info(
                     f"fundgz 非盘中返回无估值页(code={code})——按收盘常态跳过，不冷却"

@@ -157,6 +157,7 @@ _FRESHNESS_RULES = {
     "hsgt_flow": (5, "北向资金日频；同资金流"),
     "sector_flow": (5, "板块资金流日频"),
     "us_market_timing": (40, "月频趋势，容忍度宽"),
+    "tencent_fund_nav": (5, "官方净值日频；>5 天覆盖周末+短假"),
 }
 
 
@@ -256,6 +257,26 @@ def _collect_freshness(now: float) -> list[dict[str, Any]]:
                 dates = [d for d in dates if d]
                 if dates:
                     _add("sector_flow", max(dates))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 腾讯官方净值（2026-11-26 新增，fundgz 下线后的主数据源）：
+    # 从实时估值缓存里取最新净值日期，判断官方净值链路是否还活着
+    try:
+        from backend.services.fund_realtime_service import (
+            FundRealtimeService, is_fundgz_dead,
+        )
+
+        nav_dates = []
+        for _code, hit in (FundRealtimeService._cache or {}).items():
+            est = hit[1] if isinstance(hit, tuple) and len(hit) == 2 else hit
+            if isinstance(est, dict) and est.get("source") == "tencent_nav":
+                d = est.get("nav_date")
+                if d:
+                    nav_dates.append(str(d)[:10])
+        _add("tencent_fund_nav", max(nav_dates) if nav_dates else None, {
+            "fundgz_dead": is_fundgz_dead(),
+        })
     except Exception:  # noqa: BLE001
         pass
 

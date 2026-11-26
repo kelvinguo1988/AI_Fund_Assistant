@@ -184,6 +184,12 @@ async def test_fundgz_failure_falls_back_to_holdings(monkeypatch):
     FundRealtimeService._fundgz_fail_until = float("inf")
     FundRealtimeService._estimate_cache.clear()
     try:
+        # 2026-11-26：fundgz 下线后新增「腾讯官方净值」层，本测试验证的是
+        # 更下层（持仓自算），故让腾讯返回空，避免抢前。
+        async def _no_nav(self, codes):
+            return {}
+        monkeypatch.setattr(FundRealtimeService, "_fetch_tencent_nav", _no_nav)
+
         svc = FundRealtimeService(db=_HoldingsQueryDB([("600000", "浦发银行", 60.0)]))
 
         async def _fake_stock_spot(self, codes=None):
@@ -379,6 +385,12 @@ async def test_fill_from_holdings_merges_hk_quotes(monkeypatch):
     FundRealtimeService._fundgz_fail_until = float("inf")
     FundRealtimeService._estimate_cache.clear()
     try:
+        # 2026-11-26：fundgz 下线后新增「腾讯官方净值」层，本测试验证的是
+        # 更下层（持仓自算），故让腾讯返回空，避免抢前。
+        async def _no_nav(self, codes):
+            return {}
+        monkeypatch.setattr(FundRealtimeService, "_fetch_tencent_nav", _no_nav)
+
         svc = FundRealtimeService(db=_fake_holdings_db([
             ("600000", "浦发银行", 30.0),
             ("00981", "中芯国际", 30.0),
@@ -419,6 +431,12 @@ async def test_fill_from_holdings_uses_quarterly_position(monkeypatch):
     FundRealtimeService._fundgz_fail_until = float("inf")
     FundRealtimeService._estimate_cache.clear()
     try:
+        # 2026-11-26：fundgz 下线后新增「腾讯官方净值」层，本测试验证的是
+        # 更下层（持仓自算），故让腾讯返回空，避免抢前。
+        async def _no_nav(self, codes):
+            return {}
+        monkeypatch.setattr(FundRealtimeService, "_fetch_tencent_nav", _no_nav)
+
         svc = FundRealtimeService(db=_fake_holdings_db(
             [("600000", "浦发银行", 30.0)],
             quarterly_rows=[(1, "2026-06-30", 60.0)],
@@ -453,6 +471,12 @@ async def test_hk_quotes_survive_a_share_source_failure(monkeypatch):
     FundRealtimeService._fundgz_fail_until = float("inf")
     FundRealtimeService._estimate_cache.clear()
     try:
+        # 2026-11-26：fundgz 下线后新增「腾讯官方净值」层，本测试验证的是
+        # 更下层（持仓自算），故让腾讯返回空，避免抢前。
+        async def _no_nav(self, codes):
+            return {}
+        monkeypatch.setattr(FundRealtimeService, "_fetch_tencent_nav", _no_nav)
+
         svc = FundRealtimeService(db=_fake_holdings_db([
             ("00981", "中芯国际", 30.0),
         ]))
