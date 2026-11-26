@@ -115,9 +115,13 @@ class TestRetryWiring:
         assert "range(3)" in src, "应重试 3 次"
 
     def test_backoff_delays_present(self):
-        """退避要覆盖乐咕的短时限流窗口（实测 90s 恢复）"""
+        """退避要覆盖乐咕的限流窗口
+
+        2026-11-26 实测：首页间隔 8 秒即可连续成功 → 限流是秒级不是封禁，
+        所以退避从 20/60 收紧到 15/45，不必让用户等太久。
+        """
         src = _service_src()
-        assert "20.0" in src and "60.0" in src
+        assert "15.0" in src and "45.0" in src
 
     def test_timeout_allows_retries(self):
         """超时要容得下 3 次重试（退避 20+60=80s），否则重试没意义"""

@@ -33,6 +33,7 @@
 
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 
 from backend.utils.stats import percentile_rank_inclusive
@@ -218,6 +219,159 @@ def forward_return_by_zone(
     return rows
 
 
+# ── 乐咕直连取数（2026-11-26 根因修复）─────────────────────────────
+#
+# akshare 的 stock_index_pe_lg / stock_index_pb_lg 各自内部调用
+# get_cookie_csrf()，即**每个接口都去抓一次乐咕首页**拿 CSRF token。
+# 取一次温度计 = 2 次首页请求（PE + PB），页面+定时任务并发时瞬间打 4~6 次，
+# 直接撞上限流：首页返回 429/504 → soup.find 得 None → `.attrs` 崩
+# （AttributeError），或 API 返回无 data 的错误体（KeyError 'data'）。
+#
+# 实测（2026-11-26 容器内）：
+#   · 连续调用失败率 50%，并发 4 路必现失败
+#   · 但首页间隔 8 秒就能连续成功 → 限流窗口是秒级，不是封禁
+#   · 原始 API 本身一直正常（PE 39739 字节 / PB 18496 字节，data 字段都在）
+#
+# 修复：自己拿一次 cookie，PE 与 PB **共用**，把首页请求数从 2 降到 1；
+# 并对 cookie 做进程内缓存（TTL 10 分钟），命中时首页请求数降到 0。
+_CSRF_CACHE: dict[str, object] = {"ts": 0.0, "payload": None}
+_CSRF_TTL = 600.0
+
+# API 级节流（2026-11-26）：乐咕对 API 端点也限流，实测连打 3 次即 429。
+# 正常路径下温度计 1 小时才取一次，节流只影响并发/重试场景。
+_API_MIN_INTERVAL = 1.2          # 两次 API 调用最小间隔（秒）
+_API_LAST_CALL: dict[str, float] = {"ts": 0.0}
+
+
+def _legulegu_csrf(force: bool = False) -> dict:
+    """取乐咕 CSRF（进程内缓存 10 分钟）
+
+    首页是限流的瓶颈，缓存后正常路径下**完全不请求首页**。
+    token 本身按日期算（hex(YYYY-MM-DD)），与 cookie 的有效期一致。
+    """
+    now = time.time()
+    if not force and _CSRF_CACHE["payload"] is not None:
+        if now - float(_CSRF_CACHE["ts"]) < _CSRF_TTL:  # type: ignore[arg-type]
+            return _CSRF_CACHE["payload"]  # type: ignore[return-value]
+
+    # 直接实现首页抓取，不调 akshare 的 get_cookie_csrf（2026-11-26）：
+    # 它在首页被限流时 `soup.find(...)` 得 None 后直接 `.attrs` 崩，
+    # 抛出的 AttributeError 对上层毫无信息量（既不像限流也不像网络错误）。
+    # 这里自己解析，失败给出可辨识的异常，并支持重试。
+    import re as _re
+
+    import requests as _rq
+
+    ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+          "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")
+    last: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            sess = _rq.Session()
+            sess.headers.update({"User-Agent": ua})
+            resp = sess.get("https://legulegu.com/stockdata/sz50-ttm-lyr", timeout=20)
+            if resp.status_code == 429:
+                last = RuntimeError("乐咕首页 HTTP 429（限流）")
+                if attempt < 2:
+                    time.sleep(4.0 if attempt == 0 else 10.0)
+                    continue
+                raise last
+            resp.raise_for_status()
+            m = _re.search(
+                r'<meta[^>]+name=["\']_csrf["\'][^>]*content=["\']([^"\']+)["\']',
+                resp.text,
+            ) or _re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]*name=["\']_csrf["\']',
+                resp.text,
+            )
+            if not m:
+                last = RuntimeError(
+                    f"乐咕首页未返回 _csrf（HTTP {resp.status_code}, len={len(resp.text)}）"
+                )
+                if attempt < 2:
+                    time.sleep(4.0 if attempt == 0 else 10.0)
+                    continue
+                raise last
+            hdr = {"User-Agent": ua, "X-CSRF-Token": m.group(1)}
+            ck = {"cookies": sess.cookies, "headers": hdr}
+            _CSRF_CACHE["ts"] = now
+            _CSRF_CACHE["payload"] = ck
+            return ck
+        except RuntimeError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if attempt < 2:
+                time.sleep(4.0 if attempt == 0 else 10.0)
+    raise last  # type: ignore[misc]
+
+
+def _fetch_legulegu_pair(index_name: str):
+    """一次 CSRF 同时取 PE 与 PB（把首页请求从 2 次降到 1 次/或 0 次）"""
+    import pandas as pd
+    import py_mini_racer
+    import requests
+    from akshare.stock_feature.stock_a_pe_and_pb import hash_code
+
+    # 与 akshare 内部一致的 symbol → indexCode 映射
+    symbol_map = {
+        "上证50": "000016.SH", "沪深300": "000300.SH", "上证380": "000009.SH",
+        "创业板50": "399673.SZ", "中证500": "000905.SH", "上证180": "000010.SH",
+        "深证红利": "399324.SZ", "深证100": "399330.SZ", "中证1000": "000852.SH",
+        "上证红利": "000015.SH", "中证100": "000903.SH", "中证800": "000906.SH",
+    }
+    code = symbol_map[index_name]
+
+    js = py_mini_racer.MiniRacer()
+    js.eval(hash_code)
+    token = js.call("hex", datetime.now().date().isoformat()).lower()
+
+    ck = _legulegu_csrf()
+
+    def _get(kind: str) -> "pd.DataFrame":
+        url = f"https://legulegu.com/api/stockdata/index-basic-{kind}"
+        last: Optional[Exception] = None
+        for attempt in range(3):
+            # 节流：乐咕对 API 也限流（实测连打 3 次即 429）
+            gap = time.time() - _API_LAST_CALL["ts"]
+            if gap < _API_MIN_INTERVAL:
+                time.sleep(_API_MIN_INTERVAL - gap)
+            _API_LAST_CALL["ts"] = time.time()
+
+            r = requests.get(url, params={"token": token, "indexCode": code},
+                             timeout=25, **ck)
+            if r.status_code == 429:
+                last = RuntimeError("HTTP 429 Too Many Requests")
+                # 429 是限流不是封禁：退避 3s / 8s 足够（实测窗口是秒级）
+                if attempt < 2:
+                    time.sleep(3.0 if attempt == 0 else 8.0)
+                    continue
+                raise last
+            r.raise_for_status()
+            j = r.json()
+            if "data" not in j:
+                # 「接口回错误体」与「cookie 过期」要能区分，上层据此刷新 cookie
+                raise KeyError("data")
+            return pd.DataFrame(j["data"])
+        raise last  # type: ignore[misc]
+
+    try:
+        pe_raw = _get("pe")
+    except (KeyError, ValueError):
+        # cookie 可能过期 → 强制刷一次再试
+        _legulegu_csrf(force=True)
+        ck = _CSRF_CACHE["payload"]  # type: ignore[assignment]
+        pe_raw = _get("pe")
+    pb_raw = _get("pb")
+
+    # 与 akshare 的列名/日期处理保持一致（下游 _align_series 依赖）
+    for df in (pe_raw, pb_raw):
+        df["date"] = (
+            pd.to_datetime(df["date"], utc=True).dt.tz_convert("Asia/Shanghai").dt.date
+        )
+    return pe_raw, pb_raw
+
+
 class MarketTemperatureService:
     """中证800 温度（月频序列日内一次足够，类级缓存 1h）"""
 
@@ -282,8 +436,7 @@ class MarketTemperatureService:
             last_exc: Optional[Exception] = None
             for attempt in range(3):
                 try:
-                    pe_df = ak.stock_index_pe_lg(symbol=TEMPERATURE_INDEX)
-                    pb_df = ak.stock_index_pb_lg(symbol=TEMPERATURE_INDEX)
+                    pe_df, pb_df = _fetch_legulegu_pair(TEMPERATURE_INDEX)
                     bond_df = None
                     try:
                         # 格雷厄姆分母（中 10Y 国债日频，2014 起）；失败只降级格雷厄姆块
@@ -296,8 +449,9 @@ class MarketTemperatureService:
                 except Exception as e:  # noqa: BLE001 - 上游各种形状都要兜住
                     last_exc = e
                     if attempt < 2:
-                        # 退避：20s / 60s —— 覆盖乐咕的短时限流窗口
-                        delay = 20.0 if attempt == 0 else 60.0
+                        # 退避：15s / 45s —— 实测乐咕限流窗口在秒级到十几秒，
+                        # 8 秒间隔即可连续成功，所以不必等 20/60 那么久
+                        delay = 15.0 if attempt == 0 else 45.0
                         logger.warning(
                             f"乐咕取数失败（第 {attempt + 1}/3 次）: "
                             f"{type(e).__name__}: {str(e)[:100]}；{delay:.0f}s 后重试"
