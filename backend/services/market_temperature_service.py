@@ -364,10 +364,32 @@ def _fetch_legulegu_pair(index_name: str):
         pe_raw = _get("pe")
     pb_raw = _get("pb")
 
-    # 与 akshare 的列名/日期处理保持一致（下游 _align_series 依赖）
+    # 与 akshare 的**列名**保持一致（下游 _align_series 按中文列名取数）：
+    # akshare 内部把乐咕的英文 key 重命名成中文，我们自己取数时必须补上这一步，
+    # 否则 _align_series 找不到「日期/指数/滚动市盈率/市净率」→ 对齐后 0 个月点
+    # （2026-11-26 踩到：日志显示「对齐后仅 0 个月点」，数据本身是好的）。
+    pe_raw = pe_raw.rename(columns={
+        "date": "日期",
+        "close": "指数",
+        "lyrPe": "静态市盈率",
+        "addLyrPe": "等权静态市盈率",
+        "middleLyrPe": "静态市盈率中位数",
+        "ttmPe": "滚动市盈率",
+        "addTtmPe": "等权滚动市盈率",
+        "middleTtmPe": "滚动市盈率中位数",
+    })
+    pb_raw = pb_raw.rename(columns={
+        "date": "日期",
+        "close": "指数",
+        "pb": "市净率",
+        "addPb": "等权市净率",
+        "middlePb": "市净率中位数",
+    })
+
+    # 日期处理与 akshare 一致（转 Asia/Shanghai 的 date 对象）
     for df in (pe_raw, pb_raw):
-        df["date"] = (
-            pd.to_datetime(df["date"], utc=True).dt.tz_convert("Asia/Shanghai").dt.date
+        df["日期"] = (
+            pd.to_datetime(df["日期"], utc=True).dt.tz_convert("Asia/Shanghai").dt.date
         )
     return pe_raw, pb_raw
 

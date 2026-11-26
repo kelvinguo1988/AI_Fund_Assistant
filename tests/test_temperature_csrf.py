@@ -114,3 +114,27 @@ class TestSharedFetch:
         """中证800 的 indexCode 必须正确（000906.SH）"""
         src = _src()
         assert '"中证800": "000906.SH"' in src
+
+
+class TestColumnMapping:
+    """列名必须与 akshare 一致（下游 _align_series 按中文列名取数）
+
+    2026-11-26 踩到：自己取数后返回英文列名（date/close/ttmPe/pb），
+    而 _align_series 找的是「日期/指数/滚动市盈率/市净率」→ 对齐后 0 个月点，
+    日志显示「样本不足」但数据本身完全正常，极易误判成数据源没数据。
+    """
+
+    def test_pe_columns_mapped(self):
+        src = _src()
+        for cn in ("日期", "指数", "滚动市盈率", "静态市盈率"):
+            assert f'"{cn}"' in src, f"PE 表缺中文列名 {cn}"
+
+    def test_pb_columns_mapped(self):
+        src = _src()
+        assert '"市净率"' in src
+
+    def test_rename_before_return(self):
+        src = _src()
+        fn = src.split("def _fetch_legulegu_pair")[1].split("\ndef ")[0]
+        assert "rename(columns=" in fn
+        assert "return pe_raw, pb_raw" in fn
